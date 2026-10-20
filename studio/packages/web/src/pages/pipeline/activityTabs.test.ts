@@ -49,7 +49,7 @@ describe('nodeTypeTabs (#1477)', () => {
       {
         key: 'settings',
         label: 'Settings',
-        fields: ['skipIncompatibleRows', 'logLevel'],
+        fields: ['skipIncompatibleRows', 'validateDataConsistency', 'logLevel'],
         bindings: [],
       },
     ]);

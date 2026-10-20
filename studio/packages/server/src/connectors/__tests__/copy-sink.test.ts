@@ -60,6 +60,41 @@ describe('refuseForeignSink (#1196)', () => {
 });
 
 describe('writeRowsToSink dispatch (#1196)', () => {
+  it('passes Verify after copy to the sqlite writer, which rolls back on its reason', async () => {
+    const path = join(tmp, 'verify.db');
+    const db = new Database(path);
+    db.exec('create table people (name text, age integer)');
+    db.close();
+    const seen: number[] = [];
+    await expect(
+      writeRowsToSink(
+        {
+          nullOnError: [],
+          dataset: dataset({ table: 'people' }),
+          connection: { kind: 'sqlite', connectionConfig: { roots: [tmp], path, writable: true } },
+          sinkSecret: null,
+          columns: ['name', 'age'],
+          mode: 'append',
+          keyColumns: [],
+          preCopyScript: null,
+          autoCreate: null,
+          onRowRejected: null,
+          verifyBeforeCommit: (n) => {
+            seen.push(n);
+            return 'not consistent';
+          },
+          onBatch: () => {},
+          signal: undefined,
+        },
+        oneBatch({ name: 'ada', age: 36 }),
+      ),
+    ).rejects.toMatchObject({ kind: 'permanent', message: 'not consistent' });
+    expect(seen).toEqual([1]);
+    const check = new Database(path, { readonly: true });
+    expect(check.prepare('select name from people').all()).toEqual([]);
+    check.close();
+  });
+
   it('routes a sqlite sink to the sqlite writer, and really writes', async () => {
     const path = join(tmp, 'sink.db');
     const db = new Database(path);
@@ -82,6 +117,7 @@ describe('writeRowsToSink dispatch (#1196)', () => {
         preCopyScript: null,
         autoCreate: null,
         onRowRejected: null,
+        verifyBeforeCommit: null,
         onBatch: () => {},
         signal: undefined,
       },
@@ -152,6 +188,7 @@ describe('writeRowsToSink dispatch (#1196)', () => {
         preCopyScript: null,
         autoCreate: null,
         onRowRejected: null,
+        verifyBeforeCommit: null,
         onBatch: () => {},
         signal: undefined,
         createClient: factory,
@@ -191,6 +228,7 @@ describe('writeRowsToSink dispatch (#1196)', () => {
           preCopyScript: null,
           autoCreate: null,
           onRowRejected: null,
+          verifyBeforeCommit: null,
           onBatch: () => {},
           signal: undefined,
         },
@@ -219,6 +257,7 @@ describe('writeRowsToSink dispatch (#1196)', () => {
           preCopyScript: null,
           autoCreate: null,
           onRowRejected: null,
+          verifyBeforeCommit: null,
           onBatch: () => {},
           signal: undefined,
         },
@@ -247,6 +286,7 @@ describe('writeRowsToSink dispatch (#1196)', () => {
           preCopyScript: null,
           autoCreate: null,
           onRowRejected: null,
+          verifyBeforeCommit: null,
           onBatch: () => {},
           signal: undefined,
         },

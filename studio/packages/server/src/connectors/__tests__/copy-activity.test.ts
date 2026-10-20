@@ -1404,3 +1404,115 @@ describe('copy activity — Skip incompatible rows (#1600 OR41 C6d-1)', () => {
     expect(rowsOf(sinkPath)).toEqual([]);
   });
 });
+
+describe('copy activity — Verify after copy (#1600 OR41 C6e-1)', () => {
+  const input = (over: Record<string, unknown> = {}) => ({
+    mapping: [
+      { source: 'id', sink: 'id', type: 'integer' },
+      { source: 'name', sink: 'name', type: 'string' },
+    ],
+    validateDataConsistency: true,
+    ...over,
+  });
+  function discardingTwo(root: string): string {
+    const sinkPath = seedSink(root, 'dst.db');
+    const db = new Database(sinkPath);
+    db.exec(
+      'CREATE TRIGGER t BEFORE INSERT ON sink WHEN new.id = 2 BEGIN SELECT raise(ignore); END;',
+    );
+    db.close();
+    return sinkPath;
+  }
+
+  it('fails a copy whose store kept fewer rows than it was sent, and commits none', async () => {
+    const root = tempRoot();
+    const sinkPath = discardingTwo(root);
+    const events = await run(
+      copyCtx({ root, sourcePath: seedDb(root, 3, 'src.db'), sinkPath, input: input() }),
+    );
+    expect(terminal(events)).toEqual({
+      type: 'failed',
+      kind: 'permanent',
+      error:
+        'Verify after copy failed: the copy read 3 row(s) and skipped 0, so 3 should have been ' +
+        'written, but the store reports 2',
+    });
+    expect(rowsOf(sinkPath)).toEqual([]);
+    // Rolled back, so the honest count is 0, and the post-commit advisory never runs.
+    expect(events).toContainEqual({ type: 'output', name: 'rowsWritten', value: 0 });
+    expect(events.filter((e) => e.type === 'warned')).toEqual([]);
+  });
+
+  it('off, the same copy succeeds and names the gap, as before C6e', async () => {
+    const root = tempRoot();
+    const sinkPath = discardingTwo(root);
+    const events = await run(
+      copyCtx({
+        root,
+        sourcePath: seedDb(root, 3, 'src.db'),
+        sinkPath,
+        input: input({ validateDataConsistency: false }),
+      }),
+    );
+    expect(terminal(events).type).toBe('succeeded');
+    expect(events.filter((e) => e.type === 'warned').map((w) => w.type === 'warned' && w.code)).toEqual(
+      [WARNING_CODES.COPY_STORE_COUNT_DIFFERS],
+    );
+  });
+
+  it('passes a consistent copy, counting the skipped rows as accounted for', async () => {
+    const root = tempRoot();
+    const sourcePath = join(root, 'src.db');
+    const src = new Database(sourcePath);
+    src.exec('CREATE TABLE t (id INTEGER PRIMARY KEY, flag TEXT)');
+    const insert = src.prepare('INSERT INTO t VALUES (?, ?)');
+    ['1', '2', 'x', '2'].forEach((flag, i) => insert.run(i + 1, flag));
+    src.close();
+    const sinkPath = seedSink(root, 'dst.db');
+    const db = new Database(sinkPath);
+    db.exec('CREATE UNIQUE INDEX sink_flag ON sink (flag)');
+    db.close();
+    const end = terminal(
+      await run(
+        copyCtx({
+          root,
+          sourcePath,
+          sinkPath,
+          input: input({
+            mapping: [
+              { source: 'id', sink: 'id', type: 'integer' },
+              { source: 'flag', sink: 'flag', type: 'integer' },
+            ],
+            skipIncompatibleRows: true,
+          }),
+        }),
+      ),
+    );
+    // One coercion drop and one row the sink rejected: 4 read = 2 written + 2 skipped.
+    expect(end).toMatchObject({
+      type: 'succeeded',
+      outputs: { rowsRead: 4, rowsWritten: 2, rowsFailed: 2 },
+    });
+    expect(rowsOf(sinkPath, 'SELECT id FROM sink ORDER BY id')).toEqual([{ id: 1 }, { id: 2 }]);
+  });
+
+  it('refuses Upsert at dispatch, before a store is opened', async () => {
+    const root = tempRoot();
+    const sinkPath = seedSink(root, 'dst.db');
+    const end = terminal(
+      await run(
+        copyCtx({
+          root,
+          sourcePath: seedDb(root, 2, 'src.db'),
+          sinkPath,
+          input: input({ mode: 'upsert' }),
+        }),
+      ),
+    );
+    expect(end).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(end.type === 'failed' ? end.error : '').toContain(
+      'Verify after copy does not apply to Upsert',
+    );
+    expect(rowsOf(sinkPath)).toEqual([]);
+  });
+});

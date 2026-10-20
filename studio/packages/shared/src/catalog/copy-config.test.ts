@@ -8,6 +8,7 @@ import {
   copyDispatchInputSchema,
   copyInputSchema,
   copySkipIncompatibleIssue,
+  copyVerifyConsistencyIssue,
 } from './copy-config.js';
 import { formatZodIssues } from '../schemas/zod-issues.js';
 
@@ -476,6 +477,57 @@ describe('Skip incompatible rows (C6d-1)', () => {
         mapping: [id],
         mode: 'upsert',
         skipIncompatibleRows: true,
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe('Verify after copy (C6e-1)', () => {
+  const id = { source: 'a', sink: 'id', type: 'integer' as const };
+
+  it('defaults to off and takes a boolean', () => {
+    expect(copyInputSchema.parse({ mapping: [id] }).validateDataConsistency).toBe(false);
+    expect(copyDispatchInputSchema.parse({ mapping: [id] }).validateDataConsistency).toBe(false);
+    expect(
+      copyInputSchema.parse({ mapping: [id], validateDataConsistency: true })
+        .validateDataConsistency,
+    ).toBe(true);
+    expect(
+      copyInputSchema.safeParse({ mapping: [id], validateDataConsistency: 'yes' }).success,
+    ).toBe(false);
+  });
+
+  it('is refused with Upsert, whose store count is not the rows sent, on the field', () => {
+    const result = copyInputSchema.safeParse({
+      mapping: [id],
+      mode: 'upsert',
+      validateDataConsistency: true,
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map((i) => i.path)).toEqual([['validateDataConsistency']]);
+    expect(
+      copyInputSchema.safeParse({ mapping: [id], mode: 'upsert', validateDataConsistency: false })
+        .success,
+    ).toBe(true);
+    for (const mode of ['append', 'overwrite', 'truncate']) {
+      expect(
+        copyInputSchema.safeParse({ mapping: [id], mode, validateDataConsistency: true }).success,
+      ).toBe(true);
+    }
+  });
+
+  it('leaves a ${} Write behaviour to dispatch, which sees the resolved mode', () => {
+    expect(
+      copyVerifyConsistencyIssue({
+        mode: '${pipeline().parameters.m}',
+        validateDataConsistency: true,
+      }),
+    ).toBeNull();
+    expect(
+      copyDispatchInputSchema.safeParse({
+        mapping: [id],
+        mode: 'upsert',
+        validateDataConsistency: true,
       }).success,
     ).toBe(false);
   });

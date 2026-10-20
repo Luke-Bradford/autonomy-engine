@@ -262,3 +262,23 @@ describe('C6d-1 — Skip incompatible rows reaches the write gate', () => {
     expect(validateDoc(doc([copy('upsert', false)]))).toEqual([]);
   });
 });
+
+/** #1600 OR41 C6e-1 — Verify after copy with Upsert is refused at save too. */
+describe('C6e-1 — Verify after copy reaches the write gate', () => {
+  const copy = (mode: unknown, validateDataConsistency: unknown): Node => ({
+    ...copyNode([]),
+    config: { mapping: [row()], mode, validateDataConsistency },
+  });
+
+  it('REFUSES it with Upsert', () => {
+    expect(validateDoc(doc([copy('upsert', true)]))).toEqual([
+      'node.c.validateDataConsistency: Verify after copy does not apply to Upsert',
+    ]);
+  });
+
+  it('accepts it on the other write behaviours', () => {
+    expect(validateDoc(doc([copy('append', true)]))).toEqual([]);
+    expect(validateDoc(doc([copy(undefined, true)]))).toEqual([]);
+    expect(validateDoc(doc([copy('upsert', false)]))).toEqual([]);
+  });
+});
