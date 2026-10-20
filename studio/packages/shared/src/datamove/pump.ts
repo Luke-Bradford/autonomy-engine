@@ -206,6 +206,12 @@ export interface CopyPumpOptions {
    */
   readonly coercion?: CoercionOptions;
   /**
+   * #1600 OR41 C6a — each row the pump drops, as it drops it: Copy's session
+   * log writes a `TabularRowSkip` line per row. Not called for a value written
+   * as null (`onError: 'null'`), which is not a dropped row.
+   */
+  readonly onRowFailure?: (failure: CopyRowFailure) => void;
+  /**
    * Progress, PER BATCH and never per row (§5 — "one event per row would
    * reproduce the log-volume problem this section forbids"). Called after the
    * consumer has taken the batch, so a tick that reads `counters.rowsWritten`
@@ -442,12 +448,14 @@ export async function* pumpCopyRows(
           mapped[plan.sink] = null;
           continue;
         }
-        recordFailure(counters, {
+        const failure: CopyRowFailure = {
           rowIndex: counters.rowsRead - 1,
           sink: plan.sink,
           code: result.code,
           reason: result.reason,
-        });
+        };
+        recordFailure(counters, failure);
+        opts.onRowFailure?.(failure);
         failed = true;
         break; // the row is lost either way; the first reason is the one reported
       }

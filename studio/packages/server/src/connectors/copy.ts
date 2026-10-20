@@ -6,12 +6,17 @@ import {
   formatZodIssues,
   newCopyCounters,
   pumpCopyRows,
+  SESSION_LOG_OUTPUT,
+  SESSION_LOG_RUN_MAX_LINES,
+  SessionLog,
+  sessionLogRunValues,
   SOURCE_DRIFT_MESSAGES,
   WARNING_CODES,
   type CoercedValue,
   type CoercionOptions,
   type CopyCounters,
   type CopyProgress,
+  type CopyRowFailure,
   type CopyPumpMappingEntry,
   type CopyWriteMode,
 } from '@autonomy-studio/shared';
@@ -159,6 +164,15 @@ function copyOutputs(counters: CopyCounters): Record<string, unknown> {
 }
 
 /**
+ * #1600 OR41 C6a — a failed row's number as the operator reads it: from 1 among
+ * the rows read (a CSV's header is not one), where `rowIndex` counts from 0. The
+ * advisory and the session log both number with it, so a row has one number.
+ */
+function rowNumber(failure: CopyRowFailure): number {
+  return failure.rowIndex + 1;
+}
+
+/**
  * The prose for a copy that dropped rows — "410 not_integral, 2 unparseable_date".
  *
  * §5 says the bounded `CoercionFailureCode` exists FOR this summary, and slice 1
@@ -177,7 +191,7 @@ function failureSummary(counters: CopyCounters): string {
   const where =
     first === undefined
       ? ''
-      : ` First at row ${first.rowIndex} into '${first.sink}': ${first.reason}.`;
+      : ` First at row ${rowNumber(first)} into '${first.sink}': ${first.reason}.`;
   return `${counters.rowsFailed} row(s) were not written (${byCode}).${where}`;
 }
 
@@ -400,6 +414,30 @@ export async function* runCopyActivity(
   // yields: a batch whose rows all failed yields nothing at all.
   const columns = mapping.map((row) => row.sink);
   const counters = newCopyCounters();
+  // #1600 OR41 C6a — the session log, to the run log (catalogue §4.1, §5). Capped
+  // as it is kept: a copy can skip every row it reads, and the run log shows
+  // only the first `SESSION_LOG_RUN_MAX_LINES`. Its lines are yielded at the
+  // terminal, never streamed: a running row's latest `node.output` is its
+  // progress hint, which a log line would replace.
+  const log = new SessionLog(parsed.data.logLevel, undefined, {
+    keepAtMost: SESSION_LOG_RUN_MAX_LINES,
+  });
+  // Where the batch just pumped began, for Everything's per-batch line.
+  let batchFrom = { rowsRead: 0, rowsFailed: 0 };
+  let logged = false;
+  function* logLines(): Generator<ActivityEvent> {
+    // Yields only once, because a throw after the success path's yield reaches
+    // the catch.
+    if (logged) return;
+    logged = true;
+    // No folder hint: Copy cannot write its log to a folder until C6c.
+    for (const value of sessionLogRunValues(log.lines, undefined, {
+      dropped: log.dropped,
+      folderHint: false,
+    })) {
+      yield { type: 'output', name: SESSION_LOG_OUTPUT, value };
+    }
+  }
 
   // §7 row 4 — ALLOWED, so it never blocks the copy, and never silent either.
   // Yielded HERE, before the write, rather than beside the terminal like
@@ -465,7 +503,31 @@ export async function* runCopyActivity(
           // describe rung above rather than inline here — see the note there for
           // why the empty-mapping guard has to cover both.
           coercion,
+          // The reason never holds the value (`coerce.ts`), so no row data
+          // reaches the log.
+          onRowFailure: (f) => {
+            log.add(
+              'Warning',
+              'TabularRowSkip',
+              `row ${rowNumber(f)}`,
+              `${f.code}: into '${f.sink}': ${f.reason}`,
+            );
+          },
           onBatch: () => {
+            // "Read", never "written": the sink's tick is not committed truth.
+            // Called once the sink has taken the batch, so a batch the sink
+            // fails on gets its skip lines but no batch line.
+            const read = counters.rowsRead - batchFrom.rowsRead;
+            const skipped = counters.rowsFailed - batchFrom.rowsFailed;
+            if (read > 0) {
+              log.add(
+                'Info',
+                'TabularRowBatch',
+                `rows ${batchFrom.rowsRead + 1}-${counters.rowsRead}`,
+                `read ${read} row${read === 1 ? '' : 's'}, ${skipped} skipped`,
+              );
+            }
+            batchFrom = { rowsRead: counters.rowsRead, rowsFailed: counters.rowsFailed };
             ticks.push({
               rowsRead: counters.rowsRead,
               rowsInFlight: counters.rowsWritten,
@@ -498,6 +560,7 @@ export async function* runCopyActivity(
     if (!outcome.ok) throw outcome.error;
     const { result } = outcome;
     counters.rowsWritten = result.rowsWritten;
+    yield* logLines();
     if (counters.rowsFailed > 0) {
       yield {
         type: 'warned',
@@ -539,6 +602,9 @@ export async function* runCopyActivity(
     if (err instanceof DatasetIoError && !err.partialWritePossible) {
       counters.rowsWritten = 0;
     }
+    // No Error line: the failure is the node's error, which the Logs tab
+    // already shows; Delete adds one only for the item it failed on.
+    yield* logLines();
     for (const [name, value] of Object.entries(copyOutputs(counters))) {
       yield { type: 'output', name, value };
     }

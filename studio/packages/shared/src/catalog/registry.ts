@@ -996,6 +996,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
         ],
       },
       { key: 'mapping', fields: ['mapping'] },
+      // #1600 OR41 C6a — ADF's Settings tab, after Mapping. The Session log only
+      // for now; fault tolerance, consistency and parallelism join it in C6.
+      { key: 'settings', fields: ['logLevel'] },
     ],
     // #1600 OR41 C3a — Key columns are read only by Upsert, and save refuses
     // them on any other write behaviour (`copyKeyColumnIssues`).

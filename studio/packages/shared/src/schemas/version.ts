@@ -595,6 +595,9 @@
 // BUMP 57→58 for #1600 OR41 C3c: Copy's Table option (Auto-create from mapping).
 // The copy dispatch schema is not strict, so a pre-C3c build would ignore it and
 // refuse the copy for a missing table.
+// NO BUMP for #1600 OR41 C6a: Copy's `logLevel` (the session log, to the run
+// log). The copy dispatch schema is not strict, so a pre-C6a build strips it and
+// copies the same rows: only the log lines are lost, never data or an outcome.
 export const CATALOG_VERSION = 58;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did

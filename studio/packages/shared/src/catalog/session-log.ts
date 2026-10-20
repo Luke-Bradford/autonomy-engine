@@ -32,7 +32,7 @@ export const sessionLogConfigFields = {
   logLevel: presented(logLevelSchema.default('warning'), {
     title: 'Session log',
     description:
-      'Warnings logs the items skipped or kept, and any that failed. Everything also logs each item handled.',
+      'Warnings logs what was skipped or kept, and any failure. Everything also logs each item or batch handled.',
     options: optionTitles(logLevelSchema, { off: 'Off', warning: 'Warnings', info: 'Everything' }),
   }),
   logTo: presented(logToSchema.default('run'), {
@@ -98,18 +98,38 @@ function keeps(level: SessionLogLevel, line: SessionLogLineLevel): boolean {
 /**
  * The lines of one attempt, in the order they happened, already filtered by
  * the log level. Bounded by what the activity plans (Delete: the connection's
- * entry limit), not by the log.
+ * entry limit), not by the log, unless `keepAtMost` caps it.
+ *
+ * #1600 OR41 C6a — `keepAtMost`: Copy can log one line per skipped row, so a
+ * log bound for the run log keeps only what the run log shows (the first lines,
+ * and an Error line past them, `sessionLogRunValues`' rule) and counts the rest
+ * in `dropped`, rather than holding millions of lines it would throw away. An
+ * Error line is never capped: an attempt adds at most one, for why it failed.
  */
 export class SessionLog {
   readonly lines: SessionLogLine[] = [];
+  /** Lines the level kept that `keepAtMost` left out. */
+  dropped = 0;
+  private readonly keepAtMost: number | undefined;
 
   constructor(
     private readonly level: SessionLogLevel,
     private readonly now: () => Date = () => new Date(),
-  ) {}
+    opts: { keepAtMost?: number } = {},
+  ) {
+    this.keepAtMost = opts.keepAtMost;
+  }
 
   add(level: SessionLogLineLevel, operation: string, item: string, message: string): void {
     if (!keeps(this.level, level)) return;
+    if (
+      this.keepAtMost !== undefined &&
+      level !== 'Error' &&
+      this.lines.length >= this.keepAtMost
+    ) {
+      this.dropped += 1;
+      return;
+    }
     this.lines.push({ timestamp: this.now().toISOString(), level, operation, item, message });
   }
 }
@@ -124,23 +144,30 @@ export function sessionLogText(line: SessionLogLine): string {
  * `SESSION_LOG_RUN_MAX_LINES`, then any Error line past them (there is at most
  * one, and it says why the attempt failed), and then, LAST so it stays in the
  * Logs tab's most recent rows, one line saying how many were not kept.
+ *
+ * `dropped` adds the lines a capped `SessionLog` already left out (C6a).
+ * `folderHint` (default on) ends that line by pointing at the folder, which only
+ * an activity that can write one should do: Copy cannot until C6c.
  */
 export function sessionLogRunValues(
   lines: readonly SessionLogLine[],
   now: () => Date = () => new Date(),
+  opts: { dropped?: number; folderHint?: boolean } = {},
 ): string[] {
   const rest = lines.slice(SESSION_LOG_RUN_MAX_LINES);
   const errors = rest.filter((l) => l.level === 'Error');
   const kept = [...lines.slice(0, SESSION_LOG_RUN_MAX_LINES), ...errors].map(sessionLogText);
-  const dropped = rest.length - errors.length;
+  const dropped = rest.length - errors.length + (opts.dropped ?? 0);
   if (dropped > 0) {
+    const hint =
+      opts.folderHint === false ? '' : '; write the session log to a folder to keep every line';
     kept.push(
       sessionLogText({
         timestamp: now().toISOString(),
         level: 'Warning',
         operation: 'SessionLog',
         item: '',
-        message: `${dropped} more line${dropped === 1 ? '' : 's'} not kept in the run log; write the session log to a folder to keep every line`,
+        message: `${dropped} more line${dropped === 1 ? '' : 's'} not kept in the run log${hint}`,
       }),
     );
   }

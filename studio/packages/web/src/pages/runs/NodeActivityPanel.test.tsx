@@ -1097,6 +1097,35 @@ describe('NodeActivityPanel — the drawer tabs (#1484 OR35 M2)', () => {
   });
 });
 
+describe('NodeActivityPanel — a log line is shown whole (#1600 OR41 C6a)', () => {
+  it('does not cut a session log line at the inline cap', async () => {
+    const user = userEvent.setup();
+    const tab = (name: string) => screen.getByRole('tab', { name });
+    const visiblePanel = () => screen.getByRole('tabpanel');
+    const long =
+      "2026-10-20T09:00:00.000Z Warning TabularRowSkip row 3 not_a_number: into 'flag': " +
+      "'bad' is not a number, so it cannot be an integer";
+    renderWithRouter(
+      <NodeActivityPanel
+        node={row({ nodeId: 'a', status: 'success', attempts: 1, outputs: 1 })}
+        name={null}
+        runStatus="success"
+        live={false}
+        onClose={vi.fn()}
+        run={{
+          attempt: 1,
+          iteration: '',
+          skipWhy: null,
+          lines: [{ seq: 0, ts: Date.UTC(2026, 9, 20, 9), name: 'sessionLog', value: long }],
+        }}
+      />,
+    );
+    await user.click(tab('Logs'));
+    const cell = visiblePanel().querySelector('.node-logs tbody tr td:last-child') as HTMLElement;
+    expect(cell.textContent).toBe(long);
+  });
+});
+
 describe('NodeActivityPanel — the activity type (#1449)', () => {
   const typeLine = (panel: HTMLElement) => panel.querySelector('.node-type');
 

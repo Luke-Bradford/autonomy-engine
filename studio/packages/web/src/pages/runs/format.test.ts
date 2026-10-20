@@ -10,6 +10,7 @@ import {
   formatRunDuration,
   liveSpanStart,
   MAX_INLINE_OUTPUT_CHARS,
+  MAX_LOG_VALUE_CHARS,
 } from './format';
 import type { AttemptSpan } from './runSummary';
 
@@ -247,6 +248,21 @@ describe('formatNodeDuration (#867)', () => {
     // node. `0ms` would print exactly the measurement-nobody-took this function
     // exists to refuse, and would hide the corruption behind a plausible number.
     expect(formatNodeDuration(node({ startedAtMs: 4_000, endedAtMs: 1_000 }))).toBe('—');
+  });
+});
+
+describe('formatOutputValue at the Logs tab cap (#1600 OR41 C6a)', () => {
+  it('keeps a line past the inline cap whole', () => {
+    const line = 'x'.repeat(MAX_INLINE_OUTPUT_CHARS + 40);
+    expect(formatOutputValue(line, MAX_LOG_VALUE_CHARS)).toBe(line);
+  });
+  it(`cuts past ${MAX_LOG_VALUE_CHARS} characters and says so`, () => {
+    const text = formatOutputValue('y'.repeat(MAX_LOG_VALUE_CHARS + 1), MAX_LOG_VALUE_CHARS);
+    expect(text).toHaveLength(MAX_LOG_VALUE_CHARS + 1);
+    expect(text.endsWith('y…')).toBe(true);
+  });
+  it('renders a non-string as compact JSON', () => {
+    expect(formatOutputValue({ rowsRead: 1 }, MAX_LOG_VALUE_CHARS)).toBe('{"rowsRead":1}');
   });
 });
 

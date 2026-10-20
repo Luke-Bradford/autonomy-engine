@@ -301,6 +301,13 @@ export function prettyStoredJson(text: string): string | null {
 export const MAX_INLINE_OUTPUT_CHARS = 80;
 
 /**
+ * #1600 OR41 C6a — the cap on a value in the Logs tab, where a log line is read:
+ * a session log line runs past the inline cap, so the tab shows it whole and
+ * this bounds only a value no line would reach. Download keeps every value whole.
+ */
+export const MAX_LOG_VALUE_CHARS = 4000;
+
+/**
  * #1299 — a streamed `node.output` value as ONE bounded line, for the run
  * table's live cell and the drill-in's "latest" reading.
  *
@@ -311,8 +318,8 @@ export const MAX_INLINE_OUTPUT_CHARS = 80;
  * pair (`surrogateSafeCut`, from shared since #605 — the server's capture
  * budget cuts with it too) and says it was cut.
  */
-export function formatOutputValue(value: unknown): string {
+export function formatOutputValue(value: unknown, max = MAX_INLINE_OUTPUT_CHARS): string {
   const text = typeof value === 'string' ? value : jsonText(value);
-  if (text.length <= MAX_INLINE_OUTPUT_CHARS) return text;
-  return `${text.slice(0, surrogateSafeCut(text, MAX_INLINE_OUTPUT_CHARS))}…`;
+  if (text.length <= max) return text;
+  return `${text.slice(0, surrogateSafeCut(text, max))}…`;
 }

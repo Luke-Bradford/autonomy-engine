@@ -15,7 +15,13 @@ import {
   nodeStoppedByCancel,
 } from './nodeStatus';
 import { runDetailPath, runLinkLabel } from './runPath';
-import { formatOutputValue, jsonText, liveSpanStart, prettyStoredJson } from './format';
+import {
+  formatOutputValue,
+  jsonText,
+  liveSpanStart,
+  MAX_LOG_VALUE_CHARS,
+  prettyStoredJson,
+} from './format';
 import { NodeDuration } from './NodeDuration';
 import { AboutHelp } from '../../lib/HelpDisclosure';
 import { costFigure, costSentence, readCost, tokenSummary, unsettledSentence } from './costReading';
@@ -629,8 +635,9 @@ function StreamedLines({ lines, stem }: { lines: readonly StreamedLine[]; stem: 
                 </td>
                 <td>
                   {/* A log's value wraps rather than being cut (#1594 OR40 S3d):
-                      this panel is where it is read. */}
-                  <code>{formatOutputValue(l.value)}</code>
+                      this panel is where it is read. Only a value past
+                      MAX_LOG_VALUE_CHARS is cut (#1600 C6a). */}
+                  <code>{formatOutputValue(l.value, MAX_LOG_VALUE_CHARS)}</code>
                 </td>
               </tr>
             ))}

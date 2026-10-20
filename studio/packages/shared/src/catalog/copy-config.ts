@@ -5,6 +5,7 @@ import { interpolationMode } from '../engine/expr.js';
 import { isSet } from './config-value.js';
 import { SqlParameterValueSchema } from './dataset-config.js';
 import { nocaseFold } from '../datamove/schema-drift.js';
+import { sessionLogConfigFields } from './session-log.js';
 
 /** §6.2's per-column opt-out, named once so its display names can be checked against it. */
 const copyOnErrorSchema = z.enum(['fail', 'null']);
@@ -492,6 +493,10 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
         unit: 'rows',
         description: `Read and written per batch, 1 to ${COPY_MAX_BATCH_ROWS}. Empty is ${COPY_DEFAULT_BATCH_ROWS}.`,
       }),
+      // #1600 OR41 C6a — the Settings tab's Session log, Delete's field. Only the
+      // level: the run log is the one destination until C6c brings Write to and
+      // a log folder, so there is nothing for `sessionLogIssues` to refuse yet.
+      logLevel: sessionLogConfigFields.logLevel,
     })
     .superRefine((cfg, ctx) => {
       const tableIssue = copyTableOptionIssue(cfg);

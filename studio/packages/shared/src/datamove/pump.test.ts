@@ -5,6 +5,7 @@ import {
   pumpCopyRows,
   type CopyCounters,
   type CopyPumpMappingEntry,
+  type CopyRowFailure,
 } from './pump.js';
 import type { CoercedValue } from './coerce.js';
 
@@ -112,6 +113,34 @@ describe('the straight copy', () => {
 });
 
 describe('a per-row failure', () => {
+  it('reports EVERY dropped row to `onRowFailure`, in order (#1600 OR41 C6a)', async () => {
+    const seen: CopyRowFailure[] = [];
+    const counters = newCopyCounters();
+    await collect(
+      pumpCopyRows(batchesOf([{ n: '1.5' }, { n: '2' }], [{ n: 'x' }]), {
+        mapping: [map({ source: 'n', sink: 'n', type: 'integer' })],
+        counters,
+        onRowFailure: (f) => seen.push(f),
+      }),
+    );
+    expect(seen.map((f) => [f.rowIndex, f.sink, f.code])).toEqual([
+      [0, 'n', 'not_integral'],
+      [2, 'n', 'not_a_number'],
+    ]);
+  });
+
+  it('does not report a row the column writes as null instead', async () => {
+    const seen: CopyRowFailure[] = [];
+    await collect(
+      pumpCopyRows(batchesOf([{ n: '1.5' }]), {
+        mapping: [map({ source: 'n', sink: 'n', type: 'integer', onError: 'null' })],
+        counters: newCopyCounters(),
+        onRowFailure: (f) => seen.push(f),
+      }),
+    );
+    expect(seen).toEqual([]);
+  });
+
   it('drops ONLY the offending row and keeps copying (`onError: fail`)', async () => {
     const { counters, batches } = run(batchesOf([{ n: '1' }, { n: '1.5' }, { n: '3' }]), [
       map({ source: 'n', sink: 'n', type: 'integer' }),
