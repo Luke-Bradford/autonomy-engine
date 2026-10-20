@@ -1178,7 +1178,7 @@ describe('NodeActivityPanel — every streamed line is reachable (#1772)', () =>
       Array.from({ length: n }, (_, i) => ({ seq: i, ts: i, name: 'rows', value: i }));
     const panel = (lines: ReturnType<typeof make>) => (
       <NodeActivityPanel
-        node={row({ nodeId: 'a', status: 'running', attempts: 1, outputs: lines.length })}
+        node={row({ nodeId: 'a', status: 'dispatched', attempts: 1, outputs: lines.length })}
         name={null}
         runStatus="running"
         live={false}
