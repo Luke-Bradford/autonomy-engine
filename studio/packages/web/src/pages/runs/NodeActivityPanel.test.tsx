@@ -3,6 +3,7 @@ import { cleanup, fireEvent, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { expectAccessibleNameContainsText } from '../../testing/accessibleName';
+import { MemoryRouter } from 'react-router';
 import { renderWithRouter } from '../../testing/renderWithRouter';
 import { NodeActivityPanel } from './NodeActivityPanel';
 import type { DrawerTab } from './drawerTab';
@@ -1169,6 +1170,49 @@ describe('NodeActivityPanel — every streamed line is reachable (#1772)', () =>
     expect(rows.every((r) => r.textContent?.includes('sessionLog'))).toBe(true);
     // The download is still every line, whatever the filter.
     expect(button('Download 600 lines')).toBeInTheDocument();
+  });
+
+  it('follows new lines on the newest page, and holds still once paged back', async () => {
+    const user = userEvent.setup();
+    const make = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({ seq: i, ts: i, name: 'rows', value: i }));
+    const panel = (lines: ReturnType<typeof make>) => (
+      <NodeActivityPanel
+        node={row({ nodeId: 'a', status: 'running', attempts: 1, outputs: lines.length })}
+        name={null}
+        runStatus="running"
+        live={false}
+        onClose={vi.fn()}
+        run={{ attempt: 1, iteration: '', skipWhy: null, lines }}
+      />
+    );
+    const { rerender } = renderWithRouter(panel(make(300)));
+    await user.click(tab('Logs'));
+    expect(visiblePanel()).toHaveTextContent('Lines 101–300 of 300');
+    rerender(<MemoryRouter>{panel(make(350))}</MemoryRouter>);
+    expect(visiblePanel()).toHaveTextContent('Lines 151–350 of 350');
+
+    await user.click(button('First'));
+    rerender(<MemoryRouter>{panel(make(400))}</MemoryRouter>);
+    expect(visiblePanel()).toHaveTextContent('Lines 1–200 of 400');
+
+    await user.click(button('Latest'));
+    expect(visiblePanel()).toHaveTextContent('Lines 201–400 of 400');
+    rerender(<MemoryRouter>{panel(make(420))}</MemoryRouter>);
+    expect(visiblePanel()).toHaveTextContent('Lines 221–420 of 420');
+  });
+
+  it('keeps keyboard focus in the pager when a button disables at the end', async () => {
+    const user = userEvent.setup();
+    renderLines(Array.from({ length: 450 }, (_, i) => ({ seq: i, ts: i, name: 'rows', value: i })));
+    await user.click(tab('Logs'));
+    await user.click(button('First'));
+    expect(button('Later')).toHaveFocus();
+    await user.click(button('Latest'));
+    expect(button('Earlier')).toHaveFocus();
+    await user.click(button('Earlier'));
+    await user.click(button('Earlier'));
+    expect(button('Later')).toHaveFocus();
   });
 
   it('draws no pager or filter for a short log of one name', async () => {

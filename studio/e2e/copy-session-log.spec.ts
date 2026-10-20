@@ -215,10 +215,17 @@ test.describe('#1600 C6 — Copy session log', () => {
       await drawer.getByRole('combobox', { name: 'Name' }).selectOption('sessionLog');
       const first = drawer.getByRole('button', { name: 'First', exact: true });
       await first.click();
-      await expect(drawer.locator('.node-logs__range')).toHaveText(/^Lines 1–200 of 2\d\d$/);
+      await expect(drawer.locator('.node-logs-controls__range')).toHaveText(
+        /^Lines 1–200 of 2\d\d$/,
+      );
       await expect(values.first()).toHaveText(/ Warning TabularRowSkip row 1 not_a_number: /);
+      // Every line on the page is the session log's.
+      await expect(drawer.locator('.node-logs tbody tr td:nth-child(2)')).toHaveText(
+        Array<string>(200).fill('sessionLog'),
+      );
       const box = await first.boundingBox();
       expect(box, 'First has a box').not.toBeNull();
+      expect(box!.y).toBeGreaterThanOrEqual(0);
       expect(box!.y + box!.height).toBeLessThanOrEqual(900);
 
       await expectQuiet(page, problems);

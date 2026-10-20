@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import {
   describeDatasetAddress,
@@ -453,12 +453,7 @@ export function NodeActivityPanel({
                   />
                 </Section>
                 {lines !== undefined && lines.length > 0 && (
-                  <StreamedLines
-                    // A different attempt or item starts on its own newest page.
-                    key={`${node.nodeId}|${run?.attempt ?? ''}|${run?.iteration ?? ''}`}
-                    lines={lines}
-                    stem={stem}
-                  />
+                  <StreamedLines lines={lines} stem={stem} />
                 )}
               </>
             ),
@@ -594,8 +589,8 @@ function ErrorTab({ node, attempt }: { node: NodeActivity; attempt: number | nul
  */
 const LOG_PAGE_ROWS = 200;
 
-/** The Name filter's "every line" choice. */
-const ALL_LOG_NAMES = '';
+/** The Name filter's "every line" choice: not a name an output can carry. */
+const ALL_LOG_NAMES = '\u0000all';
 
 /**
  * #1484 OR35 M2 — the Logs tab's lines: everything this attempt streamed, to
@@ -613,13 +608,29 @@ function StreamedLines({ lines, stem }: { lines: readonly StreamedLine[]; stem: 
   const [start, setStart] = useState<number | null>(null);
   const counts = new Map<string, number>();
   for (const l of lines) counts.set(l.name, (counts.get(l.name) ?? 0) + 1);
-  // A choice the lines no longer hold (a later attempt) shows them all.
+  // The drawer remounts per activity run, and a run's lines only grow, so this
+  // only guards a choice that names no line, which would draw an empty page.
   const name = counts.has(nameChoice) ? nameChoice : ALL_LOG_NAMES;
   const filtered = name === ALL_LOG_NAMES ? lines : lines.filter((l) => l.name === name);
   const last = Math.max(0, filtered.length - LOG_PAGE_ROWS);
   const from = start === null ? last : Math.min(start, last);
   const shown = filtered.slice(from, from + LOG_PAGE_ROWS);
   const paged = filtered.length > LOG_PAGE_ROWS;
+  // A pager button disables at its end of the log, which would drop keyboard
+  // focus to the page; the button that goes the other way takes it instead.
+  const pagerRef = useRef<HTMLDivElement>(null);
+  const focusNext = useRef<string | null>(null);
+  useEffect(() => {
+    if (focusNext.current === null) return;
+    pagerRef.current
+      ?.querySelector<HTMLButtonElement>(`[data-page="${focusNext.current}"]`)
+      ?.focus();
+    focusNext.current = null;
+  });
+  const page = (next: number | null, atEnd: string | null) => {
+    focusNext.current = atEnd;
+    setStart(next);
+  };
   return (
     <section className="contract-section">
       <div className="capped-value-actions">
@@ -637,7 +648,7 @@ function StreamedLines({ lines, stem }: { lines: readonly StreamedLine[]; stem: 
         </button>
       </div>
       {(counts.size > 1 || paged) && (
-        <div className="node-logs__pager">
+        <div className="node-logs-controls">
           {counts.size > 1 && (
             <LabelledControl label="Name">
               {(id) => (
@@ -661,29 +672,55 @@ function StreamedLines({ lines, stem }: { lines: readonly StreamedLine[]; stem: 
           )}
           {paged && (
             <>
-              <span className="node-logs__range">
+              <span className="node-logs-controls__range">
                 Lines {from + 1}–{from + shown.length} of {filtered.length}
               </span>
-              <button type="button" disabled={from === 0} onClick={() => setStart(0)}>
-                First
-              </button>
-              <button
-                type="button"
-                disabled={from === 0}
-                onClick={() => setStart(Math.max(0, from - LOG_PAGE_ROWS))}
+              <div
+                role="group"
+                aria-label="Log pages"
+                className="node-logs-controls"
+                ref={pagerRef}
               >
-                Earlier
-              </button>
-              <button
-                type="button"
-                disabled={from === last}
-                onClick={() => setStart(from + LOG_PAGE_ROWS >= last ? null : from + LOG_PAGE_ROWS)}
-              >
-                Later
-              </button>
-              <button type="button" disabled={from === last} onClick={() => setStart(null)}>
-                Latest
-              </button>
+                <button
+                  type="button"
+                  data-page="first"
+                  disabled={from === 0}
+                  onClick={() => page(0, 'later')}
+                >
+                  First
+                </button>
+                <button
+                  type="button"
+                  data-page="earlier"
+                  disabled={from === 0}
+                  onClick={() => {
+                    const next = Math.max(0, from - LOG_PAGE_ROWS);
+                    page(next, next === 0 ? 'later' : null);
+                  }}
+                >
+                  Earlier
+                </button>
+                <button
+                  type="button"
+                  data-page="later"
+                  disabled={from === last}
+                  onClick={() =>
+                    from + LOG_PAGE_ROWS >= last
+                      ? page(null, 'earlier')
+                      : page(from + LOG_PAGE_ROWS, null)
+                  }
+                >
+                  Later
+                </button>
+                <button
+                  type="button"
+                  data-page="latest"
+                  disabled={from === last}
+                  onClick={() => page(null, 'earlier')}
+                >
+                  Latest
+                </button>
+              </div>
             </>
           )}
         </div>

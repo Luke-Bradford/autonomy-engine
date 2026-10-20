@@ -4855,8 +4855,9 @@ textarea[data-grow='edit'],
 }
 
 /* #1772 — the Logs tab's name filter and pager: one row of controls, their
-   bottoms aligned so a labelled select sits level with the buttons. */
-.node-logs__pager {
+   bottoms aligned so a labelled select sits level with the buttons. The page
+   buttons are a nested row of the same rule. */
+.node-logs-controls {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
@@ -4864,7 +4865,11 @@ textarea[data-grow='edit'],
   margin-bottom: var(--space-2);
 }
 
-.node-logs__range {
+.node-logs-controls > .node-logs-controls {
+  margin-bottom: 0;
+}
+
+.node-logs-controls__range {
   line-height: var(--control-h);
 }
 
