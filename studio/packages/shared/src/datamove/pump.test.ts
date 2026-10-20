@@ -541,11 +541,14 @@ describe('the sink half of a row failure (#1600 OR41 C6d-1)', () => {
   it("gives each yielded batch's read indices before the sink takes it, skipping dropped rows", async () => {
     const indices: (readonly number[])[] = [];
     const seenBySink: number[][] = [];
-    const gen = pumpCopyRows(batchesOf([{ n: '1' }, { n: 'x' }, { n: '3' }], [{ n: 'y' }], [{ n: '5' }]), {
-      mapping: [map({ source: 'n', sink: 'n', type: 'integer' })],
-      counters: newCopyCounters(),
-      onSinkBatch: (rowIndices) => indices.push(rowIndices),
-    });
+    const gen = pumpCopyRows(
+      batchesOf([{ n: '1' }, { n: 'x' }, { n: '3' }], [{ n: 'y' }], [{ n: '5' }]),
+      {
+        mapping: [map({ source: 'n', sink: 'n', type: 'integer' })],
+        counters: newCopyCounters(),
+        onSinkBatch: (rowIndices) => indices.push(rowIndices),
+      },
+    );
     for await (const batch of gen) {
       // The indices the sink reads are THIS batch's, one per row it was given.
       const current = indices[indices.length - 1] ?? [];
@@ -559,8 +562,18 @@ describe('the sink half of a row failure (#1600 OR41 C6d-1)', () => {
   it('counts a sink rejection with the coercion failures, keeping the lowest row first', () => {
     const counters = newCopyCounters();
     recordCopyRowFailure(counters, { rowIndex: 899, sink: 'n', code: 'not_a_number', reason: 'r' });
-    recordCopyRowFailure(counters, { rowIndex: 4, sink: 't', code: 'sink_rejected', reason: 'dup' });
-    recordCopyRowFailure(counters, { rowIndex: 7, sink: 't', code: 'sink_rejected', reason: 'dup' });
+    recordCopyRowFailure(counters, {
+      rowIndex: 4,
+      sink: 't',
+      code: 'sink_rejected',
+      reason: 'dup',
+    });
+    recordCopyRowFailure(counters, {
+      rowIndex: 7,
+      sink: 't',
+      code: 'sink_rejected',
+      reason: 'dup',
+    });
     expect(counters.rowsFailed).toBe(3);
     expect(counters.failuresByCode).toEqual({ not_a_number: 1, sink_rejected: 2 });
     // The pump coerces a whole batch before the sink sees it, so a sink

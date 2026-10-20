@@ -468,10 +468,15 @@ describe('Skip incompatible rows (C6d-1)', () => {
   });
 
   it('leaves a ${} Write behaviour to dispatch, which sees the resolved mode', () => {
-    expect(copySkipIncompatibleIssue({ mode: '${pipeline().parameters.m}', skipIncompatibleRows: true })).toBeNull();
     expect(
-      copyDispatchInputSchema.safeParse({ mapping: [id], mode: 'upsert', skipIncompatibleRows: true })
-        .success,
+      copySkipIncompatibleIssue({ mode: '${pipeline().parameters.m}', skipIncompatibleRows: true }),
+    ).toBeNull();
+    expect(
+      copyDispatchInputSchema.safeParse({
+        mapping: [id],
+        mode: 'upsert',
+        skipIncompatibleRows: true,
+      }).success,
     ).toBe(false);
   });
 });

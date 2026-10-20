@@ -477,7 +477,11 @@ function incompatibleRowReason(err: unknown): string | null {
   const code = (err as { code?: unknown } | undefined)?.code;
   if (typeof code !== 'string' || code === 'SQLITE_CONSTRAINT_TRIGGER') return null;
   const primary = primarySqliteCode(code);
-  if (primary !== 'SQLITE_CONSTRAINT' && primary !== 'SQLITE_MISMATCH' && primary !== 'SQLITE_TOOBIG') {
+  if (
+    primary !== 'SQLITE_CONSTRAINT' &&
+    primary !== 'SQLITE_MISMATCH' &&
+    primary !== 'SQLITE_TOOBIG'
+  ) {
     return null;
   }
   return err instanceof Error ? err.message : code;
@@ -635,8 +639,7 @@ export async function writeSqliteDatasetRows(
       }
       const savepoint = onRowRejected === null ? null : db.prepare('SAVEPOINT studio_copy_row');
       const release = onRowRejected === null ? null : db.prepare('RELEASE studio_copy_row');
-      const rollbackTo =
-        onRowRejected === null ? null : db.prepare('ROLLBACK TO studio_copy_row');
+      const rollbackTo = onRowRejected === null ? null : db.prepare('ROLLBACK TO studio_copy_row');
 
       let first = true;
       let rowNumber = 0;

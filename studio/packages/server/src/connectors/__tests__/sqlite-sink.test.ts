@@ -1534,7 +1534,7 @@ describe('Skip incompatible rows (#1600 OR41 C6d-1)', () => {
     const root = tempRoot();
     const path = storeWith(
       root,
-      'create table sink (id integer primary key, note text check (note <> \'x\'));',
+      "create table sink (id integer primary key, note text check (note <> 'x'));",
       "create trigger rb before insert on sink when new.id = 2 begin select raise(rollback, 'gone'); end;",
     );
     const err = await failure(

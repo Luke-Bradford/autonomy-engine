@@ -262,7 +262,7 @@ Mapping   [Import schemas] [+ New mapping] [Clear] [Reset]                      
 
 **Built (C6a, 2026-10-20):** a rows Copy's session log, to the run log. It is the Settings tab's first field, after Mapping as in ADF ([session log](https://learn.microsoft.com/azure/data-factory/copy-activity-log)).
 - **Setting:** *Session log* Off · Warnings · Everything (`logLevel`). It is Delete's field from `catalog/session-log.ts`, with the same default (Warnings), titles and help (its help now says "what was skipped or kept", which reads for both). *Write to* and *Log folder* are not offered yet: the run log is the only destination until C6c, so there is nothing for `sessionLogIssues` to refuse.
-- **Lines:** *Warning* `TabularRowSkip` is ADF's name for each row the copy skips. Today that is a row whose value a column's *If it won't convert* (`onError` fail) cannot convert. The item is `row N`, numbered from 1 among the rows read, so a CSV header is not counted. The message is the coercion code, the sink column and the reason. The reason never holds the value (`coerce.ts`), so no row data reaches the log. *Info* `TabularRowBatch` is §4.1's "every row batch": one line per batch, `rows a-b`, `read N rows, M skipped`. It never says "written", because the sink's running total is not committed truth. A batch the sink fails on gets its skip lines but no batch line, because that line is added once the sink has taken the batch. The `COPY_ROWS_FAILED` advisory now numbers its first failure from 1 too, so a row has one number.
+- **Lines:** *Warning* `TabularRowSkip` is ADF's name for each row the copy skips. It is a row whose value a column's *If it won't convert* (`onError` fail) cannot convert, or (C6d-1, below) a row the sink rejects under *Skip incompatible rows*. The item is `row N`, numbered from 1 among the rows read, so a CSV header is not counted. The message is the coercion code, the sink column and the reason. The reason never holds the value (`coerce.ts`), so no row data reaches the log. *Info* `TabularRowBatch` is §4.1's "every row batch": one line per batch, `rows a-b`, `read N rows, M skipped`. It never says "written", because the sink's running total is not committed truth. A batch the sink fails on gets its skip lines but no batch line, because that line is added once the sink has taken the batch. The `COPY_ROWS_FAILED` advisory now numbers its first failure from 1 too, so a row has one number.
 - **Run log:** the lines are `node.output sessionLog`, yielded at the terminal and never streamed, because a running row's latest output is its progress hint. A failed copy keeps the lines it logged, ahead of its counters, and a cancel unwinds the same way. They are kept as they are added, at most `SESSION_LOG_RUN_MAX_LINES` (`SessionLog`'s `keepAtMost`). A copy can skip every row it reads, so the rest are counted, not held. The last line says how many were not kept. It does not point at a folder, because Copy has none yet. The first lines are kept whatever their level, so at Everything a long copy's batch lines (one per 1,000 rows by default) can fill the run log before a late skipped row. Warnings keeps only the skips, and C6c's folder keeps every line.
 - **No Error line:** a copy's failure is the node's error, which the Logs tab already shows. Delete adds one only for the item it failed on.
 - **Secure flags:** as Delete's, `redactSecureEvent` withholds `sessionLog` lines under either flag, by the output's name (`secure.ts`).
@@ -275,7 +275,7 @@ Mapping   [Import schemas] [+ New mapping] [Clear] [Reset]                      
 - **Not built here:**
   - **C6b:** files-as-is lines: `FileRead`, `FileWrite` and `FileSkip` (built, below).
   - **C6c:** *Write to* a folder, which needs a log connection binding of its own. A database-to-database copy has no file system connection, and ADF's `logLocationSettings` names a linked service. C6c also brings `logPath`, an appending writer and *Mode* Best effort · Reliable.
-  - **C6d:** fault tolerance for sink-side incompatible rows.
+  - **C6d:** fault tolerance: **C6d-1** the rows the sink rejects (built, below); **C6d-2** a files-as-is Copy's *Skip missing files* and *Skip forbidden files*.
   - **C6e:** consistency.
   - **C6f:** parallelism and the complete outputs.
 
@@ -294,7 +294,38 @@ Mapping   [Import schemas] [+ New mapping] [Clear] [Reset]                      
 - **No Error line**, as on a rows Copy. Here the reason is that the node's error names the file the copy failed on.
 - **The run-log loop is one helper.** Delete, a rows Copy and a files Copy now yield their lines through `sessionLogRunEvents` (`connectors/activity-events.ts`), rather than three copies of the loop.
 - No new output and no `CATALOG_VERSION` bump: `copyFilesConfigSchema` is not strict, so a pre-C6b build strips `logLevel` and copies the same files (the ledger's no-bump entry). A lowered `file_copy` or `file_move` gets the default but always overwrites, so it never skips and logs nothing.
-- **Not built here:** `FileSkip` for missing or forbidden files, which is fault tolerance (C6d). A line holding a space or a newline in a file name is ambiguous in the run log's space-separated form, as Delete's is; C6c's CSV file is the unambiguous form.
+- **Not built here:** `FileSkip` for missing or forbidden files, which is fault tolerance (C6d-2). A line holding a space or a newline in a file name is ambiguous in the run log's space-separated form, as Delete's is; C6c's CSV file is the unambiguous form.
+
+**Built (C6d-1, 2026-10-20):** a rows Copy's *Skip incompatible rows*, the Settings tab's first field, before the Session log as in ADF ([fault tolerance](https://learn.microsoft.com/azure/data-factory/copy-activity-fault-tolerance): `enableSkipIncompatibleRow`, default false).
+- **Setting:** `skipIncompatibleRows`, a literal boolean, default off (ⓕ on typed fields is OR38 #1573). Save refuses it with Upsert (`copySkipIncompatibleIssue`, on the field and at the #444 write gate), because ADF's "doesn't apply" with Upsert and studio's PostgreSQL Upsert writes each chunk as one set statement. A `${}` Write behaviour is left to dispatch, where the dispatch schema sees the resolved value. The dock does not draw it under Upsert (`appliesWhen`).
+- **What is skipped:** a row the sink database rejects, which is ADF's primary key violation and type incompatibility with the sink's native type:
+  - SQLite: every `SQLITE_CONSTRAINT` code but a trigger's (a duplicate key, NOT NULL, CHECK, an immediate foreign key, a STRICT table's datatype), `SQLITE_MISMATCH` and `SQLITE_TOOBIG`.
+  - PostgreSQL: SQLSTATE class 22 (data exception, such as a value too long or an integer that does not parse) and class 23 (integrity constraint violation).
+  - A conversion failure on the source side is already a skipped row, under *If it won't convert*.
+- **How:**
+  - SQLite takes a savepoint per row (measured about 0.6 µs a row, 32 ms to 96 ms per 100,000 trivial inserts). A rejected row is undone whole, including a BEFORE trigger's writes and a `FAIL` conflict's partial effects.
+  - PostgreSQL runs each batch's INSERT under a savepoint. Only when it fails on class 22 or 23 is the batch rolled back to it and replayed row by row, each row under its own savepoint, with the cancel checked per row.
+  - Off, both stores write exactly the statements they wrote before C6d.
+- **Not skipped, and the copy fails as before:**
+  - A trigger's rejection: SQLite's `RAISE(ABORT)` (`SQLITE_CONSTRAINT_TRIGGER`) and PostgreSQL's `RAISE EXCEPTION` (P0001), so the two stores agree.
+  - A constraint declared `ON CONFLICT ROLLBACK`, or a trigger's `RAISE(ROLLBACK)`. Either ends SQLite's whole transaction (measured), so it is checked before anything else.
+  - Any other failure.
+  - A deferred constraint, which fails at COMMIT.
+- **Counted and logged as a coercion skip is:**
+  - `rowsFailed` and `COPY_ROWS_FAILED`'s tally count it under the code `sink_rejected` (renaming to ADF's `rowsSkipped` is C6f's complete outputs).
+  - It is a *Warning* `TabularRowSkip`, `row N`, numbered as the source row it came from. The pump hands the sink each batch's read indices (`onSinkBatch`), and a sink finishes a batch before it pulls the next.
+  - The message is `sink_rejected: into '<table>': <reason>`.
+  - The batch line's "M skipped" includes it.
+  - The pump coerces a whole batch before the sink sees it, so within a batch a sink line can follow a later row's coercion line. The advisory's "First at row" is the lowest row either way (`recordCopyRowFailure`).
+- **No row data in the reason:**
+  - SQLite's message names the table, column or CHECK expression, never the value (measured: `UNIQUE constraint failed: orders.id`).
+  - PostgreSQL's reason is built from the SQLSTATE, its condition name, the constraint and the column only (such as `23505 unique_violation, constraint 'orders_pkey'`). The message and the detail quote the value (`invalid input syntax for type integer: "abc"`, `Key (id)=(2) already exists.`).
+- **Residual:** on PostgreSQL, each batch's savepoint is a subtransaction, and more than 64 in one transaction overflow the backend's subtransaction cache. Other sessions' snapshot checks slow for the rest of a long copy. The field's help says the copy is slower with it on.
+- **Deliberate differences from ADF:**
+  - A column-count mismatch cannot arise, because a Copy writes the mapping's columns.
+  - The skipped row is logged by its number, not its content.
+  - Triggers' rejections are not skipped.
+- `CATALOG_VERSION` 58→59: a pre-C6d build ignores the key and fails a copy this build finishes.
 
 ### 4.2 Lookup
 Source: [Lookup](https://learn.microsoft.com/azure/data-factory/control-flow-lookup-activity).
@@ -771,7 +802,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
 | C3 | Copy: database sink. Truncate, upsert (keys), auto-create from mapping, pre-copy script, batch size. Split: **C3a** Write behaviour Truncate then insert and Upsert with Key columns (built); **C3b** Pre-copy script and Batch size (built); **C3c** *Auto-create from mapping* (built) | OR15 upsert/auto-create |
 | C4 | Copy: mapping redesign (x → y rows from imported schemas, map-by-name default, type conversion settings, ƒx whole mapping, additional columns) | depends on OR10 import |
 | C5 | Copy: incremental (watermark Automatic / Expression; files modified-since-last-success) | OR15 incremental |
-| C6 | Copy: settings. Fault tolerance, consistency check, parallelism, session log; complete outputs. Split: **C6a** the session log of a rows Copy, to the run log (built); **C6b** files-as-is lines (built); **C6c** Write to a folder on a log connection, `logPath`, Mode; **C6d** fault tolerance; **C6e** consistency; **C6f** parallelism and complete outputs | — |
+| C6 | Copy: settings. Fault tolerance, consistency check, parallelism, session log; complete outputs. Split: **C6a** the session log of a rows Copy, to the run log (built); **C6b** files-as-is lines (built); **C6c** Write to a folder on a log connection, `logPath`, Mode; **C6d-1** Skip incompatible rows, the rows the sink rejects (built); **C6d-2** Skip missing and forbidden files; **C6e** consistency; **C6f** parallelism and complete outputs | — |
 | C7 | Lookup: first-row-only, max rows, over-limit choice, whole-file text. Lower lookup and file_read. Split: **C7a** Settings (First row only, Max rows, When over the limit), `count`/`firstRow`, a stored node's former contract refreshed on load (built); **C7b** Read as Rows · Whole file as text (`file_read` as Lookup's second type), the title *Lookup* (built); **C7c** *When over the limit* and `bytes`/`truncated` for the text mode, limited by the connection's `maxBytes` rather than the 1 MiB byte cap (built); **C7d** the workspace Lookup max rows (1000 by default, up to ADF's 5000) and the Monitor Rows read column (built) | — |
 | C8 | Get metadata + wait-until. Lower file_list. Split: **C8a** the `get_metadata` type on a file system connection, the field list as tick boxes, child items with filter, entries and modified window (built); **C8b** the `file_list` lowering with the `entries` → `childItems` rewrite, List directory retired from the palette (built); **C8c-1** tables (SQLite, Postgres) with per-kind field options (built); **C8c-2** a delimited or Excel dataset source's structure and column count (built); **C8d-1** Wait until on a file system path (built); **C8d-2a** Wait until on a delimited or Excel dataset, with #1743 (built); **C8d-2b** Wait until on a table dataset (built); **C8e** Include subfolders (built) | OR17 #1408 |
 | C9 | Delete: wildcard, folders, dates, log. Lower file_delete. Split: **C9a** the `delete` type on a file system connection, with path type, wildcard, Include subfolders, modified window, Max concurrent deletes, Fail if nothing matched and Delete empty folders, on Get metadata's walk (built); **C9b** the `file_delete` lowering (Path type File, Fail if nothing matched on, `path` kept), Delete file retired from the palette (built); **C9c** the session log and `logPath` (a new output, so a `formerOutputs` snapshot and a version bump), shared with Copy's (built) | OR17 #1408 |

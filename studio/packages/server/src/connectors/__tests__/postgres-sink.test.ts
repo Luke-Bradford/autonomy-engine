@@ -827,7 +827,10 @@ describe('the postgres sink: Skip incompatible rows (#1600 OR41 C6d-1)', () => {
   it('numbers a rejected row by its place in the batch across a bind-limit flush', async () => {
     // Two columns bind 32,767 rows per statement, so row 32,768 is in the
     // second statement of the same batch.
-    const rows = Array.from({ length: 32_770 }, (_, i) => ({ a: i === 32_768 ? 2 : 10 + i, b: 'x' }));
+    const rows = Array.from({ length: 32_770 }, (_, i) => ({
+      a: i === 32_768 ? 2 : 10 + i,
+      b: 'x',
+    }));
     const rejected: number[] = [];
     const result = await writePostgresDatasetRows(
       write({
@@ -840,7 +843,7 @@ describe('the postgres sink: Skip incompatible rows (#1600 OR41 C6d-1)', () => {
     expect(result.rowsWritten).toBe(32_769);
   });
 
-  it('fails the copy on an error that is not the row\'s, without a replay', async () => {
+  it("fails the copy on an error that is not the row's, without a replay", async () => {
     const denied = pgError('42501', 'permission denied for table tgt');
     const { rec, factory } = sinkFactory({ insertError: () => denied });
     await expect(
@@ -862,7 +865,8 @@ describe('the postgres sink: Skip incompatible rows (#1600 OR41 C6d-1)', () => {
     await writePostgresDatasetRows(
       write({
         createClient: sinkFactory({
-          insertError: (v) => (v.length !== 2 ? notNull : v[0] === 1 ? notNull : v[0] === 2 ? badInt : undefined),
+          insertError: (v) =>
+            v.length !== 2 ? notNull : v[0] === 1 ? notNull : v[0] === 2 ? badInt : undefined,
         }).factory,
         onRowRejected: (_, r) => rejected.push(r),
       }),

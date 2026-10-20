@@ -46,7 +46,12 @@ describe('nodeTypeTabs (#1477)', () => {
       },
       { key: 'mapping', label: 'Mapping', fields: ['mapping'], bindings: [] },
       // #1600 OR41 C6a — ADF's Settings tab, after Mapping.
-      { key: 'settings', label: 'Settings', fields: ['logLevel'], bindings: [] },
+      {
+        key: 'settings',
+        label: 'Settings',
+        fields: ['skipIncompatibleRows', 'logLevel'],
+        bindings: [],
+      },
     ]);
   });
 
