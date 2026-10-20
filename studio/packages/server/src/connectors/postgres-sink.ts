@@ -959,6 +959,9 @@ export async function writePostgresDatasetRows(
             if (write.signal?.aborted) {
               throw new DatasetIoError('cancelled', 'dataset write aborted');
             }
+            const position = pendingPositions[i];
+            // Unreachable: a position is pushed for every pending row.
+            if (position === undefined) throw new Error('a pending row has no batch position');
             await client.query('SAVEPOINT studio_copy_row');
             try {
               rowsWritten += countOf(
@@ -969,9 +972,6 @@ export async function writePostgresDatasetRows(
               if (reason === null) throw rowErr;
               await client.query('ROLLBACK TO SAVEPOINT studio_copy_row');
               await client.query('RELEASE SAVEPOINT studio_copy_row');
-              const position = pendingPositions[i];
-              // Unreachable: a position is pushed for every pending row.
-              if (position === undefined) throw new Error('a pending row has no batch position');
               report(position, reason);
               continue;
             }
