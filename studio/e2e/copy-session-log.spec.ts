@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -133,6 +133,100 @@ test.describe('#1600 C6a — Copy session log', () => {
       // After the copy's progress tick, the two log lines, whole.
       await expect(values).toHaveText([/"rowsRead":3/, lines[0]!, lines[1]!]);
       expect(lines[0]!.length).toBeGreaterThan(80);
+
+      await expectQuiet(page, problems);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  /**
+   * #1600 OR41 C6b — the same Settings tab on Copy · Files as-is, run for real
+   * on a file connection: Everything logs each file read and written, and the
+   * file If file exists = Skip left in place is a FileSkip with why.
+   */
+  test('a files-as-is Copy logs each file read, written and skipped in the Logs tab', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const problems = collectPageProblems(page);
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'e2e-1600-c6b-')));
+    try {
+      mkdirSync(join(root, 'in'));
+      mkdirSync(join(root, 'out'));
+      writeFileSync(join(root, 'in', 'a.txt'), 'alpha\n');
+      writeFileSync(join(root, 'in', 'b.txt'), 'new b\n');
+      writeFileSync(join(root, 'out', 'b.txt'), 'old b\n');
+      const store = await seedConnection(page, {
+        name: 'e2e 1600 c6b store',
+        kind: 'fs',
+        config: { roots: [root], writable: true },
+      });
+      const pipelineId = await openSeededCanvas(page, 'e2e 1600 c6b files session log', {
+        nodes: [
+          {
+            id: 'copy1',
+            type: 'copy_files',
+            config: { sourcePath: 'in', sinkFolder: 'out', ifExists: 'skip' },
+            connectionIds: { source: store, sink: store },
+            position: { x: 0, y: 0 },
+          },
+        ],
+        edges: [],
+      });
+
+      await nodeById(page, 'copy1').click();
+      const pane = properties(page);
+      await pane.getByRole('tab', { name: 'Settings', exact: true }).click();
+      const level = pane.getByRole('combobox', { name: 'Session log' });
+      await expect(level.locator('option:checked')).toHaveText('Warnings (default)');
+      const box = await level.boundingBox();
+      expect(box, 'Session log has a box').not.toBeNull();
+      expect(box!.y + box!.height).toBeLessThanOrEqual(900);
+      await level.selectOption({ label: 'Everything' });
+      await pane.getByRole('button', { name: 'Apply config' }).click();
+
+      await page.getByRole('button', { name: 'Save version' }).click();
+      await expect(page.locator('.notice')).toHaveText('Saved v2.');
+      const versions = (await (
+        await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`)
+      ).json()) as { id: string; version: number; nodes: Record<string, unknown>[] }[];
+      const latest = versions.sort((a, b) => b.version - a.version)[0]!;
+      const copy = latest.nodes.find((n) => n['id'] === 'copy1')!;
+      expect(copy['config']).toMatchObject({ logLevel: 'info' });
+
+      const runId = await fireAndSettle(page, latest.id, 'e2e 1600 c6b');
+      const run = await (await page.request.get(`/api/runs/${encodeURIComponent(runId)}`)).json();
+      expect(run.status, `run: ${JSON.stringify(run)}`).toBe('success');
+      expect(readFileSync(join(root, 'out', 'b.txt'), 'utf8')).toBe('old b\n');
+      const events = (await (
+        await page.request.get(`/api/runs/${encodeURIComponent(runId)}/events`)
+      ).json()) as { type: string; payload: Record<string, unknown> }[];
+      const lines = events
+        .filter((e) => e.type === 'node.output' && e.payload['name'] === 'sessionLog')
+        .map((e) => e.payload['value'] as string);
+      const ts = '\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z';
+      expect(lines, `events: ${JSON.stringify(events.map((e) => e.type))}`).toHaveLength(3);
+      expect(lines[0]).toMatch(new RegExp(`^${ts} Info FileRead a\\.txt read 6 bytes$`));
+      expect(lines[1]).toMatch(
+        new RegExp(`^${ts} Info FileWrite a\\.txt wrote 6 bytes from 'a\\.txt'$`),
+      );
+      expect(lines[2]).toMatch(
+        new RegExp(
+          `^${ts} Warning FileSkip b\\.txt skipped: 'b\\.txt' already exists and If file exists is Skip$`,
+        ),
+      );
+
+      // The Logs tab shows each line whole.
+      await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+      await page.locator('.activity-runs__table .activity-runs__open').first().click();
+      const drawer = page.locator('#run-detail-drawer');
+      await drawer
+        .getByRole('tablist', { name: 'Activity run details' })
+        .getByRole('tab', { name: 'Logs', exact: true })
+        .click();
+      const values = drawer.locator('.node-logs tbody tr td:last-child');
+      for (const line of lines) await expect(values.filter({ hasText: line })).toHaveCount(1);
+      expect(lines[2]!.length).toBeGreaterThan(80);
 
       await expectQuiet(page, problems);
     } finally {

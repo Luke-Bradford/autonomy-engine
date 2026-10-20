@@ -909,6 +909,25 @@ describe('#1600 C6b — session log', () => {
       ]);
       expect(outputs(events)).toMatchObject({ filesSkipped: 2 });
     });
+
+    it('a merge skipped under Delete source says each source is kept', async () => {
+      await put('all.txt', 'old', dst);
+      const events = await run(
+        {
+          sourcePath: 'in',
+          copyBehavior: 'merge',
+          sinkFileName: 'all.txt',
+          ifExists: 'skip',
+          afterCopy: 'delete',
+        },
+        { sourceWritable: true },
+      );
+      expect(logLines(events)).toEqual([
+        "Warning FileSkip a.txt skipped: 'all.txt' already exists and If file exists is Skip; the source is kept",
+        "Warning FileSkip b.txt skipped: 'all.txt' already exists and If file exists is Skip; the source is kept",
+      ]);
+      expect(await tree(src)).toEqual(['in/a.txt', 'in/b.txt']);
+    });
   });
 
   it('a skipped copy that already holds the source bytes says After copy still applies', async () => {

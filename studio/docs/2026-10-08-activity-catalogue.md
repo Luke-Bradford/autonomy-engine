@@ -273,11 +273,28 @@ Mapping   [Import schemas] [+ New mapping] [Clear] [Reset]                      
   - `onError` null substitutions are not logged, because the row is kept.
 - No new output and no `CATALOG_VERSION` bump. A pre-C6a build strips `logLevel` and copies the same rows, so only the log lines are lost (the ledger's no-bump entry).
 - **Not built here:**
-  - **C6b:** files-as-is lines: `FileRead`, `FileWrite` and `FileSkip`.
+  - **C6b:** files-as-is lines: `FileRead`, `FileWrite` and `FileSkip` (built, below).
   - **C6c:** *Write to* a folder, which needs a log connection binding of its own. A database-to-database copy has no file system connection, and ADF's `logLocationSettings` names a linked service. C6c also brings `logPath`, an appending writer and *Mode* Best effort · Reliable.
   - **C6d:** fault tolerance for sink-side incompatible rows.
   - **C6e:** consistency.
   - **C6f:** parallelism and the complete outputs.
+
+**Built (C6b, 2026-10-20):** a files-as-is Copy's session log, to the run log, with ADF's file operations ([session log](https://learn.microsoft.com/azure/data-factory/copy-activity-log): `FileRead`, `FileWrite`, `FileSkip`).
+- **Setting:** the same *Session log* field (`logLevel`, default Warnings) on a new Settings tab after Sink, as on a rows Copy. Switching the *Copy mode* restarts it at its default, as it does every other setting.
+- **Lines:**
+  - *Info* `FileRead`: one per source file, `read N bytes`. The item is the file's path under the source path.
+  - *Info* `FileWrite`: one per file written, `wrote N bytes from '<source>'`, or `merged from K files` for a merge. The item is the file's path under the sink folder.
+  - *Warning* `FileSkip`: one per source that *If file exists* = Skip left uncopied, saying whether the target already existed or appeared during the copy. Under After copy Delete or Move it also says either that the source is kept, or that the target already holds the file's bytes so After copy still applies (the retry that converges, #1685).
+- **When:** a read and its write are logged together, once the write has landed, beside the counters they match, so a line never claims a file the counters do not. A skip is logged even when its byte comparison fails part-way, because it has already been counted.
+- **Run log:** the same rule and cap as a rows Copy, with lines yielded at the terminal and ahead of a failure's counters. Everything logs two lines per file, so a copy of more than 500 files fills the run log, and a later `FileSkip` is counted in the last line rather than kept. Warnings keeps only the skips, and C6c's folder keeps every line.
+- **Deliberate differences from ADF:**
+  - One line per read and per write, at completion, rather than ADF's start and complete pairs. The `FileRead` timestamp is therefore the write's.
+  - The message holds the size, not the file's metadata.
+  - The After copy delete or move is not logged. It is not one of ADF's copy-log operations, and `filesDeleted` and `filesMoved` count it.
+- **No Error line**, as on a rows Copy. Here the reason is that the node's error names the file the copy failed on.
+- **The run-log loop is one helper.** Delete, a rows Copy and a files Copy now yield their lines through `sessionLogRunEvents` (`connectors/activity-events.ts`), rather than three copies of the loop.
+- No new output and no `CATALOG_VERSION` bump: `copyFilesConfigSchema` is not strict, so a pre-C6b build strips `logLevel` and copies the same files (the ledger's no-bump entry). A lowered `file_copy` or `file_move` gets the default but always overwrites, so it never skips and logs nothing.
+- **Not built here:** `FileSkip` for missing or forbidden files, which is fault tolerance (C6d). A line holding a space or a newline in a file name is ambiguous in the run log's space-separated form, as Delete's is; C6c's CSV file is the unambiguous form.
 
 ### 4.2 Lookup
 Source: [Lookup](https://learn.microsoft.com/azure/data-factory/control-flow-lookup-activity).
@@ -754,7 +771,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
 | C3 | Copy: database sink. Truncate, upsert (keys), auto-create from mapping, pre-copy script, batch size. Split: **C3a** Write behaviour Truncate then insert and Upsert with Key columns (built); **C3b** Pre-copy script and Batch size (built); **C3c** *Auto-create from mapping* (built) | OR15 upsert/auto-create |
 | C4 | Copy: mapping redesign (x → y rows from imported schemas, map-by-name default, type conversion settings, ƒx whole mapping, additional columns) | depends on OR10 import |
 | C5 | Copy: incremental (watermark Automatic / Expression; files modified-since-last-success) | OR15 incremental |
-| C6 | Copy: settings. Fault tolerance, consistency check, parallelism, session log; complete outputs. Split: **C6a** the session log of a rows Copy, to the run log (built); **C6b** files-as-is lines; **C6c** Write to a folder on a log connection, `logPath`, Mode; **C6d** fault tolerance; **C6e** consistency; **C6f** parallelism and complete outputs | — |
+| C6 | Copy: settings. Fault tolerance, consistency check, parallelism, session log; complete outputs. Split: **C6a** the session log of a rows Copy, to the run log (built); **C6b** files-as-is lines (built); **C6c** Write to a folder on a log connection, `logPath`, Mode; **C6d** fault tolerance; **C6e** consistency; **C6f** parallelism and complete outputs | — |
 | C7 | Lookup: first-row-only, max rows, over-limit choice, whole-file text. Lower lookup and file_read. Split: **C7a** Settings (First row only, Max rows, When over the limit), `count`/`firstRow`, a stored node's former contract refreshed on load (built); **C7b** Read as Rows · Whole file as text (`file_read` as Lookup's second type), the title *Lookup* (built); **C7c** *When over the limit* and `bytes`/`truncated` for the text mode, limited by the connection's `maxBytes` rather than the 1 MiB byte cap (built); **C7d** the workspace Lookup max rows (1000 by default, up to ADF's 5000) and the Monitor Rows read column (built) | — |
 | C8 | Get metadata + wait-until. Lower file_list. Split: **C8a** the `get_metadata` type on a file system connection, the field list as tick boxes, child items with filter, entries and modified window (built); **C8b** the `file_list` lowering with the `entries` → `childItems` rewrite, List directory retired from the palette (built); **C8c-1** tables (SQLite, Postgres) with per-kind field options (built); **C8c-2** a delimited or Excel dataset source's structure and column count (built); **C8d-1** Wait until on a file system path (built); **C8d-2a** Wait until on a delimited or Excel dataset, with #1743 (built); **C8d-2b** Wait until on a table dataset (built); **C8e** Include subfolders (built) | OR17 #1408 |
 | C9 | Delete: wildcard, folders, dates, log. Lower file_delete. Split: **C9a** the `delete` type on a file system connection, with path type, wildcard, Include subfolders, modified window, Max concurrent deletes, Fail if nothing matched and Delete empty folders, on Get metadata's walk (built); **C9b** the `file_delete` lowering (Path type File, Fail if nothing matched on, `path` kept), Delete file retired from the palette (built); **C9c** the session log and `logPath` (a new output, so a `formerOutputs` snapshot and a version bump), shared with Copy's (built) | OR17 #1408 |
