@@ -153,11 +153,14 @@ describe('applicableFieldNames (#1686)', () => {
   });
 
   it('follows the draft as the controls change', () => {
+    // #1600 C6d-2 — one file cannot skip one, as in ADF.
     expect(hidden({ pathType: 'file' })).toEqual([
       'wildcard',
       'fileListPath',
       'recursive',
       'moveTo',
+      'skipMissingFiles',
+      'skipForbiddenFiles',
     ]);
     expect(hidden({ pathType: 'list', afterCopy: 'move' })).toEqual([
       'wildcard',
@@ -183,7 +186,13 @@ describe('applicableFieldNames (#1686)', () => {
       'fileListPath',
       'recursive',
       'moveTo',
+      'skipMissingFiles',
+      'skipForbiddenFiles',
     ]);
+    // #1600 C6d-2 — and a stored Skip forbidden files, which save refuses there.
+    expect(hidden({ pathType: 'file', skipForbiddenFiles: true })).not.toContain(
+      'skipForbiddenFiles',
+    );
     // Typed, then its control moved away: it stays until it is cleared.
     const typed = { ...seedFieldInputs(fields, {}), afterCopy: 'keep', moveTo: 'done' };
     expect(hidden({}, typed)).toEqual(['fileListPath', 'sinkFileName']);

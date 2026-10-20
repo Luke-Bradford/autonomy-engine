@@ -1139,8 +1139,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
         bindings: ['sinkConnection'],
         fields: ['sinkFolder', 'sinkFileName', 'copyBehavior', 'ifExists'],
       },
-      // #1600 OR41 C6b — a rows Copy's Settings tab (C6a), with its one field.
-      { key: 'settings', fields: ['logLevel'] },
+      // #1600 OR41 C6b — a rows Copy's Settings tab (C6a). C6d-2's fault
+      // tolerance comes before the Session log, in ADF's order.
+      { key: 'settings', fields: ['skipMissingFiles', 'skipForbiddenFiles', 'logLevel'] },
     ],
     // #1686 — the same rules `copyFilesConfigSchema`'s superRefine enforces,
     // read by the dock to leave out what cannot apply.
@@ -1149,6 +1150,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
       recursive: [{ field: 'pathType', in: ['folder'] }],
       fileListPath: [{ field: 'pathType', in: ['list'] }],
       moveTo: [{ field: 'afterCopy', in: ['move'] }],
+      // C6d-2 — as in ADF, only a source of several files can skip one.
+      skipMissingFiles: [{ field: 'pathType', in: ['folder', 'list'] }],
+      skipForbiddenFiles: [{ field: 'pathType', in: ['folder', 'list'] }],
       sinkFileName: [
         { field: 'pathType', in: ['file'] },
         { field: 'copyBehavior', in: ['merge'] },

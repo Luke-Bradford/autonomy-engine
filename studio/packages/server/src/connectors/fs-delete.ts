@@ -40,7 +40,7 @@ import { access, realpath, rmdir, unlink } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 import type { z } from 'zod';
 import { SessionLog, type DeleteConfig } from '@autonomy-studio/shared';
-import { failed, sessionLogRunEvents } from './activity-events.js';
+import { failed, REMOVED_BY_SOMEONE_ELSE, sessionLogRunEvents } from './activity-events.js';
 import { isMissingErrno, resolveWithinRootsOrMissing } from './confine.js';
 import type { fsConnectionConfigSchema } from './fs-connection.js';
 import {
@@ -74,7 +74,7 @@ type Planned = Pick<WalkedEntry, 'name' | 'abs' | 'st'>;
 const KEPT_FOLDER: Readonly<Record<string, string>> = {
   ENOTEMPTY: 'kept: not empty',
   EEXIST: 'kept: not empty',
-  ENOENT: 'skipped: removed by someone else',
+  ENOENT: `skipped: ${REMOVED_BY_SOMEONE_ELSE}`,
   ENOTDIR: 'skipped: no longer a folder',
   EBUSY: 'kept: a mount point',
 };
@@ -342,7 +342,7 @@ export async function* runDelete(
         } catch (err) {
           // Gone since it was planned: someone else deleted it.
           if (isMissingErrno(err)) {
-            log.add('Warning', 'FileSkip', e.name, 'skipped: removed by someone else');
+            log.add('Warning', 'FileSkip', e.name, `skipped: ${REMOVED_BY_SOMEONE_ELSE}`);
             continue;
           }
           if (failure === undefined) {
