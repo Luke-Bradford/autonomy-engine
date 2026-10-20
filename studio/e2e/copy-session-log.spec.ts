@@ -130,7 +130,8 @@ test.describe('#1600 C6a — Copy session log', () => {
         .getByRole('tab', { name: 'Logs', exact: true })
         .click();
       const values = drawer.locator('.node-logs tbody tr td:last-child');
-      await expect(values).toHaveText([lines[0]!, lines[1]!]);
+      // After the copy's progress tick, the two log lines, whole.
+      await expect(values).toHaveText([/"rowsRead":3/, lines[0]!, lines[1]!]);
       expect(lines[0]!.length).toBeGreaterThan(80);
 
       await expectQuiet(page, problems);

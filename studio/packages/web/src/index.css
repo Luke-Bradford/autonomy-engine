@@ -1962,6 +1962,14 @@ button.danger {
   font-weight: var(--weight-strong);
 }
 
+/* #1600 OR41 C6a — a strip wider than its dock wraps to a second row rather
+   than clipping a tab: Copy's five tabs (ADF's General, Source, Sink, Mapping,
+   Settings) are 42px wider than the right-hand dock at 1440x900. The sticky
+   region's height is measured (`PinnedRegion`), so a second row pads too. */
+.panel-tabs {
+  flex-wrap: wrap;
+}
+
 .panel-tabs [role='tab'] {
   position: relative;
 }

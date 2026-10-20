@@ -218,12 +218,17 @@ test('a tab label shows its problems, an unapplied edit, or that it is complete'
   await nodeById(page, 'c').click();
   await page.getByRole('button', { name: 'Dock to right' }).click();
   await expectTabNames(tabs(page), ['General', 'Source', 'Sink', 'Mapping', 'Settings']);
+  // Wider than the dock, the strip wraps (#1600 C6a): every tab is whole and
+  // inside it, none clipped or scrolled out of sight.
   const fit = await tabs(page).evaluate((list) => {
     const bound = list.getBoundingClientRect();
-    const last = list.querySelector('[role="tab"]:last-of-type')!.getBoundingClientRect();
-    return { overflow: list.scrollWidth - list.clientWidth, gap: bound.right - last.right };
+    const outside = [...list.querySelectorAll('[role="tab"]')].filter((t) => {
+      const r = t.getBoundingClientRect();
+      return r.left < bound.left || r.right > bound.right || r.bottom > bound.bottom;
+    });
+    return { overflow: list.scrollWidth - list.clientWidth, outside: outside.length };
   });
   expect(fit.overflow).toBeLessThanOrEqual(0);
-  expect(fit.gap).toBeGreaterThanOrEqual(0);
+  expect(fit.outside).toBe(0);
   await expectQuiet(page, problems);
 });
