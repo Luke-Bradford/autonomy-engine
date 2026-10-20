@@ -1120,9 +1120,7 @@ describe('NodeActivityPanel — every streamed line is reachable (#1772)', () =>
 
   it('pages back to the first line and forward to the newest again', async () => {
     const user = userEvent.setup();
-    renderLines(
-      Array.from({ length: 450 }, (_, i) => ({ seq: i, ts: i, name: 'rows', value: i })),
-    );
+    renderLines(Array.from({ length: 450 }, (_, i) => ({ seq: i, ts: i, name: 'rows', value: i })));
     await user.click(tab('Logs'));
     expect(logRows()[0]).toHaveTextContent('rows250');
     expect(button('Later')).toBeDisabled();
