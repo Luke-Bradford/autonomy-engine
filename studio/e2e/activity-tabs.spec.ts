@@ -50,7 +50,7 @@ test('a Copy node opens on Source; each tab starts on screen and Sink fits whole
   await openSeededCanvas(page, 'or29 copy tabs', seed);
   await nodeById(page, 'c').click();
 
-  await expectTabNames(tabs(page), ['General', 'Source', 'Sink', 'Mapping']);
+  await expectTabNames(tabs(page), ['General', 'Source', 'Sink', 'Mapping', 'Settings']);
   await expect(tabs(page).getByRole('tab', { name: 'Source' })).toHaveAttribute(
     'aria-selected',
     'true',
@@ -213,11 +213,11 @@ test('a tab label shows its problems, an unapplied edit, or that it is complete'
   await expect(settings).toHaveAccessibleDescription('Complete');
   await expect(settings.locator('.fui-Tab__content .panel-tabs__status')).toHaveText('✓');
 
-  // Copy's four tabs, Mapping's ✓ included, fit the dock in its narrower,
+  // Copy's five tabs (Settings since #1600 C6a), Mapping's ✓ included, fit the dock in its narrower,
   // right-hand position.
   await nodeById(page, 'c').click();
   await page.getByRole('button', { name: 'Dock to right' }).click();
-  await expectTabNames(tabs(page), ['General', 'Source', 'Sink', 'Mapping']);
+  await expectTabNames(tabs(page), ['General', 'Source', 'Sink', 'Mapping', 'Settings']);
   const fit = await tabs(page).evaluate((list) => {
     const bound = list.getBoundingClientRect();
     const last = list.querySelector('[role="tab"]:last-of-type')!.getBoundingClientRect();

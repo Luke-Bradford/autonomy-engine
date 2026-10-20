@@ -2104,7 +2104,7 @@ describe('NodePanel — what each tab holds (#1396, #1477)', () => {
 
   it('splits a paired activity’s pickers over Source and Sink, opening on Source', () => {
     mountOver(node('n_copy', 'copy', {}));
-    expect(tabNames()).toEqual(['General', 'Source', 'Sink', 'Mapping']);
+    expect(tabNames()).toEqual(['General', 'Source', 'Sink', 'Mapping', 'Settings']); // #1600 C6a
     expect(selectedTab()).toBe('Source');
     const source = within(screen.getByRole('tabpanel', { name: 'Source' }));
     for (const label of ['Source connection', 'Source dataset']) {

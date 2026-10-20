@@ -45,6 +45,8 @@ describe('nodeTypeTabs (#1477)', () => {
         bindings: ['sinkConnection', 'sinkDataset'],
       },
       { key: 'mapping', label: 'Mapping', fields: ['mapping'], bindings: [] },
+      // #1600 OR41 C6a — ADF's Settings tab, after Mapping.
+      { key: 'settings', label: 'Settings', fields: ['logLevel'], bindings: [] },
     ]);
   });
 

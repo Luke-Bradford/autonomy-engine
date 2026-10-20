@@ -122,7 +122,11 @@ export class SessionLog {
 
   add(level: SessionLogLineLevel, operation: string, item: string, message: string): void {
     if (!keeps(this.level, level)) return;
-    if (this.keepAtMost !== undefined && level !== 'Error' && this.lines.length >= this.keepAtMost) {
+    if (
+      this.keepAtMost !== undefined &&
+      level !== 'Error' &&
+      this.lines.length >= this.keepAtMost
+    ) {
       this.dropped += 1;
       return;
     }
@@ -156,9 +160,7 @@ export function sessionLogRunValues(
   const dropped = rest.length - errors.length + (opts.dropped ?? 0);
   if (dropped > 0) {
     const hint =
-      opts.folderHint === false
-        ? ''
-        : '; write the session log to a folder to keep every line';
+      opts.folderHint === false ? '' : '; write the session log to a folder to keep every line';
     kept.push(
       sessionLogText({
         timestamp: now().toISOString(),
