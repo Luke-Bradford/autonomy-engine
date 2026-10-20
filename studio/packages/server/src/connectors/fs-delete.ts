@@ -39,10 +39,7 @@ import { constants as fsConstants } from 'node:fs';
 import { access, realpath, rmdir, unlink } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 import type { z } from 'zod';
-import {
-  SessionLog,
-  type DeleteConfig,
-} from '@autonomy-studio/shared';
+import { SessionLog, type DeleteConfig } from '@autonomy-studio/shared';
 import { failed, sessionLogRunEvents } from './activity-events.js';
 import { isMissingErrno, resolveWithinRootsOrMissing } from './confine.js';
 import type { fsConnectionConfigSchema } from './fs-connection.js';

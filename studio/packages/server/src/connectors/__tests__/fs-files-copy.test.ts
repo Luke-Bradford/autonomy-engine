@@ -954,8 +954,12 @@ describe('#1600 C6b — session log', () => {
         'Info FileRead a.txt read 1 byte',
         "Info FileWrite a.txt wrote 1 byte from 'a.txt'",
       ]);
-      const firstLine = events.findIndex((e) => e.type === 'output' && e.name === SESSION_LOG_OUTPUT);
-      const firstCounter = events.findIndex((e) => e.type === 'output' && e.name === 'filesWritten');
+      const firstLine = events.findIndex(
+        (e) => e.type === 'output' && e.name === SESSION_LOG_OUTPUT,
+      );
+      const firstCounter = events.findIndex(
+        (e) => e.type === 'output' && e.name === 'filesWritten',
+      );
       expect(firstLine).toBeGreaterThanOrEqual(0);
       expect(firstLine).toBeLessThan(firstCounter);
     },
