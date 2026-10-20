@@ -58,7 +58,9 @@ const HELP_LIMITS: Record<string, number> = {
   // +1 for C6a's Session log on the Settings tab.
   // +1 for C6d-1's Skip incompatible rows: what is skipped, that a trigger's
   // rejection still fails, not with Upsert, and that it is slower.
-  'Copy data': 14,
+  // +1 for C6e-1's Verify after copy: what is compared, that a failure writes
+  // nothing, and not with Upsert.
+  'Copy data': 15,
   // #1600 OR41 C9a — Delete, measured: the pane's own `?`s and one on each
   // Source and Settings field but Delete empty folders, which waits for
   // Include subfolders. +2 for C9c's Session log and Write to (Log folder
@@ -345,7 +347,8 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   // +1 each for #1600 OR41 C6a's Session log (rows); C6b's (Files as-is) took
   // the folder walk to 17 and the list walk stayed within its 19.
   // +1 each for C6d-1's Skip incompatible rows (rows only).
-  'Copy data': 14,
+  // +1 each for C6e-1's Verify after copy (rows only).
+  'Copy data': 15,
   // #1600 OR41 C6d-2's Skip missing files and Skip forbidden files add two `?`s
   // to each walk, measured: the list walk reads 20 (its limit had been one above
   // its count), the folder walk 19.
