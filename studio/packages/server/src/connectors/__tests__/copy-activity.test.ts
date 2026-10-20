@@ -1455,9 +1455,9 @@ describe('copy activity — Verify after copy (#1600 OR41 C6e-1)', () => {
       }),
     );
     expect(terminal(events).type).toBe('succeeded');
-    expect(events.filter((e) => e.type === 'warned').map((w) => w.type === 'warned' && w.code)).toEqual(
-      [WARNING_CODES.COPY_STORE_COUNT_DIFFERS],
-    );
+    expect(
+      events.filter((e) => e.type === 'warned').map((w) => w.type === 'warned' && w.code),
+    ).toEqual([WARNING_CODES.COPY_STORE_COUNT_DIFFERS]);
   });
 
   it('passes a consistent copy, counting the skipped rows as accounted for', async () => {

@@ -1607,7 +1607,7 @@ describe('Verify after copy (#1600 OR41 C6e-1)', () => {
   // A trigger that discards a row the store was sent, so it keeps fewer than it
   // took: the inconsistency the check exists to catch.
   const ignoreTwo =
-    "create trigger drop2 before insert on sink when new.id = 2 begin select raise(ignore); end;";
+    'create trigger drop2 before insert on sink when new.id = 2 begin select raise(ignore); end;';
   const three = (): Record<string, SinkValue>[] => [
     { id: 1, note: 'a' },
     { id: 2, note: 'b' },
