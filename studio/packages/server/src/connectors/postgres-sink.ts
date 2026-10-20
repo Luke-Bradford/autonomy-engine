@@ -961,7 +961,9 @@ export async function writePostgresDatasetRows(
             }
             const position = pendingPositions[i];
             // Unreachable: a position is pushed for every pending row.
-            if (position === undefined) throw new Error('a pending row has no batch position');
+            if (position === undefined) {
+              throw new Error('a pending row has no batch position', { cause: err });
+            }
             await client.query('SAVEPOINT studio_copy_row');
             try {
               rowsWritten += countOf(
