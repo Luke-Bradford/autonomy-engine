@@ -997,9 +997,13 @@ const ENTRIES: ActivityCatalogEntry[] = [
       },
       { key: 'mapping', fields: ['mapping'] },
       // #1600 OR41 C6a — ADF's Settings tab, after Mapping. C6d-1's fault
-      // tolerance comes before the Session log, in ADF's order; consistency and
-      // parallelism join it in C6e and C6f.
-      { key: 'settings', fields: ['skipIncompatibleRows', 'logLevel'] },
+      // tolerance comes before the Session log, in ADF's order; C6e-1's Verify
+      // after copy sits between them, the spec's Settings order, and C6f's
+      // parallelism joins it.
+      {
+        key: 'settings',
+        fields: ['skipIncompatibleRows', 'validateDataConsistency', 'logLevel'],
+      },
     ],
     // #1600 OR41 C3a — Key columns are read only by Upsert, and save refuses
     // them on any other write behaviour (`copyKeyColumnIssues`).
@@ -1011,6 +1015,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
       // C6d-1 — every write behaviour but Upsert, which save refuses it with
       // (`copySkipIncompatibleIssue`). A new write mode must be decided here.
       skipIncompatibleRows: [{ field: 'mode', in: ['append', 'overwrite', 'truncate'] }],
+      // C6e-1 — likewise for Verify after copy (`copyVerifyConsistencyIssue`).
+      validateDataConsistency: [{ field: 'mode', in: ['append', 'overwrite', 'truncate'] }],
     },
     idempotent: false,
     // #1190 (M10 slice 2) — `postgres` joins the SOURCE allowlist, because the

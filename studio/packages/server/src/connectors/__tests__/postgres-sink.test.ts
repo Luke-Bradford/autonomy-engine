@@ -2264,3 +2264,85 @@ describe.skipIf(LIVE_HOST === undefined)('the postgres sink, against a live post
     });
   });
 });
+
+describe('the postgres sink: Verify after copy (#1600 OR41 C6e-1)', () => {
+  it("hands the check the store's own count before COMMIT, and a reason rolls back", async () => {
+    // The store kept one of the two rows it was sent.
+    const { rec, factory } = sinkFactory({ insertRowCount: (n) => n - 1 });
+    const seen: number[] = [];
+    await expect(
+      writePostgresDatasetRows(
+        write({
+          createClient: factory,
+          verifyBeforeCommit: (n) => {
+            seen.push(n);
+            return 'kept 1 of 2';
+          },
+        }),
+        batchesOf([
+          { a: 1, b: 2 },
+          { a: 3, b: 4 },
+        ]),
+      ),
+    ).rejects.toMatchObject({
+      kind: 'permanent',
+      partialWritePossible: false,
+      message: 'kept 1 of 2',
+    });
+    expect(seen).toEqual([1]);
+    expect(sqlOf(rec)).toContain('ROLLBACK');
+    expect(sqlOf(rec)).not.toContain('COMMIT');
+  });
+
+  it('commits when the check passes', async () => {
+    const { rec, factory } = sinkFactory();
+    const result = await writePostgresDatasetRows(
+      write({ createClient: factory, verifyBeforeCommit: () => null }),
+      batchesOf([{ a: 1, b: 2 }]),
+    );
+    expect(result.rowsWritten).toBe(1);
+    expect(sqlOf(rec)).toContain('COMMIT');
+  });
+
+  it('counts the rows Skip incompatible rows replayed before the check runs', async () => {
+    // The second row of the batch is rejected on its replay, so the store keeps
+    // one and the check is handed one.
+    const { factory } = sinkFactory({
+      insertError: (values) =>
+        values.length > 2 || values[0] === 3 ? pgError('23505', 'duplicate key value') : undefined,
+    });
+    const seen: number[] = [];
+    const rejected: number[] = [];
+    const result = await writePostgresDatasetRows(
+      write({
+        createClient: factory,
+        onRowRejected: (p) => rejected.push(p),
+        verifyBeforeCommit: (n) => {
+          seen.push(n);
+          return null;
+        },
+      }),
+      batchesOf([
+        { a: 1, b: 2 },
+        { a: 3, b: 4 },
+      ]),
+    );
+    expect(rejected).toEqual([1]);
+    expect(seen).toEqual([1]);
+    expect(result.rowsWritten).toBe(1);
+  });
+
+  it('refuses it with Upsert, before a session is opened', async () => {
+    const { rec, factory } = sinkFactory();
+    await expect(
+      writePostgresDatasetRows(
+        write({ createClient: factory, mode: 'upsert', verifyBeforeCommit: () => null }),
+        batchesOf([{ a: 1, b: 2 }]),
+      ),
+    ).rejects.toMatchObject({
+      kind: 'permanent',
+      message: 'Verify after copy does not apply to Upsert',
+    });
+    expect(rec.queries).toEqual([]);
+  });
+});

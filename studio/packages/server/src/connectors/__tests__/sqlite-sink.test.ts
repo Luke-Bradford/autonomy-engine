@@ -1602,3 +1602,119 @@ describe('Skip incompatible rows (#1600 OR41 C6d-1)', () => {
     expect(err.message).toContain('Skip incompatible rows does not apply to Upsert');
   });
 });
+
+describe('Verify after copy (#1600 OR41 C6e-1)', () => {
+  // A trigger that discards a row the store was sent, so it keeps fewer than it
+  // took: the inconsistency the check exists to catch.
+  const ignoreTwo =
+    'create trigger drop2 before insert on sink when new.id = 2 begin select raise(ignore); end;';
+  const three = (): Record<string, SinkValue>[] => [
+    { id: 1, note: 'a' },
+    { id: 2, note: 'b' },
+    { id: 3, note: 'c' },
+  ];
+  function copy(
+    root: string,
+    path: string,
+    opts: {
+      mode?: SqliteWriteMode;
+      verifyBeforeCommit?: ((rowsWritten: number) => string | null) | null;
+    },
+  ) {
+    return writeSqliteDatasetRows(
+      {
+        nullOnError: [],
+        connectionConfig: writableConfig(root, path),
+        datasetKind: 'table',
+        datasetConfig: { table: 'sink' },
+        columns: ['id', 'note'],
+        mode: opts.mode ?? 'append',
+        verifyBeforeCommit: opts.verifyBeforeCommit ?? null,
+      },
+      one(three()),
+    );
+  }
+
+  it("hands the check the store's own count, and a reason rolls everything back", async () => {
+    const root = tempRoot();
+    const path = storeWith(root, 'create table sink (id integer, note text);', ignoreTwo);
+    const seen: number[] = [];
+    const err = await failure(
+      copy(root, path, {
+        verifyBeforeCommit: (n) => {
+          seen.push(n);
+          return 'kept 2 of 3';
+        },
+      }),
+    );
+    expect(seen).toEqual([2]);
+    expect(err.kind).toBe('permanent');
+    expect(err.partialWritePossible).toBe(false);
+    expect(err.message).toBe('kept 2 of 3');
+    expect(rowsOf(path, 'select id from sink')).toEqual([]);
+  });
+
+  it('rolls back an Overwrite, so the old rows are still there', async () => {
+    const root = tempRoot();
+    const path = storeWith(
+      root,
+      'create table sink (id integer, note text);',
+      `${ignoreTwo} insert into sink values (9, 'old');`,
+    );
+    await failure(copy(root, path, { mode: 'overwrite', verifyBeforeCommit: () => 'no' }));
+    expect(rowsOf(path, 'select id from sink')).toEqual([{ id: 9 }]);
+  });
+
+  it('commits when the check passes', async () => {
+    const root = tempRoot();
+    const path = storeWith(root, 'create table sink (id integer, note text);');
+    const result = await copy(root, path, { verifyBeforeCommit: () => null });
+    expect(result.rowsWritten).toBe(3);
+    expect(rowsOf(path, 'select id from sink order by id')).toEqual([
+      { id: 1 },
+      { id: 2 },
+      { id: 3 },
+    ]);
+  });
+
+  it('a cancel after the last batch wins over the check, which never runs', async () => {
+    const root = tempRoot();
+    const path = storeWith(root, 'create table sink (id integer, note text);');
+    const controller = new AbortController();
+    async function* thenCancel(): AsyncIterable<readonly Record<string, SinkValue>[]> {
+      yield three();
+      controller.abort();
+    }
+    let ran = false;
+    const err = await failure(
+      writeSqliteDatasetRows(
+        {
+          nullOnError: [],
+          connectionConfig: writableConfig(root, path),
+          datasetKind: 'table',
+          datasetConfig: { table: 'sink' },
+          columns: ['id', 'note'],
+          mode: 'append',
+          signal: controller.signal,
+          verifyBeforeCommit: () => {
+            ran = true;
+            return 'unverified';
+          },
+        },
+        thenCancel(),
+      ),
+    );
+    expect(err.kind).toBe('cancelled');
+    expect(ran).toBe(false);
+    expect(rowsOf(path, 'select id from sink')).toEqual([]);
+  });
+
+  it('refuses it with Upsert, before anything is written', async () => {
+    const root = tempRoot();
+    const path = storeWith(root, 'create table sink (id integer primary key, note text);');
+    const err = await failure(copy(root, path, { mode: 'upsert', verifyBeforeCommit: () => null }));
+    expect(err.kind).toBe('permanent');
+    expect(err.message).toBe('Verify after copy does not apply to Upsert');
+    expect(rowsOf(path, 'select id from sink')).toEqual([]);
+  });
+});
