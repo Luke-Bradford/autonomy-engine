@@ -592,7 +592,7 @@ function ErrorTab({ node, attempt }: { node: NodeActivity; attempt: number | nul
  * are the useful ones, and a tail-only cut hid them). The download holds every
  * line.
  */
-export const LOG_PAGE_ROWS = 200;
+const LOG_PAGE_ROWS = 200;
 
 /** The Name filter's "every line" choice. */
 const ALL_LOG_NAMES = '';
