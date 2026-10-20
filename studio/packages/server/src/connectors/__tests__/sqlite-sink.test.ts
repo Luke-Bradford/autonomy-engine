@@ -1577,6 +1577,21 @@ describe('Skip incompatible rows (#1600 OR41 C6d-1)', () => {
     expect(rowsOf(path, 'select id from sink')).toEqual([]);
   });
 
+  it('under Overwrite, replaces the rows and still skips the rejected one', async () => {
+    const root = tempRoot();
+    const path = storeWith(root, ddl, "insert into sink values (9, 'old');");
+    const rejected: number[] = [];
+    const result = await copy(
+      root,
+      path,
+      { mode: 'overwrite', onRowRejected: (p) => rejected.push(p) },
+      two(...rows()),
+    );
+    expect(rejected).toEqual([1, 2, 0]);
+    expect(result.rowsWritten).toBe(2);
+    expect(rowsOf(path, 'select id from sink order by id')).toEqual([{ id: 1 }, { id: 4 }]);
+  });
+
   it('refuses it with Upsert', async () => {
     const root = tempRoot();
     const path = storeWith(root, ddl);

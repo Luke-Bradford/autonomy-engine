@@ -1009,7 +1009,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
       keyColumns: [{ field: 'mode', in: ['upsert'] }],
       preCopyScriptParameters: [{ field: 'preCopyScript', set: true }],
       // C6d-1 — every write behaviour but Upsert, which save refuses it with
-      // (`copySkipIncompatibleIssue`). A new mode joins this list or not.
+      // (`copySkipIncompatibleIssue`). A new write mode must be decided here.
       skipIncompatibleRows: [{ field: 'mode', in: ['append', 'overwrite', 'truncate'] }],
     },
     idempotent: false,

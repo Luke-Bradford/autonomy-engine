@@ -303,9 +303,21 @@ export function preCopyScriptIssue(config: Record<string, unknown>): string | nu
  */
 export function copySkipIncompatibleIssue(config: Record<string, unknown>): string | null {
   if (config['skipIncompatibleRows'] !== true) return null;
+  return literalWriteMode(config) === 'upsert' ? SKIP_INCOMPATIBLE_UPSERT_REFUSAL : null;
+}
+
+/** The one sentence save and both sinks refuse Skip incompatible rows with Upsert in. */
+export const SKIP_INCOMPATIBLE_UPSERT_REFUSAL =
+  'Skip incompatible rows does not apply to Upsert, as in ADF';
+
+/**
+ * A copy config's Write behaviour as stored, or `null` when it is a `${}` that
+ * only dispatch can resolve. Absent is the default, Append. Untyped, because the
+ * write gate holds an operator's raw config.
+ */
+function literalWriteMode(config: Record<string, unknown>): unknown {
   const mode = config['mode'] ?? 'append';
-  if (typeof mode === 'string' && interpolationMode(mode).mode !== 'literal') return null;
-  return mode === 'upsert' ? 'Skip incompatible rows does not apply to Upsert, as in ADF' : null;
+  return typeof mode === 'string' && interpolationMode(mode).mode !== 'literal' ? null : mode;
 }
 
 /**
@@ -328,9 +340,9 @@ export function copySkipIncompatibleIssue(config: Record<string, unknown>): stri
 export function copyKeyColumnIssues(config: Record<string, unknown>): CopyKeyColumnIssue[] {
   const keys = config['keyColumns'];
   if (!isSet(keys)) return [];
-  const mode = config['mode'] ?? 'append';
   // A `${}` Write behaviour is decided at dispatch, where it may be Upsert.
-  if (typeof mode === 'string' && interpolationMode(mode).mode !== 'literal') return [];
+  const mode = literalWriteMode(config);
+  if (mode === null) return [];
   if (mode !== 'upsert') {
     return [{ path: [], message: 'only read when Write behaviour is Upsert' }];
   }
@@ -518,11 +530,9 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
       skipIncompatibleRows: presented(z.boolean().default(false), {
         title: 'Skip incompatible rows',
         description:
-          'A row the sink database rejects (a duplicate key, a NULL in a NOT NULL column, a ' +
-          'failed CHECK or foreign key, a value the column type cannot hold) is skipped and ' +
-          'logged, and the copy goes on. A trigger that rejects a row still fails the copy. ' +
-          'Not with Upsert. Slower when on: SQLite takes a savepoint per row, and PostgreSQL ' +
-          'one per batch, replaying a batch row by row when it holds a rejected row.',
+          'Skips and logs a row the sink rejects (a duplicate key, NOT NULL, CHECK, a value the ' +
+          "column cannot hold) instead of failing. A trigger's rejection still fails. Not with " +
+          'Upsert. Slower when on.',
       }),
     })
     .superRefine((cfg, ctx) => {

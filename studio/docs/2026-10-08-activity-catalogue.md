@@ -182,7 +182,7 @@ The run reads `col > old AND col <= new`, and outputs `watermark.old` and `water
 - **PostgreSQL stages with a column named `studio_copy_ord`**, so a mapping that writes a column of that name is refused under Upsert.
 - **Truncate then insert from a query that reads the same table waits on itself.** Its `ACCESS EXCLUSIVE` lock conflicts with the source cursor, so the copy waits until the activity timeout ends it. Nothing is truncated. Use Overwrite there.
 - The canvas card names the behaviour: `· overwrite`, `· truncate`, `· upsert on id`. `CATALOG_VERSION` 55→56.
-- **Not built here:** *Auto-create from mapping* (C3c) and *Skip incompatible rows* (C6, which excludes Upsert). Pre-copy script and Batch size are C3b, below.
+- **Not built here:** *Auto-create from mapping* (C3c) and *Skip incompatible rows* (built in C6d-1, below; it excludes Upsert). Pre-copy script and Batch size are C3b, below.
 
 **Built (C3b, #1600): Pre-copy script and Batch size on a database sink** ([Azure SQL Database as a sink](https://learn.microsoft.com/azure/data-factory/connector-azure-sql-database#azure-sql-database-as-the-sink): `preCopyScript`, `writeBatchSize`). Both are on the Sink tab, after Write behaviour, in ADF's order.
 - **Pre-copy script** is `preCopyScript`, one SQL statement run once per copy, before the first row and even when the source has none.
@@ -297,7 +297,7 @@ Mapping   [Import schemas] [+ New mapping] [Clear] [Reset]                      
 - **Not built here:** `FileSkip` for missing or forbidden files, which is fault tolerance (C6d-2). A line holding a space or a newline in a file name is ambiguous in the run log's space-separated form, as Delete's is; C6c's CSV file is the unambiguous form.
 
 **Built (C6d-1, 2026-10-20):** a rows Copy's *Skip incompatible rows*, the Settings tab's first field, before the Session log as in ADF ([fault tolerance](https://learn.microsoft.com/azure/data-factory/copy-activity-fault-tolerance): `enableSkipIncompatibleRow`, default false).
-- **Setting:** `skipIncompatibleRows`, a literal boolean, default off (ⓕ on typed fields is OR38 #1573). Save refuses it with Upsert (`copySkipIncompatibleIssue`, on the field and at the #444 write gate), because ADF's "doesn't apply" with Upsert and studio's PostgreSQL Upsert writes each chunk as one set statement. A `${}` Write behaviour is left to dispatch, where the dispatch schema sees the resolved value. The dock does not draw it under Upsert (`appliesWhen`).
+- **Setting:** `skipIncompatibleRows`, a literal boolean, default off (ⓕ on typed fields is OR38 #1573). Save refuses it with Upsert (`copySkipIncompatibleIssue`, on the field and at the #444 write gate), because ADF's "doesn't apply" with Upsert and studio's PostgreSQL Upsert writes each chunk as one set statement. A `${}` Write behaviour is left to dispatch, where the dispatch schema sees the resolved value. The dock does not draw it under Upsert (`appliesWhen`), unless it holds a value or the Write behaviour is a `${}` (UI standard rule 3). Both sinks refuse it with Upsert too, before any lock is taken, which is where a `${}` mode that resolved to Upsert is caught (`SKIP_INCOMPATIBLE_UPSERT_REFUSAL`, one sentence for all three).
 - **What is skipped:** a row the sink database rejects, which is ADF's primary key violation and type incompatibility with the sink's native type:
   - SQLite: every `SQLITE_CONSTRAINT` code but a trigger's (a duplicate key, NOT NULL, CHECK, an immediate foreign key, a STRICT table's datatype), `SQLITE_MISMATCH` and `SQLITE_TOOBIG`.
   - PostgreSQL: SQLSTATE class 22 (data exception, such as a value too long or an integer that does not parse) and class 23 (integrity constraint violation).
@@ -307,7 +307,10 @@ Mapping   [Import schemas] [+ New mapping] [Clear] [Reset]                      
   - PostgreSQL runs each batch's INSERT under a savepoint. Only when it fails on class 22 or 23 is the batch rolled back to it and replayed row by row, each row under its own savepoint, with the cancel checked per row.
   - Off, both stores write exactly the statements they wrote before C6d.
 - **Not skipped, and the copy fails as before:**
-  - A trigger's rejection: SQLite's `RAISE(ABORT)` (`SQLITE_CONSTRAINT_TRIGGER`) and PostgreSQL's `RAISE EXCEPTION` (P0001), so the two stores agree.
+  - A trigger's rejection, so the two stores agree:
+    - SQLite's `RAISE(ABORT)` (`SQLITE_CONSTRAINT_TRIGGER`).
+    - PostgreSQL's `RAISE EXCEPTION` (P0001).
+    - A class 22 or 23 error raised inside a PostgreSQL function, which is a trigger's `RAISE … USING ERRCODE` or its own write elsewhere. It carries a `where` naming the function (measured: `PL/pgSQL function f() line 2 at RAISE`). A row's own error has no `where`, or one naming the bound parameter (`unnamed portal parameter $1 = '...'`).
   - A constraint declared `ON CONFLICT ROLLBACK`, or a trigger's `RAISE(ROLLBACK)`. Either ends SQLite's whole transaction (measured), so it is checked before anything else.
   - Any other failure.
   - A deferred constraint, which fails at COMMIT.
@@ -320,7 +323,10 @@ Mapping   [Import schemas] [+ New mapping] [Clear] [Reset]                      
 - **No row data in the reason:**
   - SQLite's message names the table, column or CHECK expression, never the value (measured: `UNIQUE constraint failed: orders.id`).
   - PostgreSQL's reason is built from the SQLSTATE, its condition name, the constraint and the column only (such as `23505 unique_violation, constraint 'orders_pkey'`). The message and the detail quote the value (`invalid input syntax for type integer: "abc"`, `Key (id)=(2) already exists.`).
-- **Residual:** on PostgreSQL, each batch's savepoint is a subtransaction, and more than 64 in one transaction overflow the backend's subtransaction cache. Other sessions' snapshot checks slow for the rest of a long copy. The field's help says the copy is slower with it on.
+- **Residuals:**
+  - A copy whose every row is rejected succeeds having written nothing, as in ADF. `COPY_ROWS_FAILED` says how many rows were skipped and why, and `rowsFailed` can be branched on. A threshold (ADF has none) would be a later setting.
+  - A duplicate key from a concurrent writer is skipped as the row's, as it is in ADF: it was incompatible when it was written.
+  - On PostgreSQL, each batch's savepoint is a subtransaction, and more than 64 in one transaction overflow the backend's subtransaction cache. Other sessions' snapshot checks slow for the rest of a long copy. The field's help says the copy is slower with it on.
 - **Deliberate differences from ADF:**
   - A column-count mismatch cannot arise, because a Copy writes the mapping's columns.
   - The skipped row is logged by its number, not its content.

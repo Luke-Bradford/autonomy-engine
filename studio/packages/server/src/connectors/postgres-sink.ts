@@ -5,6 +5,7 @@ import {
   datasetConfigSchema,
   formatZodIssues,
   postgresConnectionConfigSchema,
+  SKIP_INCOMPATIBLE_UPSERT_REFUSAL,
   tableDatasetConfigSchema,
   type CopyWriteMode,
   type DatasetKind,
@@ -640,6 +641,51 @@ async function autoCreatePostgresTable(
   await client.query(ddl);
 }
 
+/** #1600 OR41 C6d-1 — the condition names of the SQLSTATEs a rejected row most
+ * often carries (postgres Appendix A). Another class 22 or 23 code is named by
+ * its code alone. */
+const INCOMPATIBLE_ROW_CONDITIONS: Readonly<Record<string, string>> = {
+  '23502': 'not_null_violation',
+  '23503': 'foreign_key_violation',
+  '23505': 'unique_violation',
+  '23514': 'check_violation',
+  '23P01': 'exclusion_violation',
+  '22001': 'string_data_right_truncation',
+  '22003': 'numeric_value_out_of_range',
+  '22007': 'invalid_datetime_format',
+  '22008': 'datetime_field_overflow',
+  '22021': 'character_not_in_repertoire',
+  '22P02': 'invalid_text_representation',
+};
+
+/**
+ * #1600 OR41 C6d-1 — why the store rejected a row, or `null` when the failure
+ * is not the row's (any SQLSTATE outside class 22, data exception, and class 23,
+ * integrity constraint violation) and must fail the copy. A trigger's RAISE
+ * EXCEPTION is P0001, so it fails the copy, as SQLite's RAISE(ABORT) does, and
+ * so does a class 22 or 23 error raised inside a function: a trigger's RAISE
+ * with that ERRCODE, or its own INSERT elsewhere. Postgres gives such an error a
+ * `where` naming the function (measured: `PL/pgSQL function f() line 2 at
+ * RAISE`), where a row's own error has none, or names the bound parameter
+ * (`unnamed portal parameter $1 = '...'`).
+ *
+ * Built from the code, the constraint and the column only. The message and the
+ * detail quote the value (`invalid input syntax for type integer: "abc"`,
+ * `Key (a)=(2) already exists.`), and no row data may reach the session log.
+ */
+function incompatibleRowReason(err: unknown): string | null {
+  const e = err as
+    { code?: unknown; constraint?: unknown; column?: unknown; where?: unknown } | undefined;
+  const code = e?.code;
+  if (typeof code !== 'string' || !/^2[23]/.test(code)) return null;
+  if (typeof e?.where === 'string' && /\bfunction\b/.test(e.where)) return null;
+  const name = INCOMPATIBLE_ROW_CONDITIONS[code];
+  let reason = name === undefined ? `SQLSTATE ${code}` : `${code} ${name}`;
+  if (typeof e?.constraint === 'string') reason += `, constraint '${e.constraint}'`;
+  if (typeof e?.column === 'string') reason += `, column '${e.column}'`;
+  return reason;
+}
+
 /**
  * Write batches of mapped rows into a `table` dataset on a `postgres` store.
  *
@@ -685,50 +731,17 @@ async function autoCreatePostgresTable(
  * holds `ACCESS EXCLUSIVE` until the copy commits. Upsert is `stageUpsert`'s.
  * `LOCK_MODES` holds each behaviour's lock and why.
  */
-/** #1600 OR41 C6d-1 — the condition names of the SQLSTATEs a rejected row most
- * often carries (postgres Appendix A). Another class 22 or 23 code is named by
- * its code alone. */
-const INCOMPATIBLE_ROW_CONDITIONS: Readonly<Record<string, string>> = {
-  '23502': 'not_null_violation',
-  '23503': 'foreign_key_violation',
-  '23505': 'unique_violation',
-  '23514': 'check_violation',
-  '23P01': 'exclusion_violation',
-  '22001': 'string_data_right_truncation',
-  '22003': 'numeric_value_out_of_range',
-  '22007': 'invalid_datetime_format',
-  '22008': 'datetime_field_overflow',
-  '22021': 'character_not_in_repertoire',
-  '22P02': 'invalid_text_representation',
-};
-
-/**
- * #1600 OR41 C6d-1 — why the store rejected a row, or `null` when the failure
- * is not the row's (any SQLSTATE outside class 22, data exception, and class 23,
- * integrity constraint violation) and must fail the copy. A trigger's RAISE
- * EXCEPTION is P0001, so it fails the copy, as SQLite's RAISE(ABORT) does.
- *
- * Built from the code, the constraint and the column only. The message and the
- * detail quote the value (`invalid input syntax for type integer: "abc"`,
- * `Key (a)=(2) already exists.`), and no row data may reach the session log.
- */
-function incompatibleRowReason(err: unknown): string | null {
-  const e = err as { code?: unknown; constraint?: unknown; column?: unknown } | undefined;
-  const code = e?.code;
-  if (typeof code !== 'string' || !/^2[23]/.test(code)) return null;
-  const name = INCOMPATIBLE_ROW_CONDITIONS[code];
-  let reason = name === undefined ? `SQLSTATE ${code}` : `${code} ${name}`;
-  if (typeof e?.constraint === 'string') reason += `, constraint '${e.constraint}'`;
-  if (typeof e?.column === 'string') reason += `, column '${e.column}'`;
-  return reason;
-}
-
 export async function writePostgresDatasetRows(
   write: PostgresDatasetWrite,
   batches: AsyncIterable<readonly Record<string, SinkValue>[]>,
 ): Promise<{ readonly rowsWritten: number }> {
   if (write.columns.length === 0) {
     throw new DatasetIoError('permanent', 'a copy sink needs at least one mapped column');
+  }
+  // #1600 OR41 C6d-1 — before a session, a lock or the Pre-copy script, as the
+  // config refuses it (a `${}` mode reaches here).
+  if (write.onRowRejected != null && write.mode === 'upsert') {
+    throw new DatasetIoError('permanent', SKIP_INCOMPATIBLE_UPSERT_REFUSAL);
   }
 
   // §8: the stored connection is not assumed well-formed — `routes/connections.ts`
@@ -891,12 +904,6 @@ export async function writePostgresDatasetRows(
       const rowsPerStatement = Math.max(1, Math.floor(MAX_BIND_PARAMETERS / width));
 
       const onRowRejected = write.onRowRejected ?? null;
-      if (onRowRejected !== null && upsert !== null) {
-        throw new DatasetIoError(
-          'permanent',
-          'Skip incompatible rows does not apply to Upsert, as in ADF',
-        );
-      }
 
       let first = true;
       let pending: SinkValue[] = [];
@@ -906,14 +913,16 @@ export async function writePostgresDatasetRows(
       let pendingPositions: number[] = [];
       let rowNumber = 0;
 
-      const insertSql = (rows: number): string => {
+      const tuplesFor = (rows: number): string[] => {
         const tuples: string[] = [];
         let n = 1;
         for (let i = 0; i < rows; i += 1) {
           tuples.push(`(${Array.from({ length: width }, () => `$${n++}`).join(', ')})`);
         }
-        return `INSERT INTO ${writeTarget} (${columnList}) VALUES ${tuples.join(', ')}`;
+        return tuples;
       };
+      const insertSql = (rows: number): string =>
+        `INSERT INTO ${writeTarget} (${columnList}) VALUES ${tuplesFor(rows).join(', ')}`;
       const countOf = (inserted: { rowCount?: number | null }): number => {
         // #1270 — the store's own count of what LANDED, not the tuples sent. A
         // BEFORE trigger returning NULL skips its row; a `DO INSTEAD` rule
@@ -960,7 +969,10 @@ export async function writePostgresDatasetRows(
               if (reason === null) throw rowErr;
               await client.query('ROLLBACK TO SAVEPOINT studio_copy_row');
               await client.query('RELEASE SAVEPOINT studio_copy_row');
-              report(pendingPositions[i] ?? i, reason);
+              const position = pendingPositions[i];
+              // Unreachable: a position is pushed for every pending row.
+              if (position === undefined) throw new Error('a pending row has no batch position');
+              report(position, reason);
               continue;
             }
             await client.query('RELEASE SAVEPOINT studio_copy_row');
@@ -972,12 +984,13 @@ export async function writePostgresDatasetRows(
       const flush = async (): Promise<void> => {
         if (pendingRows === 0) return;
         if (upsert !== null) {
-          const tuples: string[] = [];
-          let n = 1;
-          for (let i = 0; i < pendingRows; i += 1) {
-            tuples.push(`(${Array.from({ length: width }, () => `$${n++}`).join(', ')})`);
-          }
-          rowsWritten += await upsertChunk(client, upsert, tuples, pending, spelled);
+          rowsWritten += await upsertChunk(
+            client,
+            upsert,
+            tuplesFor(pendingRows),
+            pending,
+            spelled,
+          );
         } else if (onRowRejected !== null) {
           await flushSkipping(onRowRejected);
         } else {

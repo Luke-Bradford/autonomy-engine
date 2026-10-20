@@ -879,23 +879,46 @@ describe('the postgres sink: Skip incompatible rows (#1600 OR41 C6d-1)', () => {
     expect(rejected.join()).not.toContain('abc');
   });
 
+  it("fails the copy on a class 23 error raised inside a trigger's function, as SQLite does", async () => {
+    // Measured: a trigger's RAISE ... USING ERRCODE = '23514' carries this `where`.
+    const raised = Object.assign(pgError('23514', 'custom'), {
+      where: 'PL/pgSQL function f() line 2 at RAISE',
+    });
+    // Measured: a bound value that does not parse carries a parameter `where`,
+    // which is still the row's own error.
+    const badInt = Object.assign(pgError('22P02', 'invalid input syntax'), {
+      where: "unnamed portal parameter $1 = '...'",
+    });
+    const rejected: string[] = [];
+    await expect(
+      writePostgresDatasetRows(
+        write({
+          createClient: sinkFactory({
+            insertError: (v) => (v[0] === 1 ? badInt : v[0] === 2 ? raised : undefined),
+          }).factory,
+          onRowRejected: (_, r) => rejected.push(r),
+        }),
+        batchesOf(rowsAt(1), rowsAt(2)),
+      ),
+    ).rejects.toThrow(/custom/);
+    expect(rejected).toEqual(['22P02 invalid_text_representation']);
+  });
+
   it('off, writes exactly the statements it wrote before C6d', async () => {
     const { rec, factory } = sinkFactory();
     await writePostgresDatasetRows(write({ createClient: factory }), batchesOf(rowsAt(1, 2)));
     expect(sqlOf(rec).some((q) => q.includes('SAVEPOINT'))).toBe(false);
   });
 
-  it('refuses it with Upsert', async () => {
+  it('refuses it with Upsert before it opens a session', async () => {
+    const { rec, factory } = sinkFactory({ primaryKey: ['a'] });
     await expect(
       writePostgresDatasetRows(
-        write({
-          createClient: sinkFactory({ primaryKey: ['a'] }).factory,
-          mode: 'upsert',
-          onRowRejected: () => {},
-        }),
+        write({ createClient: factory, mode: 'upsert', onRowRejected: () => {} }),
         batchesOf(rowsAt(1)),
       ),
     ).rejects.toThrow(/does not apply to Upsert/);
+    expect(rec.queries).toEqual([]);
   });
 });
 

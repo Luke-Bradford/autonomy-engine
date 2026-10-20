@@ -430,21 +430,30 @@ export async function* runCopyActivity(
   // The store's reason names the column or constraint, never the value.
   const onRowRejected = parsed.data.skipIncompatibleRows
     ? (position: number, reason: string): void => {
+        const rowIndex = sinkBatchRows[position];
+        // Unreachable: the pump gives an index for every row it hands the sink.
+        if (rowIndex === undefined) throw new Error('a rejected row has no source row');
         const failure: CopyRowFailure = {
-          rowIndex: sinkBatchRows[position] ?? counters.rowsRead - 1,
+          rowIndex,
           sink: sinkTable,
           code: 'sink_rejected',
           reason,
         };
         recordCopyRowFailure(counters, failure);
-        log.add(
-          'Warning',
-          'TabularRowSkip',
-          `row ${rowNumber(failure)}`,
-          `${failure.code}: into '${failure.sink}': ${failure.reason}`,
-        );
+        logRowSkip(failure);
       }
     : null;
+  // One line shape for a skipped row, whichever half of the copy dropped it.
+  // The reason never holds the value (`coerce.ts`, and each sink's
+  // `incompatibleRowReason`), so no row data reaches the log.
+  function logRowSkip(f: CopyRowFailure): void {
+    log.add(
+      'Warning',
+      'TabularRowSkip',
+      `row ${rowNumber(f)}`,
+      `${f.code}: into '${f.sink}': ${f.reason}`,
+    );
+  }
   // Where the batch just pumped began, for Everything's per-batch line.
   let batchFrom = { rowsRead: 0, rowsFailed: 0 };
   let logged = false;
@@ -522,16 +531,7 @@ export async function* runCopyActivity(
           // describe rung above rather than inline here — see the note there for
           // why the empty-mapping guard has to cover both.
           coercion,
-          // The reason never holds the value (`coerce.ts`), so no row data
-          // reaches the log.
-          onRowFailure: (f) => {
-            log.add(
-              'Warning',
-              'TabularRowSkip',
-              `row ${rowNumber(f)}`,
-              `${f.code}: into '${f.sink}': ${f.reason}`,
-            );
-          },
+          onRowFailure: logRowSkip,
           onSinkBatch: (rowIndices) => {
             sinkBatchRows = rowIndices;
           },
