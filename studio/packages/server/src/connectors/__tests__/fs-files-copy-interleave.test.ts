@@ -2,11 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * A hook runs once, just before the real call it is set on, so a test can act
- * between the copy choosing a path and touching it.
+ * between the copy choosing a path and touching it. #1600 C6e-2: `opened` runs
+ * just after an `open` returns, and `read` after the first read of the handle
+ * that `open` returned, so a test can change a file while it is copied. A
+ * `prefix` hook matches any path that starts with `path` (a temp's suffix is
+ * unknown).
  */
 interface Hook {
-  readonly fn: 'open' | 'opendir' | 'lstat';
+  readonly fn: 'open' | 'opendir' | 'lstat' | 'opened' | 'read';
   readonly path: string;
+  readonly prefix?: boolean;
   readonly nth: number;
   readonly act: () => Promise<void> | void;
   seen: number;
@@ -17,24 +22,53 @@ const hooks = vi.hoisted(() => [] as Hook[]);
 // three run a hook first. The idiom is `fs-delete-interleave.test.ts`'s.
 vi.mock('node:fs/promises', async (importActual) => {
   const actual = await importActual<typeof import('node:fs/promises')>();
+  const matches = (h: Hook, fn: Hook['fn'], p: unknown) =>
+    h.fn === fn && (h.prefix === true ? String(p).startsWith(h.path) : String(p) === h.path);
   const hooked =
     <A extends unknown[], R>(fn: Hook['fn'], real: (p: unknown, ...rest: A) => Promise<R>) =>
     async (p: unknown, ...rest: A): Promise<R> => {
       for (const h of hooks) {
-        if (h.fn === fn && String(p) === h.path && ++h.seen === h.nth) await h.act();
+        if (matches(h, fn, p) && ++h.seen === h.nth) await h.act();
       }
       return real(p, ...rest);
     };
+  const open = hooked('open', actual.open as never) as typeof actual.open;
   return {
     ...actual,
-    open: hooked('open', actual.open as never),
+    open: async (...args: Parameters<typeof actual.open>) => {
+      const fh = await open(...args);
+      for (const h of hooks) {
+        if (matches(h, 'opened', args[0]) && ++h.seen === h.nth) await h.act();
+        if (!matches(h, 'read', args[0]) || ++h.seen !== h.nth) continue;
+        const read = fh.read.bind(fh) as (...a: unknown[]) => Promise<unknown>;
+        let fired = false;
+        fh.read = (async (...a: unknown[]) => {
+          const got = await read(...a);
+          if (!fired) {
+            fired = true;
+            await h.act();
+          }
+          return got;
+        }) as typeof fh.read;
+      }
+      return fh;
+    },
     opendir: hooked('opendir', actual.opendir as never),
     lstat: hooked('lstat', actual.lstat as never),
   };
 });
 
 import { realpathSync } from 'node:fs';
-import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import {
+  appendFile,
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  truncate,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import { join } from 'node:path';
 import { COPY_FILES_ACTIVITY_TYPE, SESSION_LOG_OUTPUT } from '@autonomy-studio/shared';
 import { fsAdapter } from '../fs.js';
@@ -275,5 +309,178 @@ describe('#1600 C6d-2 — Skip missing files', () => {
       const events = await run({ ...cfg, skipMissingFiles: false }, { sourceWritable: true });
       expect(failure(events).error).toContain('ENOENT');
     });
+  });
+});
+
+/**
+ * #1600 OR41 C6e-2 — Copy · Files as-is's Verify copied files (ADF's
+ * `validateDataConsistency` for binary files) and Skip inconsistent files
+ * (`skipErrorFile.dataInconsistency`): a file that changes while it is copied
+ * fails the copy, or is skipped, and is never landed.
+ */
+describe('#1600 C6e-2 — Verify copied files', () => {
+  beforeEach(async () => {
+    await put('in/a.txt', 'aa');
+    await put('in/b.txt', 'bbbb');
+    await put('b.txt', 'old', dst);
+  });
+  const verify = { sourcePath: 'in', validateDataConsistency: true };
+  const whileRead = (rel: string, act: Hook['act']) => before('read', rel, act);
+  const reason = (detail: string) => `the source changed while it was copied: ${detail}`;
+
+  it('copies files that do not change exactly as an unverified copy does', async () => {
+    const verified = outputs(await run(verify));
+    await rm(join(dst, 'a.txt'));
+    await writeFile(join(dst, 'b.txt'), 'old');
+    expect(outputs(await run({ sourcePath: 'in' }))).toEqual(verified);
+    expect(verified).toMatchObject({ filesWritten: 2, filesSkipped: 0, bytesWritten: 6 });
+  });
+
+  it.each([
+    [
+      'grows',
+      () => appendFile(join(src, 'in/b.txt'), 'more'),
+      'it held 4 bytes when opened, and the copy read 8 bytes',
+    ],
+    ['shrinks', () => truncate(join(src, 'in/b.txt'), 1), 'its size went from 4 bytes to 1 byte'],
+    [
+      'is touched',
+      () => utimes(join(src, 'in/b.txt'), new Date(0), new Date(0)),
+      'its modified time changed',
+    ],
+    [
+      'is replaced',
+      async () => {
+        await writeFile(join(src, 'in/b.new'), 'bbbb');
+        await rm(join(src, 'in/b.txt'));
+        const { rename } = await import('node:fs/promises');
+        await rename(join(src, 'in/b.new'), join(src, 'in/b.txt'));
+      },
+      'another file took its place',
+    ],
+    ['is removed', remove('in/b.txt'), 'it was removed'],
+  ])('fails when a file %s while it is read, landing nothing for it', async (_, act, detail) => {
+    whileRead('in/b.txt', act);
+    const events = await run(verify);
+    expect(failure(events)).toMatchObject({
+      kind: 'permanent',
+      error: `Verify copied files failed for 'b.txt': ${reason(detail)}`,
+    });
+    // The target it would have replaced is kept, and no temp is left.
+    expect(await readFile(join(dst, 'b.txt'), 'utf8')).toBe('old');
+    expect((await tree(dst)).filter((f) => f.startsWith('b.txt'))).toEqual(['b.txt']);
+  });
+
+  it('off, lands what it read, as before', async () => {
+    whileRead('in/b.txt', () => appendFile(join(src, 'in/b.txt'), 'more'));
+    const events = await run({ sourcePath: 'in' });
+    expect(outputs(events)).toMatchObject({ filesWritten: 2 });
+    expect(await readFile(join(dst, 'b.txt'), 'utf8')).toBe('bbbbmore');
+  });
+
+  it('lands nothing when it writes without replacing (If file exists = Fail)', async () => {
+    await rm(join(dst, 'b.txt'));
+    whileRead('in/b.txt', () => appendFile(join(src, 'in/b.txt'), 'more'));
+    const events = await run({ ...verify, ifExists: 'fail' });
+    expect(failure(events).error).toMatch(/^Verify copied files failed for 'b\.txt'/);
+    expect(await tree(dst)).toEqual(['a.txt']);
+  });
+
+  it('fails when the file written is not the size read', async () => {
+    hooks.push({
+      fn: 'opened',
+      path: `${join(dst, 'b.txt')}.tmp.`,
+      prefix: true,
+      nth: 1,
+      seen: 0,
+      act: async () => {
+        const [tmp] = (await readdir(dst)).filter((f) => f.startsWith('b.txt.tmp.'));
+        await appendFile(join(dst, tmp!), 'x'.repeat(100));
+      },
+    });
+    const events = await run(verify);
+    expect(failure(events).error).toBe(
+      "Verify copied files failed for 'b.txt': the file written holds 100 bytes, not the 4 bytes read",
+    );
+    expect(await readFile(join(dst, 'b.txt'), 'utf8')).toBe('old');
+  });
+
+  describe('Skip inconsistent files', () => {
+    const skip = { ...verify, skipInconsistentFiles: true };
+
+    it('skips and logs the file, and copies the rest', async () => {
+      whileRead('in/b.txt', () => appendFile(join(src, 'in/b.txt'), 'more'));
+      const events = await run(skip);
+      expect(outputs(events)).toMatchObject({
+        filesRead: 1,
+        filesWritten: 1,
+        filesSkipped: 1,
+        bytesRead: 2,
+      });
+      expect(logLines(events)).toEqual([
+        `Warning FileSkip b.txt skipped: ${reason('it held 4 bytes when opened, and the copy read 8 bytes')}, and Skip inconsistent files is on`,
+      ]);
+      expect(await readFile(join(dst, 'b.txt'), 'utf8')).toBe('old');
+      expect(await readFile(join(dst, 'a.txt'), 'utf8')).toBe('aa');
+    });
+
+    it('leaves no temp for the file it skipped', async () => {
+      whileRead('in/b.txt', () => appendFile(join(src, 'in/b.txt'), 'more'));
+      outputs(await run(skip));
+      expect(await tree(dst)).toEqual(['a.txt', 'b.txt']);
+    });
+
+    it('reports an abort during the check as the outcome, not a skip', async () => {
+      const ctl = new AbortController();
+      // b.txt is the last target: the stat after its read is its check.
+      before(
+        'lstat',
+        'in/b.txt',
+        async () => {
+          await appendFile(join(src, 'in/b.txt'), 'more');
+          ctl.abort();
+        },
+        2,
+      );
+      const events = await run(skip, { signal: ctl.signal });
+      expect(last(events)).toMatchObject({ type: 'failed', kind: 'cancelled' });
+      expect(logLines(events)).toEqual([]);
+    });
+
+    it('never moves the file it skipped', async () => {
+      whileRead('in/b.txt', () => appendFile(join(src, 'in/b.txt'), 'more'));
+      const events = await run(
+        { ...skip, afterCopy: 'move', moveTo: 'done' },
+        { sourceWritable: true },
+      );
+      expect(outputs(events)).toMatchObject({ filesMoved: 1, filesSkipped: 1 });
+      expect(await tree(src)).toEqual(['done/a.txt', 'in/b.txt']);
+    });
+
+    it('never deletes the file it skipped', async () => {
+      whileRead('in/b.txt', () => appendFile(join(src, 'in/b.txt'), 'more'));
+      const events = await run({ ...skip, afterCopy: 'delete' }, { sourceWritable: true });
+      expect(outputs(events)).toMatchObject({ filesDeleted: 1, filesSkipped: 1 });
+      expect(await tree(src)).toEqual(['in/b.txt']);
+    });
+
+    it('never skips one file, which fails', async () => {
+      before('read', 'in/b.txt', () => appendFile(join(src, 'in/b.txt'), 'more'));
+      const one = { sourcePath: 'in/b.txt', pathType: 'file', validateDataConsistency: true };
+      expect(failure(await run(one)).error).toBe(
+        `Verify copied files failed for 'b.txt': ${reason('it held 4 bytes when opened, and the copy read 8 bytes')}`,
+      );
+      // Asking for the skip there is refused at dispatch, before anything is read.
+      const refused = failure(await run({ ...one, skipInconsistentFiles: true }));
+      expect(refused.error).toMatch(/^invalid copy \(files\) config: .*one file fails instead/);
+      expect(await readFile(join(dst, 'b.txt'), 'utf8')).toBe('old');
+    });
+  });
+
+  it('refuses Verify with Flatten at dispatch, where a ${} Copy behaviour is judged', async () => {
+    // Save cannot judge a `${}` Copy behaviour; dispatch parses the resolved one.
+    const events = await run({ ...verify, copyBehavior: 'flatten' });
+    expect(failure(events)).toMatchObject({ kind: 'permanent' });
+    expect(failure(events).error).toMatch(/needs Copy behaviour Preserve hierarchy/);
   });
 });

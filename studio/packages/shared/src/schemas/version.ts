@@ -612,7 +612,10 @@
 // (`validateDataConsistency`). The copy dispatch schema is not strict, so a
 // pre-C6e build would strip it and COMMIT a copy this build rolls back and
 // fails, the reverse of C6d-1's direction and the worse one.
-export const CATALOG_VERSION = 61;
+// BUMP 61→62 for #1600 OR41 C6e-2: Copy · Files as-is's Verify copied files
+// and Skip inconsistent files. `copyFilesConfigSchema` is not strict, so a
+// pre-C6e-2 build would strip them and LAND a file this build fails or skips.
+export const CATALOG_VERSION = 62;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

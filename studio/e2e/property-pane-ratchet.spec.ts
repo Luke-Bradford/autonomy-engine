@@ -353,7 +353,9 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   // to each walk, measured: the list walk reads 20 (its limit had been one above
   // its count), the folder walk 19.
   'Copy data (files as-is)': 20,
-  'Copy data (files from a folder)': 19,
+  // +1 for C6e-2's Verify copied files, drawn under Preserve hierarchy (the
+  // merge walk above does not draw it, and its skip waits for it to be on).
+  'Copy data (files from a folder)': 20,
   // +1 for C1q-c's Query timeout, a new field whose `?` says blank means no limit.
   // +1 for C6e-1's Verify after copy, measured at 19.
   'Copy data (inline query)': 19,

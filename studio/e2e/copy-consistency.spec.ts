@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -129,6 +129,117 @@ test.describe('#1600 C6e-1 — Copy Verify after copy', () => {
       } finally {
         back.close();
       }
+
+      await expectQuiet(page, problems);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * #1600 OR41 C6e-2 — Copy · Files as-is's Verify copied files and Skip
+ * inconsistent files (ADF's `validateDataConsistency` and
+ * `skipErrorFile.dataInconsistency` for binary files,
+ * https://learn.microsoft.com/azure/data-factory/copy-activity-data-consistency),
+ * set on the Settings tab and run for real. A file changing while it is read
+ * is a race a browser cannot time, so its failure and skip are unit-tested
+ * (`fs-files-copy-interleave.test.ts`); here a verified copy of files that do
+ * not change succeeds.
+ */
+test.describe('#1600 C6e-2 — Copy · Files as-is Verify copied files', () => {
+  test('drawn under Preserve hierarchy, with its skip once it is on, and a verified copy runs', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const problems = collectPageProblems(page);
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'e2e-1600-c6e2-')));
+    try {
+      mkdirSync(join(root, 'in', 'sub'), { recursive: true });
+      writeFileSync(join(root, 'in', 'a.txt'), 'alpha\n');
+      writeFileSync(join(root, 'in', 'sub', 'b.txt'), 'beta\n');
+      const store = await seedConnection(page, {
+        name: 'e2e 1600 c6e2 store',
+        kind: 'fs',
+        config: { roots: [root], writable: true },
+      });
+      const pipelineId = await openSeededCanvas(page, 'e2e 1600 c6e2 verify copied files', {
+        nodes: [
+          {
+            id: 'copy1',
+            type: 'copy_files',
+            config: { sourcePath: 'in', sinkFolder: 'out' },
+            connectionIds: { source: store, sink: store },
+            position: { x: 0, y: 0 },
+          },
+        ],
+        edges: [],
+      });
+
+      await nodeById(page, 'copy1').click();
+      const pane = properties(page);
+      const settingsTab = pane.getByRole('tab', { name: 'Settings', exact: true });
+      const verify = pane.getByRole('checkbox', { name: 'Verify copied files', exact: true });
+      const skip = pane.getByRole('checkbox', { name: 'Skip inconsistent files', exact: true });
+      const level = pane.getByRole('combobox', { name: 'Session log' });
+
+      // Not drawn under Flatten, which ADF does not verify.
+      await pane.getByRole('tab', { name: 'Sink', exact: true }).click();
+      const behaviour = pane.getByRole('combobox', { name: 'Copy behaviour' });
+      await behaviour.selectOption('flatten');
+      await settingsTab.click();
+      await expect(level).toBeVisible();
+      await expect(verify).toHaveCount(0);
+      await pane.getByRole('tab', { name: 'Sink', exact: true }).click();
+      await behaviour.selectOption('preserve');
+      await settingsTab.click();
+
+      // Off by default, and its skip is drawn only once it is on.
+      await expect(verify).not.toBeChecked();
+      await expect(skip).toHaveCount(0);
+      await verify.check();
+      await expect(skip).not.toBeChecked();
+      // Short fields pack side by side, three to a row at this width (UI
+      // standard 5), in order: the skip is the cell after the check it depends
+      // on, and the Session log the one after that, all above the fold.
+      const verifyBox = await verify.boundingBox();
+      const skipBox = await skip.boundingBox();
+      const levelBox = await level.boundingBox();
+      expect(verifyBox && skipBox && levelBox, 'each control has a box').toBeTruthy();
+      const after = (a: { x: number; y: number }, b: { x: number; y: number }) =>
+        a.y > b.y + 1 || (Math.abs(a.y - b.y) < 8 && a.x > b.x);
+      expect(after(skipBox!, verifyBox!), `skip ${JSON.stringify(skipBox)}`).toBe(true);
+      expect(after(levelBox!, skipBox!), `level ${JSON.stringify(levelBox)}`).toBe(true);
+      expect(levelBox!.y + levelBox!.height).toBeLessThanOrEqual(900);
+      await skip.check();
+      await pane.getByRole('button', { name: 'Apply config' }).click();
+
+      await page.getByRole('button', { name: 'Save version' }).click();
+      await expect(page.locator('.notice')).toHaveText('Saved v2.');
+      const versions = (await (
+        await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`)
+      ).json()) as { id: string; version: number; nodes: Record<string, unknown>[] }[];
+      const latest = versions.sort((a, b) => b.version - a.version)[0]!;
+      const copy = latest.nodes.find((n) => n['id'] === 'copy1')!;
+      expect(copy['config']).toMatchObject({
+        validateDataConsistency: true,
+        skipInconsistentFiles: true,
+      });
+
+      const runId = await fireAndSettle(page, latest.id, 'e2e 1600 c6e2');
+      const run = await (await page.request.get(`/api/runs/${encodeURIComponent(runId)}`)).json();
+      expect(run.status, `run: ${JSON.stringify(run)}`).toBe('success');
+      const events = (await (
+        await page.request.get(`/api/runs/${encodeURIComponent(runId)}/events`)
+      ).json()) as { type: string; payload: Record<string, unknown> }[];
+      const succeeded = events.find((e) => e.type === 'node.succeeded');
+      expect(succeeded?.payload['outputs']).toMatchObject({
+        filesRead: 2,
+        filesWritten: 2,
+        filesSkipped: 0,
+      });
+      expect(readFileSync(join(root, 'out', 'a.txt'), 'utf8')).toBe('alpha\n');
+      expect(readFileSync(join(root, 'out', 'sub', 'b.txt'), 'utf8')).toBe('beta\n');
 
       await expectQuiet(page, problems);
     } finally {
