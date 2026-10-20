@@ -33,6 +33,7 @@ import {
   confineStorePath,
   findSqliteRelation,
   parseTableTarget,
+  primarySqliteCode,
   quoteStoreIdentifier,
   sqliteConnectionConfigSchema,
   storeFailure,
@@ -87,6 +88,13 @@ export interface SqliteDatasetWrite {
   /** #1600 OR41 C3c — Auto-create from mapping: the columns to create the
    * table with when it does not exist. Absent or `null` creates nothing. */
   readonly autoCreate?: readonly AutoCreateColumn[] | null;
+  /**
+   * #1600 OR41 C6d-1 — Skip incompatible rows: called with a rejected row's
+   * position in its batch and the store's reason, and the copy goes on. Absent
+   * or `null` is off, and the first rejected row fails the copy as before.
+   * Refused with Upsert, as the config is.
+   */
+  readonly onRowRejected?: ((position: number, reason: string) => void) | null;
   /** Honoured at BATCH BOUNDARIES (§10) — a run cancel rolls the copy back. */
   readonly signal?: AbortSignal;
   /**
@@ -453,6 +461,28 @@ function runSqlitePreCopyScript(db: Database.Database, script: PreCopyScript): v
  * Measured: an explicit `begin`/`commit` pair does span one, and `inTransaction`
  * is still true across it.
  */
+/**
+ * #1600 OR41 C6d-1 — the store's reason when a row is incompatible with the
+ * sink, or `null` when the failure is not the row's and must fail the copy.
+ *
+ * Every SQLITE_CONSTRAINT code but a trigger's: a duplicate key, NOT NULL,
+ * CHECK, an immediate foreign key and a STRICT table's datatype, plus
+ * SQLITE_MISMATCH (a non-integer rowid) and SQLITE_TOOBIG. Their messages name
+ * the table, column or CHECK expression and never the value (measured, as
+ * `UNIQUE constraint failed: sink.id`), so no row data reaches the log. A
+ * trigger's RAISE(ABORT) is the author's own refusal and fails the copy, as
+ * PostgreSQL's RAISE EXCEPTION (P0001) does, so the two stores agree.
+ */
+function incompatibleRowReason(err: unknown): string | null {
+  const code = (err as { code?: unknown } | undefined)?.code;
+  if (typeof code !== 'string' || code === 'SQLITE_CONSTRAINT_TRIGGER') return null;
+  const primary = primarySqliteCode(code);
+  if (primary !== 'SQLITE_CONSTRAINT' && primary !== 'SQLITE_MISMATCH' && primary !== 'SQLITE_TOOBIG') {
+    return null;
+  }
+  return err instanceof Error ? err.message : code;
+}
+
 export async function writeSqliteDatasetRows(
   write: SqliteDatasetWrite,
   batches: AsyncIterable<readonly Record<string, SinkValue>[]>,
@@ -596,6 +626,18 @@ export async function writeSqliteDatasetRows(
             })
           : null;
 
+      const onRowRejected = write.onRowRejected ?? null;
+      if (onRowRejected !== null && upsert !== null) {
+        throw new DatasetIoError(
+          'permanent',
+          'Skip incompatible rows does not apply to Upsert, as in ADF',
+        );
+      }
+      const savepoint = onRowRejected === null ? null : db.prepare('SAVEPOINT studio_copy_row');
+      const release = onRowRejected === null ? null : db.prepare('RELEASE studio_copy_row');
+      const rollbackTo =
+        onRowRejected === null ? null : db.prepare('ROLLBACK TO studio_copy_row');
+
       let first = true;
       let rowNumber = 0;
       for await (const batch of batches) {
@@ -604,8 +646,31 @@ export async function writeSqliteDatasetRows(
         if (write.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
         first = false;
 
-        for (const row of batch) {
+        for (const [position, row] of batch.entries()) {
           rowNumber += 1;
+          if (savepoint !== null && release !== null && rollbackTo !== null) {
+            // #1600 OR41 C6d-1 — one savepoint per row, so a rejected row is
+            // undone whole (a `FAIL` conflict and a BEFORE trigger's writes
+            // included), where a statement's own ABORT would not undo those.
+            savepoint.run();
+            try {
+              rowsWritten += insert.run(
+                columns.map((column) => bindValue(row[column.mapped], column.mapped)),
+              ).changes;
+              release.run();
+            } catch (err) {
+              // FIRST, before any ROLLBACK TO: a trigger's RAISE(ROLLBACK) has
+              // ended the whole transaction (measured), so the savepoint is
+              // gone and the next row would insert in autocommit.
+              if (!db.inTransaction) throw err;
+              const reason = incompatibleRowReason(err);
+              if (reason === null) throw err;
+              rollbackTo.run();
+              release.run();
+              onRowRejected?.(position, reason);
+            }
+            continue;
+          }
           if (upsert !== null) {
             refuseNullKey(row, upsert.keys, rowNumber);
             const keyValues = upsert.keys.map((k) => bindValue(row[k.mapped], k.mapped));
