@@ -40,12 +40,10 @@ import { access, realpath, rmdir, unlink } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 import type { z } from 'zod';
 import {
-  SESSION_LOG_OUTPUT,
   SessionLog,
-  sessionLogRunValues,
   type DeleteConfig,
 } from '@autonomy-studio/shared';
-import { failed } from './activity-events.js';
+import { failed, sessionLogRunEvents } from './activity-events.js';
 import { isMissingErrno, resolveWithinRootsOrMissing } from './confine.js';
 import type { fsConnectionConfigSchema } from './fs-connection.js';
 import {
@@ -192,9 +190,7 @@ export async function* runDelete(
         );
       }
     } else {
-      for (const value of sessionLogRunValues(log.lines)) {
-        yield { type: 'output', name: SESSION_LOG_OUTPUT, value };
-      }
+      yield* sessionLogRunEvents(log);
     }
     if (terminal.type === 'succeeded') {
       yield { type: 'succeeded', outputs: outputs() };

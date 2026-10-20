@@ -19,6 +19,7 @@ describe('copy_files config', () => {
       afterCopy: 'keep',
       copyBehavior: 'preserve',
       ifExists: 'overwrite',
+      logLevel: 'warning',
     });
     expect(issues({})).toEqual([expect.stringMatching(/^sourcePath: /)]);
   });
@@ -146,5 +147,18 @@ describe('copy_files appliesWhen (#1686)', () => {
         expect(applies(name, controls), `${name} needed, ${JSON.stringify(controls)}`).toBe(true);
       }
     }
+  });
+});
+
+describe('copy_files session log (#1600 OR41 C6b)', () => {
+  it('defaults to Warnings, and refuses a level it does not know', () => {
+    expect(copyFilesConfigSchema.parse({ sourcePath: 'in' }).logLevel).toBe('warning');
+    expect(issues({ sourcePath: 'in', logLevel: 'debug' })).toHaveLength(1);
+  });
+
+  it('is drawn on the Settings tab, after Sink, as on a rows Copy', () => {
+    const tabs = getActivity(COPY_FILES_ACTIVITY_TYPE)!.tabs!;
+    expect(tabs.map((t) => t.key)).toEqual(['source', 'sink', 'settings']);
+    expect(tabs[2]!.fields).toEqual(['logLevel']);
   });
 });

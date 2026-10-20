@@ -598,6 +598,9 @@
 // NO BUMP for #1600 OR41 C6a: Copy's `logLevel` (the session log, to the run
 // log). The copy dispatch schema is not strict, so a pre-C6a build strips it and
 // copies the same rows: only the log lines are lost, never data or an outcome.
+// NO BUMP for #1600 OR41 C6b: Copy · Files as-is's `logLevel`, on the same
+// reasoning. `copyFilesConfigSchema` is not strict either, so a pre-C6b build
+// strips it and copies the same files, losing only the log lines.
 export const CATALOG_VERSION = 58;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did

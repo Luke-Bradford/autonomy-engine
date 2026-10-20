@@ -1467,7 +1467,8 @@ export interface CanvasState {
    * between Rows (`copy`) and Files as-is (`copy_files`). C7b — the same switch
    * is Lookup's *Read as*: Rows (`lookup`) or Whole file as text (`file_read`).
    * One rule for every `ACTIVITY_MODE_GROUPS` group. The modes share no
-   * settings, so the config starts as a NEW node of the new type does (its
+   * settings (Copy's two share only the Session log, C6b, which restarts at
+   * its default too), so the config starts as a NEW node of the new type does (its
    * `newNodeConfig`, then its output contract), and the dataset bindings (rows
    * only) are dropped; the connection (or pair) is kept with its overrides, and
    * the pickers flag one the new mode cannot use. One undo step brings the old

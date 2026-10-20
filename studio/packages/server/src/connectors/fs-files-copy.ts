@@ -14,9 +14,11 @@ import type { z } from 'zod';
 import {
   copyFilesConfigSchema,
   formatZodIssues,
+  SESSION_LOG_RUN_MAX_LINES,
+  SessionLog,
   type CopyFilesConfig,
 } from '@autonomy-studio/shared';
-import { failed } from './activity-events.js';
+import { failed, sessionLogRunEvents } from './activity-events.js';
 import { O_NOFOLLOW, resolveWithinRoots } from './confine.js';
 import { fsConnectionConfigSchema } from './fs-connection.js';
 import {
@@ -91,6 +93,13 @@ import { FS_STREAM_CHUNK_BYTES } from '../limits.js';
  * rename), and a failure part-way leaves the files already copied in place.
  * The counters are emitted as outputs before the failure, so the run says what
  * it had done.
+ *
+ * SESSION LOG (#1600 OR41 C6b, catalogue §4.1, §5): to the run log, ADF's copy
+ * log operations. Everything logs a `FileRead` per source and a `FileWrite` per
+ * file written, added once the write has landed, beside the counters they
+ * match; Warnings logs each `FileSkip`, with why. The After copy delete or move
+ * is not an operation of ADF's copy log, and the counters report it. No Error
+ * line: the node's error names the file a copy failed on.
  */
 
 type FsConfig = z.infer<typeof fsConnectionConfigSchema>;
@@ -145,6 +154,11 @@ type Counters = Record<(typeof COUNTERS)[number], number>;
 interface CopyPaths {
   source: string;
   dest: string;
+}
+
+/** `n` and its unit, singular for one: "1 byte", "3 files". */
+function counted(n: number, unit: string): string {
+  return `${n} ${unit}${n === 1 ? '' : 's'}`;
 }
 
 function outputsOf(c: Counters, paths: CopyPaths | undefined): Record<string, unknown> {
@@ -422,6 +436,11 @@ interface Target {
   readonly name: string;
 }
 
+/** The target's path under the sink folder, as the session log names it. */
+function sinkRel(t: Target): string {
+  return join(...t.dirs, t.name);
+}
+
 function planTargets(
   cfg: CopyFilesConfig,
   sinkBase: string,
@@ -448,6 +467,7 @@ async function writeTarget(
   signal: AbortSignal,
   c: Counters,
   stamps: Map<string, ReadStamp>,
+  log: SessionLog,
 ): Promise<'written' | 'exists'> {
   let read = 0;
   const writeInto = async (dst: Awaited<ReturnType<typeof open>>) => {
@@ -475,6 +495,20 @@ async function writeTarget(
   c.bytesRead += read;
   c.bytesWritten += read;
   c.filesWritten += 1;
+  // Logged beside the counters, once the write has landed, so a line never
+  // claims a file the counters do not.
+  for (const s of target.sources) {
+    log.add('Info', 'FileRead', s.rel, `read ${counted(stamps.get(s.abs)!.read, 'byte')}`);
+  }
+  const [only] = target.sources;
+  log.add(
+    'Info',
+    'FileWrite',
+    sinkRel(target),
+    target.sources.length === 1 && only !== undefined
+      ? `wrote ${counted(read, 'byte')} from '${only.rel}'`
+      : `wrote ${counted(read, 'byte')} merged from ${counted(target.sources.length, 'file')}`,
+  );
   return 'written';
 }
 
@@ -667,6 +701,9 @@ export async function* runFilesCopy(
 
   const signal = ctx.signal;
   const c: Counters = Object.fromEntries(COUNTERS.map((k) => [k, 0])) as Counters;
+  // Capped as it is kept, as a rows Copy's is (C6a): a folder can hold more
+  // files than the run log shows lines.
+  const log = new SessionLog(cfg.logLevel, undefined, { keepAtMost: SESSION_LOG_RUN_MAX_LINES });
   let started = false;
   let where: CopyPaths | undefined;
   try {
@@ -752,6 +789,7 @@ export async function* runFilesCopy(
     }
     // Nothing selected: a success that creates no folders.
     if (targets.length === 0) {
+      yield* sessionLogRunEvents(log, { folderHint: false });
       yield { type: 'succeeded', outputs: outputsOf(c, where) };
       return;
     }
@@ -777,22 +815,57 @@ export async function* runFilesCopy(
       const noClobber = cfg.ifExists !== 'overwrite';
       // A skipped target that already holds its one source's bytes counts as
       // copied, so a retry removes the source an earlier attempt left behind.
-      const skip = async () => {
+      // `why` is how the target came to be there, for the FileSkip lines.
+      const skip = async (why: string) => {
         c.filesSkipped += t.sources.length;
-        return (
-          cfg.afterCopy !== 'keep' &&
-          t.sources.length === 1 &&
-          (await alreadyCopied(t.sources[0]!, finalPath, signal, stamps))
-        );
+        const skipped = `skipped: '${sinkRel(t)}' ${why} and If file exists is Skip`;
+        const [only] = t.sources;
+        if (cfg.afterCopy === 'keep' || t.sources.length !== 1 || only === undefined) {
+          for (const s of t.sources) {
+            log.add(
+              'Warning',
+              'FileSkip',
+              s.rel,
+              cfg.afterCopy === 'keep' ? skipped : `${skipped}; the source is kept`,
+            );
+          }
+          return false;
+        }
+        // Logged even when the comparison throws, so the counted skip has its line.
+        let copied: boolean | undefined;
+        try {
+          copied = await alreadyCopied(only, finalPath, signal, stamps);
+        } finally {
+          log.add(
+            'Warning',
+            'FileSkip',
+            only.rel,
+            copied === undefined
+              ? skipped
+              : copied
+                ? `${skipped}; it holds this file's bytes, so After copy still applies`
+                : `${skipped}; the source is kept`,
+          );
+        }
+        return copied;
       };
       if (cfg.ifExists === 'skip' && (await lstatOrNull(finalPath)) !== null) {
-        if (!(await skip())) continue;
+        if (!(await skip('already exists'))) continue;
       } else {
-        const outcome = await writeTarget(t, finalPath, tmpSuffix, noClobber, signal, c, stamps);
+        const outcome = await writeTarget(
+          t,
+          finalPath,
+          tmpSuffix,
+          noClobber,
+          signal,
+          c,
+          stamps,
+          log,
+        );
         if (outcome === 'exists') {
           if (cfg.ifExists === 'fail')
             refuse(`'${finalPath}' appeared during the copy and If file exists is Fail`);
-          if (!(await skip())) continue;
+          if (!(await skip('appeared during the copy'))) continue;
         }
       }
       // After copy, only for a source whose bytes are at the target: a skipped
@@ -829,8 +902,13 @@ export async function* runFilesCopy(
         }
       }
     }
+    // Nothing that can throw sits between the lines and the success, so they
+    // are yielded once (a rows Copy needs a guard for that; this does not).
+    yield* sessionLogRunEvents(log, { folderHint: false });
     yield { type: 'succeeded', outputs: outputsOf(c, where) };
   } catch (err) {
+    // The lines logged so far, ahead of the counters, as a rows Copy's are.
+    yield* sessionLogRunEvents(log, { folderHint: false });
     if (started) {
       for (const [name, value] of Object.entries(outputsOf(c, where)))
         yield { type: 'output', name, value };
