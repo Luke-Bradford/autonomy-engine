@@ -340,11 +340,12 @@ const INLINE_SQL = 'SELECT id FROM orders WHERE region = :region AND load <> :lo
 const SEEDED_HELP_LIMITS: Record<string, number> = {
   // +2 each for #1600 OR41 C3b's Pre-copy script and Batch size (HELP_LIMITS),
   // +1 each for C3c's Table option.
-  'Copy data': 13, // +1 C6a Session log
+  // +1 each for #1600 OR41 C6a's Session log (rows only; files as-is has none yet).
+  'Copy data': 13,
   'Copy data (files as-is)': 19,
   'Copy data (files from a folder)': 16,
   // +1 for C1q-c's Query timeout, a new field whose `?` says blank means no limit.
-  'Copy data (inline query)': 17, // +1 C6a Session log
+  'Copy data (inline query)': 17,
   // #1600 OR41 C9a — Delete with every setting showing: the 14 above and
   // Delete empty folders', which says it never removes the folder at the path.
   // +3 for C9c's Session log, Write to and Log folder.

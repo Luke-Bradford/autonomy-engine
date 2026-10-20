@@ -16,6 +16,7 @@ import {
   type CoercionOptions,
   type CopyCounters,
   type CopyProgress,
+  type CopyRowFailure,
   type CopyPumpMappingEntry,
   type CopyWriteMode,
 } from '@autonomy-studio/shared';
@@ -163,6 +164,15 @@ function copyOutputs(counters: CopyCounters): Record<string, unknown> {
 }
 
 /**
+ * #1600 OR41 C6a — a failed row's number as the operator reads it: from 1 among
+ * the rows read (a CSV's header is not one), where `rowIndex` counts from 0. The
+ * advisory and the session log both number with it, so a row has one number.
+ */
+function rowNumber(failure: CopyRowFailure): number {
+  return failure.rowIndex + 1;
+}
+
+/**
  * The prose for a copy that dropped rows — "410 not_integral, 2 unparseable_date".
  *
  * §5 says the bounded `CoercionFailureCode` exists FOR this summary, and slice 1
@@ -181,7 +191,7 @@ function failureSummary(counters: CopyCounters): string {
   const where =
     first === undefined
       ? ''
-      : ` First at row ${first.rowIndex + 1} into '${first.sink}': ${first.reason}.`;
+      : ` First at row ${rowNumber(first)} into '${first.sink}': ${first.reason}.`;
   return `${counters.rowsFailed} row(s) were not written (${byCode}).${where}`;
 }
 
@@ -416,7 +426,8 @@ export async function* runCopyActivity(
   let batchFrom = { rowsRead: 0, rowsFailed: 0 };
   let logged = false;
   function* logLines(): Generator<ActivityEvent> {
-    // Once: a success path that throws after yielding them reaches the catch.
+    // Yields only once, because a throw after the success path's yield reaches
+    // the catch.
     if (logged) return;
     logged = true;
     // No folder hint: Copy cannot write its log to a folder until C6c.
@@ -492,27 +503,30 @@ export async function* runCopyActivity(
           // describe rung above rather than inline here — see the note there for
           // why the empty-mapping guard has to cover both.
           coercion,
-          // Rows are numbered from 1 among the rows read (a CSV's header is not
-          // one), as `failureSummary` numbers them. The reason never holds the
-          // value (`coerce.ts`), so no row data reaches the log.
+          // The reason never holds the value (`coerce.ts`), so no row data
+          // reaches the log.
           onRowFailure: (f) => {
             log.add(
               'Warning',
               'TabularRowSkip',
-              `row ${f.rowIndex + 1}`,
+              `row ${rowNumber(f)}`,
               `${f.code}: into '${f.sink}': ${f.reason}`,
             );
           },
           onBatch: () => {
             // "Read", never "written": the sink's tick is not committed truth.
+            // Called once the sink has taken the batch, so a batch the sink
+            // fails on gets its skip lines but no batch line.
             const read = counters.rowsRead - batchFrom.rowsRead;
             const skipped = counters.rowsFailed - batchFrom.rowsFailed;
-            log.add(
-              'Info',
-              'TabularRowBatch',
-              `rows ${batchFrom.rowsRead + 1}-${counters.rowsRead}`,
-              `read ${read} row${read === 1 ? '' : 's'}, ${skipped} skipped`,
-            );
+            if (read > 0) {
+              log.add(
+                'Info',
+                'TabularRowBatch',
+                `rows ${batchFrom.rowsRead + 1}-${counters.rowsRead}`,
+                `read ${read} row${read === 1 ? '' : 's'}, ${skipped} skipped`,
+              );
+            }
             batchFrom = { rowsRead: counters.rowsRead, rowsFailed: counters.rowsFailed };
             ticks.push({
               rowsRead: counters.rowsRead,

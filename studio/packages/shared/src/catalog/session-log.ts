@@ -32,7 +32,7 @@ export const sessionLogConfigFields = {
   logLevel: presented(logLevelSchema.default('warning'), {
     title: 'Session log',
     description:
-      'Warnings logs the items skipped or kept, and any that failed. Everything also logs each item handled.',
+      'Warnings logs what was skipped or kept, and any failure. Everything also logs each item or batch handled.',
     options: optionTitles(logLevelSchema, { off: 'Off', warning: 'Warnings', info: 'Everything' }),
   }),
   logTo: presented(logToSchema.default('run'), {
@@ -100,11 +100,11 @@ function keeps(level: SessionLogLevel, line: SessionLogLineLevel): boolean {
  * the log level. Bounded by what the activity plans (Delete: the connection's
  * entry limit), not by the log, unless `keepAtMost` caps it.
  *
- * #1600 OR41 C6a — `keepAtMost`: Copy can skip a line's worth of rows per row
- * read, so a log bound for the run log keeps only what the run log shows (the
- * first lines, and an Error line past them, `sessionLogRunValues`' rule) and
- * counts the rest in `dropped`, rather than holding millions of lines it would
- * throw away.
+ * #1600 OR41 C6a — `keepAtMost`: Copy can log one line per skipped row, so a
+ * log bound for the run log keeps only what the run log shows (the first lines,
+ * and an Error line past them, `sessionLogRunValues`' rule) and counts the rest
+ * in `dropped`, rather than holding millions of lines it would throw away. An
+ * Error line is never capped: an attempt adds at most one, for why it failed.
  */
 export class SessionLog {
   readonly lines: SessionLogLine[] = [];

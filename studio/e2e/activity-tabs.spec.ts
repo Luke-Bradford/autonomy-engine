@@ -213,8 +213,8 @@ test('a tab label shows its problems, an unapplied edit, or that it is complete'
   await expect(settings).toHaveAccessibleDescription('Complete');
   await expect(settings.locator('.fui-Tab__content .panel-tabs__status')).toHaveText('✓');
 
-  // Copy's five tabs (Settings since #1600 C6a), Mapping's ✓ included, fit the dock in its narrower,
-  // right-hand position.
+  // Copy's five tabs (Settings since #1600 C6a), Mapping's ✓ included, fit the
+  // dock in its narrower, right-hand position.
   await nodeById(page, 'c').click();
   await page.getByRole('button', { name: 'Dock to right' }).click();
   await expectTabNames(tabs(page), ['General', 'Source', 'Sink', 'Mapping', 'Settings']);

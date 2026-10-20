@@ -16,10 +16,10 @@ import {
 } from './nodeStatus';
 import { runDetailPath, runLinkLabel } from './runPath';
 import {
-  formatLogValue,
   formatOutputValue,
   jsonText,
   liveSpanStart,
+  MAX_LOG_VALUE_CHARS,
   prettyStoredJson,
 } from './format';
 import { NodeDuration } from './NodeDuration';
@@ -635,8 +635,9 @@ function StreamedLines({ lines, stem }: { lines: readonly StreamedLine[]; stem: 
                 </td>
                 <td>
                   {/* A log's value wraps rather than being cut (#1594 OR40 S3d):
-                      this panel is where it is read. */}
-                  <code>{formatLogValue(l.value)}</code>
+                      this panel is where it is read. Only a value past
+                      MAX_LOG_VALUE_CHARS is cut (#1600 C6a). */}
+                  <code>{formatOutputValue(l.value, MAX_LOG_VALUE_CHARS)}</code>
                 </td>
               </tr>
             ))}

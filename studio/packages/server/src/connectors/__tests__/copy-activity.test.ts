@@ -1224,6 +1224,37 @@ describe('copy activity — the session log, to the run log (#1600 OR41 C6a)', (
     );
   });
 
+  it('Everything numbers each batch by the rows it read and counts its own skips', async () => {
+    const root = tempRoot();
+    const sourcePath = join(root, 'src.db');
+    const src = new Database(sourcePath);
+    src.exec('CREATE TABLE t (id INTEGER PRIMARY KEY, flag TEXT)');
+    src.exec("INSERT INTO t VALUES (1, '1'), (2, 'x'), (3, '3'), (4, '4'), (5, 'y')");
+    src.close();
+    const events = await run(
+      copyCtx({
+        root,
+        sourcePath,
+        sinkPath: seedSink(root, 'dst.db'),
+        input: {
+          mapping: [
+            { source: 'id', sink: 'id', type: 'integer' },
+            { source: 'flag', sink: 'flag', type: 'integer' },
+          ],
+          writeBatchSize: 2,
+          logLevel: 'info',
+        },
+      }),
+    );
+    expect(lineValues(events).map((l) => l.replace(new RegExp(`^${ts} `), ''))).toEqual([
+      expect.stringMatching(/^Warning TabularRowSkip row 2 /),
+      'Info TabularRowBatch rows 1-2 read 2 rows, 1 skipped',
+      'Info TabularRowBatch rows 3-4 read 2 rows, 0 skipped',
+      expect.stringMatching(/^Warning TabularRowSkip row 5 /),
+      'Info TabularRowBatch rows 5-5 read 1 row, 1 skipped',
+    ]);
+  });
+
   it('Off logs nothing, and a copy that skips nothing logs nothing at Warnings', async () => {
     const root = tempRoot();
     const off = await run(
