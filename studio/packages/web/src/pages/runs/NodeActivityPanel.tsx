@@ -37,6 +37,7 @@ import type { StreamedLine } from './attemptActivity';
 import { defaultDrawerTab, drawerFileStem, type DrawerTab } from './drawerTab';
 import { activityModeTitle } from '../pipeline/activityModes';
 import { Section } from '../../lib/Section';
+import { LabelledControl } from '../../lib/LabelledControl';
 import { FORM_SECTION_HINTS } from '../../lib/form/sectionHints';
 
 /**
@@ -452,7 +453,12 @@ export function NodeActivityPanel({
                   />
                 </Section>
                 {lines !== undefined && lines.length > 0 && (
-                  <StreamedLines lines={lines} stem={stem} />
+                  <StreamedLines
+                    // A different attempt or item starts on its own newest page.
+                    key={`${node.nodeId}|${run?.attempt ?? ''}|${run?.iteration ?? ''}`}
+                    lines={lines}
+                    stem={stem}
+                  />
                 )}
               </>
             ),
@@ -580,21 +586,40 @@ function ErrorTab({ node, attempt }: { node: NodeActivity; attempt: number | nul
 }
 
 /**
- * The most lines the Logs tab renders. A copy streams a progress line per batch
- * with no bound, so the list keeps the most RECENT and says what it cut — the
- * `MAX_TOOL_ROWS` rule. The download holds every line.
+ * The most lines the Logs tab renders at once. A copy streams a progress line
+ * per batch with no bound, so the tab shows one page of them — the most RECENT
+ * page until the reader pages back (#1772: a session log's first skipped rows
+ * are the useful ones, and a tail-only cut hid them). The download holds every
+ * line.
  */
-const MAX_LOG_ROWS = 200;
+export const LOG_PAGE_ROWS = 200;
+
+/** The Name filter's "every line" choice. */
+const ALL_LOG_NAMES = '';
 
 /**
  * #1484 OR35 M2 — the Logs tab's lines: everything this attempt streamed, to
  * the millisecond in the display zone, and all of it as NDJSON on Download.
  * A secure node's lines arrive redacted from the server (`redactSecureEvent`),
  * so what is shown and saved is what the log holds.
+ *
+ * #1772 — every line is reachable: a page at a time, filtered by name when the
+ * attempt streamed more than one (`sessionLog` among a copy's `progress`).
  */
 function StreamedLines({ lines, stem }: { lines: readonly StreamedLine[]; stem: string }) {
   const zone = useDisplayTimeZone();
-  const shown = lines.slice(-MAX_LOG_ROWS);
+  const [nameChoice, setNameChoice] = useState(ALL_LOG_NAMES);
+  // The first line shown; `null` follows the newest page as lines stream in.
+  const [start, setStart] = useState<number | null>(null);
+  const counts = new Map<string, number>();
+  for (const l of lines) counts.set(l.name, (counts.get(l.name) ?? 0) + 1);
+  // A choice the lines no longer hold (a later attempt) shows them all.
+  const name = counts.has(nameChoice) ? nameChoice : ALL_LOG_NAMES;
+  const filtered = name === ALL_LOG_NAMES ? lines : lines.filter((l) => l.name === name);
+  const last = Math.max(0, filtered.length - LOG_PAGE_ROWS);
+  const from = start === null ? last : Math.min(start, last);
+  const shown = filtered.slice(from, from + LOG_PAGE_ROWS);
+  const paged = filtered.length > LOG_PAGE_ROWS;
   return (
     <section className="contract-section">
       <div className="capped-value-actions">
@@ -611,10 +636,57 @@ function StreamedLines({ lines, stem }: { lines: readonly StreamedLine[]; stem: 
           Download {lines.length} line{lines.length === 1 ? '' : 's'}
         </button>
       </div>
-      {lines.length > shown.length && (
-        <p className="page-hint">
-          … showing the most recent {shown.length} of {lines.length} lines.
-        </p>
+      {(counts.size > 1 || paged) && (
+        <div className="node-logs__pager">
+          {counts.size > 1 && (
+            <LabelledControl label="Name">
+              {(id) => (
+                <select
+                  id={id}
+                  value={name}
+                  onChange={(e) => {
+                    setNameChoice(e.target.value);
+                    setStart(null);
+                  }}
+                >
+                  <option value={ALL_LOG_NAMES}>All ({lines.length})</option>
+                  {[...counts].map(([n, count]) => (
+                    <option key={n} value={n}>
+                      {n} ({count})
+                    </option>
+                  ))}
+                </select>
+              )}
+            </LabelledControl>
+          )}
+          {paged && (
+            <>
+              <span className="node-logs__range">
+                Lines {from + 1}–{from + shown.length} of {filtered.length}
+              </span>
+              <button type="button" disabled={from === 0} onClick={() => setStart(0)}>
+                First
+              </button>
+              <button
+                type="button"
+                disabled={from === 0}
+                onClick={() => setStart(Math.max(0, from - LOG_PAGE_ROWS))}
+              >
+                Earlier
+              </button>
+              <button
+                type="button"
+                disabled={from === last}
+                onClick={() => setStart(from + LOG_PAGE_ROWS >= last ? null : from + LOG_PAGE_ROWS)}
+              >
+                Later
+              </button>
+              <button type="button" disabled={from === last} onClick={() => setStart(null)}>
+                Latest
+              </button>
+            </>
+          )}
+        </div>
       )}
       {/* The scroll is on a wrapper so the table keeps its table semantics. */}
       <div className="node-logs">

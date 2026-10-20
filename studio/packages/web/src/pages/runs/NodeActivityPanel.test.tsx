@@ -1076,11 +1076,11 @@ describe('NodeActivityPanel — the drawer tabs (#1484 OR35 M2)', () => {
     await user.click(tab('Logs'));
     const table = visiblePanel().querySelector('.node-logs table') as HTMLElement;
     const rows = table.querySelectorAll<HTMLTableRowElement>('tbody tr');
-    // The most recent 200, and the cut said.
+    // The most recent page of 200, and where it sits (#1772).
     expect(rows).toHaveLength(200);
     expect(rows[0]).toHaveTextContent('rows5');
     expect(rows[199]).toHaveTextContent('rows204');
-    expect(visiblePanel()).toHaveTextContent('showing the most recent 200 of 205 lines');
+    expect(visiblePanel()).toHaveTextContent('Lines 6–205 of 205');
     // To the millisecond.
     expect(rows[199]!.cells[0]!.textContent).toMatch(/\.204$/);
 
@@ -1094,6 +1094,91 @@ describe('NodeActivityPanel — the drawer tabs (#1484 OR35 M2)', () => {
       .map((l) => JSON.parse(l) as { value: number });
     expect(parsed).toHaveLength(205);
     expect(parsed[0]!.value).toBe(0);
+  });
+});
+
+describe('NodeActivityPanel — every streamed line is reachable (#1772)', () => {
+  const tab = (name: string) => screen.getByRole('tab', { name });
+  const visiblePanel = () => screen.getByRole('tabpanel');
+  function logRows(): HTMLTableRowElement[] {
+    const table = visiblePanel().querySelector('.node-logs table') as HTMLElement;
+    return [...table.querySelectorAll<HTMLTableRowElement>('tbody tr')];
+  }
+  function renderLines(lines: { seq: number; ts: number; name: string; value: unknown }[]) {
+    renderWithRouter(
+      <NodeActivityPanel
+        node={row({ nodeId: 'a', status: 'success', attempts: 1, outputs: lines.length })}
+        name={null}
+        runStatus="success"
+        live={false}
+        onClose={vi.fn()}
+        run={{ attempt: 1, iteration: '', skipWhy: null, lines }}
+      />,
+    );
+  }
+  const button = (name: string) => within(visiblePanel()).getByRole('button', { name });
+
+  it('pages back to the first line and forward to the newest again', async () => {
+    const user = userEvent.setup();
+    renderLines(
+      Array.from({ length: 450 }, (_, i) => ({ seq: i, ts: i, name: 'rows', value: i })),
+    );
+    await user.click(tab('Logs'));
+    expect(logRows()[0]).toHaveTextContent('rows250');
+    expect(button('Later')).toBeDisabled();
+    expect(button('Latest')).toBeDisabled();
+
+    await user.click(button('Earlier'));
+    expect(visiblePanel()).toHaveTextContent('Lines 51–250 of 450');
+    expect(logRows()[0]).toHaveTextContent('rows50');
+
+    await user.click(button('First'));
+    expect(visiblePanel()).toHaveTextContent('Lines 1–200 of 450');
+    expect(logRows()[0]).toHaveTextContent('rows0');
+    expect(button('First')).toBeDisabled();
+    expect(button('Earlier')).toBeDisabled();
+
+    await user.click(button('Later'));
+    expect(visiblePanel()).toHaveTextContent('Lines 201–400 of 450');
+    await user.click(button('Later'));
+    expect(visiblePanel()).toHaveTextContent('Lines 251–450 of 450');
+    expect(logRows().at(-1)).toHaveTextContent('rows449');
+  });
+
+  it('filters to one name, so a session log reads from its first line', async () => {
+    const user = userEvent.setup();
+    // A progress line between every pair of session-log lines.
+    const lines = Array.from({ length: 600 }, (_, i) => ({
+      seq: i,
+      ts: i,
+      name: i % 2 === 0 ? 'sessionLog' : 'progress',
+      value: i % 2 === 0 ? `skip ${i / 2}` : i,
+    }));
+    renderLines(lines);
+    await user.click(tab('Logs'));
+    const filter = within(visiblePanel()).getByRole('combobox', { name: 'Name' });
+    expect([...filter.querySelectorAll('option')].map((o) => o.textContent)).toEqual([
+      'All (600)',
+      'sessionLog (300)',
+      'progress (300)',
+    ]);
+    await user.selectOptions(filter, 'sessionLog');
+    expect(visiblePanel()).toHaveTextContent('Lines 101–300 of 300');
+    await user.click(button('First'));
+    const rows = logRows();
+    expect(rows).toHaveLength(200);
+    expect(rows[0]).toHaveTextContent('sessionLogskip 0');
+    expect(rows.every((r) => r.textContent?.includes('sessionLog'))).toBe(true);
+    // The download is still every line, whatever the filter.
+    expect(button('Download 600 lines')).toBeInTheDocument();
+  });
+
+  it('draws no pager or filter for a short log of one name', async () => {
+    const user = userEvent.setup();
+    renderLines([{ seq: 0, ts: 0, name: 'rows', value: 1 }]);
+    await user.click(tab('Logs'));
+    expect(within(visiblePanel()).queryByRole('combobox', { name: 'Name' })).toBeNull();
+    expect(within(visiblePanel()).queryByRole('button', { name: 'First' })).toBeNull();
   });
 });
 

@@ -4854,6 +4854,20 @@ textarea[data-grow='edit'],
   overflow-y: auto;
 }
 
+/* #1772 — the Logs tab's name filter and pager: one row of controls, their
+   bottoms aligned so a labelled select sits level with the buttons. */
+.node-logs__pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.node-logs__range {
+  line-height: var(--control-h);
+}
+
 /* #605 — a captured prompt/completion. Pre-wrapped, because a prompt's line
    breaks are part of what it said, and capped + scrolled like
    `.node-detail-outputs`: the server's capture budget stops the text entering
