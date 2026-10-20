@@ -12,9 +12,9 @@ import { seedConnection, seedDataset } from './support/seedResources';
  * #1600 OR41 C6a — Copy's session log (catalogue §4.1, §5), authored on the
  * Settings tab and run for real against a SQLite file: a row that cannot be
  * converted is skipped, and the run log says which, whole, in the Monitor's
- * Logs tab.
+ * Logs tab. C6b — the same, on Copy · Files as-is against a file connection.
  */
-test.describe('#1600 C6a — Copy session log', () => {
+test.describe('#1600 C6 — Copy session log', () => {
   test('Everything, set on the Settings tab, logs the skipped row and the batch in the Logs tab', async ({
     page,
   }) => {
@@ -139,6 +139,7 @@ test.describe('#1600 C6a — Copy session log', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
   /**
    * #1600 OR41 C6b — the same Settings tab on Copy · Files as-is, run for real
    * on a file connection: Everything logs each file read and written, and the

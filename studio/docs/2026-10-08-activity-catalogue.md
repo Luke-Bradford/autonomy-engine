@@ -283,7 +283,7 @@ Mapping   [Import schemas] [+ New mapping] [Clear] [Reset]                      
 - **Setting:** the same *Session log* field (`logLevel`, default Warnings) on a new Settings tab after Sink, as on a rows Copy. Switching the *Copy mode* restarts it at its default, as it does every other setting.
 - **Lines:**
   - *Info* `FileRead`: one per source file, `read N bytes`. The item is the file's path under the source path.
-  - *Info* `FileWrite`: one per file written, `wrote N bytes from '<source>'`, or `merged from K files` for a merge. The item is the file's path under the sink folder.
+  - *Info* `FileWrite`: one per file written, `wrote N bytes from '<source>'`, or `wrote N bytes merged from K files` for a merge. The item is the file's path under the sink folder.
   - *Warning* `FileSkip`: one per source that *If file exists* = Skip left uncopied, saying whether the target already existed or appeared during the copy. Under After copy Delete or Move it also says either that the source is kept, or that the target already holds the file's bytes so After copy still applies (the retry that converges, #1685).
 - **When:** a read and its write are logged together, once the write has landed, beside the counters they match, so a line never claims a file the counters do not. A skip is logged even when its byte comparison fails part-way, because it has already been counted.
 - **Run log:** the same rule and cap as a rows Copy, with lines yielded at the terminal and ahead of a failure's counters. Everything logs two lines per file, so a copy of more than 500 files fills the run log, and a later `FileSkip` is counted in the last line rather than kept. Warnings keeps only the skips, and C6c's folder keeps every line.

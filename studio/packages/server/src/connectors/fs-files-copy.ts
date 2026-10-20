@@ -13,6 +13,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import type { z } from 'zod';
 import {
   copyFilesConfigSchema,
+  counted,
   formatZodIssues,
   SESSION_LOG_RUN_MAX_LINES,
   SessionLog,
@@ -154,11 +155,6 @@ type Counters = Record<(typeof COUNTERS)[number], number>;
 interface CopyPaths {
   source: string;
   dest: string;
-}
-
-/** `n` and its unit, singular for one: "1 byte", "3 files". */
-function counted(n: number, unit: string): string {
-  return `${n} ${unit}${n === 1 ? '' : 's'}`;
 }
 
 function outputsOf(c: Counters, paths: CopyPaths | undefined): Record<string, unknown> {
@@ -789,7 +785,6 @@ export async function* runFilesCopy(
     }
     // Nothing selected: a success that creates no folders.
     if (targets.length === 0) {
-      yield* sessionLogRunEvents(log, { folderHint: false });
       yield { type: 'succeeded', outputs: outputsOf(c, where) };
       return;
     }
