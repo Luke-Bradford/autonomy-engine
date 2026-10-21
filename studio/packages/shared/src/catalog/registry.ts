@@ -983,7 +983,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
      * refuse a non-`sqlite` sink at the ladder's `refuseSink` rung.
      *
      * `outputs` mirrors `connectors/copy.ts`'s `copyOutputs` exactly, in order,
-     * and every one but `throughput` is REQUIRED. That is load-bearing rather
+     * and every one but `throughput` and `logPath` is REQUIRED. That is load-bearing rather
      * than incidental: F13b lowering seeds these into a node's `config.outputs`
      * at SAVE, and `validateOutputs` then fails the node for any the adapter
      * omits. The adapter yields them all unconditionally on success, and on
