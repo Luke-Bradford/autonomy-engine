@@ -216,6 +216,30 @@ function outputsOf(
   return { ...c, ...paths, ...measure, usedParallelCopies, logPath };
 }
 
+/**
+ * A file connection this copy writes to (the sink, C6c-1a's log), parsed and
+ * required to allow writes: the fail-closed `writable` gate, in one place.
+ */
+function writableFs(
+  connectionConfig: Record<string, unknown>,
+  which: 'sink' | 'log',
+): { ok: true; config: FsConfig } | { ok: false; error: string } {
+  const parsed = fsConnectionConfigSchema.safeParse(connectionConfig);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: `invalid fs ${which} connection config: ${formatZodIssues(parsed.error.issues)}`,
+    };
+  }
+  if (parsed.data.writable !== true) {
+    return {
+      ok: false,
+      error: `the ${which} connection does not allow writes; turn on Allow writes on that connection`,
+    };
+  }
+  return { ok: true, config: parsed.data };
+}
+
 type OpenedLog = { ok: true; writer: SessionLogWriter } | { ok: false; error: string };
 
 /**
@@ -245,20 +269,9 @@ async function openFolderLog(
   if (conn.kind !== 'fs') {
     return { ok: false, error: 'the log connection is not a file connection' };
   }
-  const parsed = fsConnectionConfigSchema.safeParse(conn.connectionConfig);
-  if (!parsed.success) {
-    return {
-      ok: false,
-      error: `invalid fs log connection config: ${formatZodIssues(parsed.error.issues)}`,
-    };
-  }
-  if (parsed.data.writable !== true) {
-    return {
-      ok: false,
-      error: 'the log connection does not allow writes; turn on Allow writes on that connection',
-    };
-  }
-  const checked = await checkSessionLogFolder(parsed.data.roots, cfg.logFolder ?? '');
+  const parsed = writableFs(conn.connectionConfig, 'log');
+  if (!parsed.ok) return parsed;
+  const checked = await checkSessionLogFolder(parsed.config.roots, cfg.logFolder ?? '');
   if (!checked.ok) return checked;
   if (cfg.pathType === 'folder') {
     const root = await resolveWithinRoots(source.roots, cfg.sourcePath, 'fs');
@@ -945,22 +958,12 @@ export async function* runFilesCopy(
     yield failed('permanent', 'a files copy writes to a file connection, and the sink is not one');
     return;
   }
-  const sinkParsed = fsConnectionConfigSchema.safeParse(ctx.sink.connectionConfig);
-  if (!sinkParsed.success) {
-    yield failed(
-      'permanent',
-      `invalid fs sink connection config: ${formatZodIssues(sinkParsed.error.issues)}`,
-    );
+  const sinkParsed = writableFs(ctx.sink.connectionConfig, 'sink');
+  if (!sinkParsed.ok) {
+    yield failed('permanent', sinkParsed.error);
     return;
   }
-  const sink = sinkParsed.data;
-  if (sink.writable !== true) {
-    yield failed(
-      'permanent',
-      'the sink connection does not allow writes; turn on Allow writes on that connection',
-    );
-    return;
-  }
+  const sink = sinkParsed.config;
   if (cfg.afterCopy !== 'keep' && source.writable !== true) {
     yield failed(
       'permanent',
@@ -988,9 +991,8 @@ export async function* runFilesCopy(
     });
   // #1600 OR41 C6c-1a — Write to Folder: the log is opened before anything is
   // planned, so a bad log connection or folder fails the copy with nothing done.
-  let writer: SessionLogWriter | undefined;
+  let opened: OpenedLog | undefined;
   if (cfg.logLevel !== 'off' && cfg.logTo === 'folder') {
-    let opened: OpenedLog;
     try {
       opened = await openFolderLog(ctx, cfg, source);
     } catch (err) {
@@ -1001,9 +1003,8 @@ export async function* runFilesCopy(
       yield failed('permanent', opened.error);
       return;
     }
-    writer = opened.writer;
   }
-  const logFile = writer;
+  const logFile = opened?.ok === true ? opened.writer : undefined;
   let logPath: string | null = null;
   // To the run log, capped as it is kept, as a rows Copy's is (C6a): a folder
   // can hold more files than the run log shows lines. To a folder, every line,
@@ -1321,9 +1322,17 @@ export async function* runFilesCopy(
     // the failure kept is the first to happen.
     // C6c-1a — after each file, the folder log's buffer is written once full,
     // so a slow log mount holds the copy back rather than the buffer growing.
+    // A log that has stopped being written stops the copy, before After copy
+    // deletes or moves any more sources the author asked to have logged.
+    const logWorking = () => {
+      const failed = logFile?.failure;
+      if (failed !== undefined) refuse(`the session log could not be written: ${failed}`);
+    };
     const failure = await runPool(targets, width, async (t) => {
+      logWorking();
       await copyTarget(t);
       await logFile?.flushIfFull();
+      logWorking();
     });
     if (failure !== undefined) throw failure.err;
     // Nothing that can throw sits between the lines and the success, so they
@@ -1336,12 +1345,25 @@ export async function* runFilesCopy(
         yield { type: 'output', name, value };
       yield failed(
         'permanent',
-        `copied ${counted(c.filesWritten, 'file')}, but the session log could not be written: ${logError}`,
+        `copied ${counted(c.filesWritten, 'file')}, but the session log '${logFile!.path}' could not be written: ${logError}`,
       );
       return;
     }
     yield { type: 'succeeded', outputs: outputsOf(c, where, measured(), width, logPath) };
   } catch (err) {
+    // Whatever unwound the copy once it was aborted, the outcome is the abort.
+    const terminal = signal.aborted
+      ? failFromError(err, signal)
+      : err instanceof Refusal
+        ? failed('permanent', err.message)
+        : err instanceof EventFailure
+          ? err.event
+          : failFromError(err, signal);
+    // A folder log ends with why the copy failed, as Delete's does: unlike the
+    // run log, the file is read without the node's error beside it.
+    if (logFile !== undefined && terminal.type === 'failed') {
+      log.add('Error', 'Copy', '', terminal.error);
+    }
     // The lines logged so far, ahead of the counters, as a rows Copy's are. A
     // failure keeps its own error, whatever the folder log's close reports.
     yield* endLog();
@@ -1350,10 +1372,10 @@ export async function* runFilesCopy(
       for (const [name, value] of Object.entries(outputsOf(c, where, measured(), width, logPath)))
         yield { type: 'output', name, value };
     }
-    // Whatever unwound the copy once it was aborted, the outcome is the abort.
-    if (signal.aborted) yield failFromError(err, signal);
-    else if (err instanceof Refusal) yield failed('permanent', err.message);
-    else if (err instanceof EventFailure) yield err.event;
-    else yield failFromError(err, signal);
+    yield terminal;
+  } finally {
+    // Closed on every terminal above; this only covers a consumer that stops
+    // iterating early. `close` answers a second call with its first.
+    void logFile?.close();
   }
 }

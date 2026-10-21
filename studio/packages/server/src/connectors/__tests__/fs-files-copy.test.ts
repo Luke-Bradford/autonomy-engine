@@ -1363,7 +1363,61 @@ describe('#1600 C6c-1a — session log to a folder', () => {
       { log: { root: logs } },
     );
     expect(last(events)).toMatchObject({ type: 'failed', kind: 'permanent' });
-    expect(await csv()).toEqual(['Level,Operation,Item,Message']);
+    // The file ends with why: it is read without the node's error beside it.
+    const error = (last(events) as { error: string }).error;
+    expect(error).toMatch(/already exists and If file exists is Fail/);
+    expect(await csv()).toEqual(['Level,Operation,Item,Message', `Error,Copy,,${error}`]);
+  });
+
+  it('keeps the log of a cancelled copy, ending with the cancel', async () => {
+    // Straight to the copy, as the abort test above: the adapter answers an
+    // abort it sees before dispatch, so only one landing mid-plan gets here.
+    await put('in/a.txt', 'a');
+    const ac = new AbortController();
+    ac.abort();
+    const ctx: ActivityContext = {
+      runId: 'run_1',
+      nodeId: 'n1',
+      attemptId: 'n1#0',
+      activityType: COPY_FILES_ACTIVITY_TYPE,
+      input: { sourcePath: 'in', ...toFolder },
+      connectionConfig: {},
+      sink: { kind: 'fs', connectionConfig: { roots: [dst], writable: true } },
+      logConnection: { kind: 'fs', connectionConfig: { roots: [logs], writable: true } },
+      signal: ac.signal,
+    };
+    const events: ActivityEvent[] = [];
+    for await (const ev of runFilesCopy(ctx, { roots: [src] })) events.push(ev);
+    expect(last(events)).toMatchObject({ type: 'failed', kind: 'cancelled' });
+    const rows = await csv();
+    expect(rows[0]).toBe('Level,Operation,Item,Message');
+    expect(rows.slice(1).map((r) => r.split(',').slice(0, 2).join(','))).toEqual(['Error,Copy']);
+    expect(await tree(dst)).toEqual([]);
+  });
+
+  it('stops before the next file once the log can no longer be written', async () => {
+    await put('in/a.txt', 'a');
+    await put('in/b.txt', 'b');
+    const spy = vi
+      .spyOn(SessionLogWriter.prototype, 'failure', 'get')
+      .mockReturnValueOnce(undefined)
+      .mockReturnValue('disk full');
+    try {
+      const events = await run(
+        { sourcePath: 'in', afterCopy: 'delete', ...toFolder },
+        { log: { root: logs }, sourceWritable: true },
+      );
+      expect(last(events)).toEqual({
+        type: 'failed',
+        kind: 'permanent',
+        error: 'the session log could not be written: disk full',
+      });
+      // One file was copied and its source deleted; the other is left alone.
+      expect(await tree(dst)).toEqual(['a.txt']);
+      expect(await tree(src)).toEqual(['in/b.txt']);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it.each([
@@ -1436,7 +1490,7 @@ describe('#1600 C6c-1a — session log to a folder', () => {
       expect(last(events)).toEqual({
         type: 'failed',
         kind: 'permanent',
-        error: 'copied 1 file, but the session log could not be written: disk full',
+        error: `copied 1 file, but the session log '${join(logs, 'runs', FILE)}' could not be written: disk full`,
       });
       expect(events).toContainEqual({ type: 'output', name: 'filesWritten', value: 1 });
       expect(events).toContainEqual({ type: 'output', name: 'logPath', value: null });

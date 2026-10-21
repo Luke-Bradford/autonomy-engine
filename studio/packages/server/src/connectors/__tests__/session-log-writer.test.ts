@@ -88,6 +88,21 @@ describe('SessionLogWriter', () => {
     expect(Date.now() - started).toBeLessThan(5000);
   });
 
+  it('closes once: a second close is answered by the first', async () => {
+    let closes = 0;
+    const fh = {
+      write: () => Promise.resolve(),
+      close: () => {
+        closes += 1;
+        return closes === 1 ? Promise.resolve() : Promise.reject(new Error('EBADF'));
+      },
+    };
+    const writer = SessionLogWriter.over(fh, '/logs/log.csv');
+    expect(await writer.close()).toEqual({ ok: true, path: '/logs/log.csv' });
+    expect(await writer.close()).toEqual({ ok: true, path: '/logs/log.csv' });
+    expect(closes).toBe(1);
+  });
+
   it('reports the first failed write at close, and writes nothing after it', async () => {
     const written: string[] = [];
     let calls = 0;

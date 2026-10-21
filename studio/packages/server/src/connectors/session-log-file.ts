@@ -13,10 +13,10 @@
  */
 import { createHash } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
-import { access, open, realpath } from 'node:fs/promises';
+import { access, open, realpath, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { SESSION_LOG_COLUMNS, type SessionLogLine } from '@autonomy-studio/shared';
-import { CSV_BOM, csvLine, toCsv } from '../util/csv.js';
+import { CSV_BOM, csvLine, toCsv, type CsvValue } from '../util/csv.js';
 import { O_NOFOLLOW, resolveWithinRootsOrMissing } from './confine.js';
 import { direntType, lstatOrNull } from './fs-select.js';
 import { atomicReplace, closeQuietly } from './fs-write.js';
@@ -59,10 +59,7 @@ export async function writeSessionLogFile(
   timeoutMs: number = SESSION_LOG_WRITE_TIMEOUT_MS,
 ): Promise<Written> {
   const path = join(dir, name);
-  const csv = toCsv(
-    SESSION_LOG_COLUMNS,
-    lines.map((l) => [l.timestamp, l.level, l.operation, l.item, l.message]),
-  );
+  const csv = toCsv(SESSION_LOG_COLUMNS, lines.map(sessionLogRow));
   const signal = AbortSignal.timeout(timeoutMs);
   const write = atomicReplace(path, tmpSuffix, signal, async (fh) => {
     await fh.writeFile(csv, { encoding: 'utf8', signal });
@@ -71,19 +68,19 @@ export async function writeSessionLogFile(
       ? { ok: true, path }
       : { ok: false, error: r.type === 'failed' ? r.error : 'the write failed' },
   );
-  let timer: NodeJS.Timeout | undefined;
-  const timedOut = new Promise<Written>((resolve) => {
-    timer = setTimeout(
-      () => resolve({ ok: false, error: `the write took longer than ${timeoutMs / 1000} s` }),
-      timeoutMs,
-    );
-  });
   try {
-    return await Promise.race([write, timedOut]);
-  } finally {
-    clearTimeout(timer);
+    return await bounded(write, timeoutMs, 'the write');
+  } catch (err) {
+    return { ok: false, error: errorText(err) };
   }
 }
+
+/** One line's cells, in `SESSION_LOG_COLUMNS`' order: both writers' row. */
+function sessionLogRow(line: SessionLogLine): CsvValue[] {
+  return [line.timestamp, line.level, line.operation, line.item, line.message];
+}
+
+const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 type Checked = { ok: true; dir: string } | { ok: false; error: string };
 
@@ -127,12 +124,16 @@ const SESSION_LOG_FLUSH_BYTES = 64 * 1024;
 
 type WriterOptions = { timeoutMs?: number; flushBytes?: number };
 
-/** `work`, or an error once `timeoutMs` passes. The loser is left to settle. */
-async function bounded<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
+/**
+ * `work`, or an error naming `what` once `timeoutMs` passes. The loser is left
+ * to settle: `open`, `write`, `sync`, `rename` and `close` take no signal, so a
+ * bound on a hung mount can only be a race.
+ */
+async function bounded<T>(work: Promise<T>, timeoutMs: number, what: string): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const timedOut = new Promise<never>((_, reject) => {
     timer = setTimeout(
-      () => reject(new Error(`the write took longer than ${timeoutMs / 1000} s`)),
+      () => reject(new Error(`${what} took longer than ${timeoutMs / 1000} s`)),
       timeoutMs,
     );
   });
@@ -166,6 +167,7 @@ export class SessionLogWriter {
   private bytes = 0;
   private chain: Promise<void> = Promise.resolve();
   private error: string | undefined;
+  private closing: Promise<Written> | undefined;
   private readonly timeoutMs: number;
   private readonly flushBytes: number;
 
@@ -191,35 +193,49 @@ export class SessionLogWriter {
       fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | O_NOFOLLOW,
       0o644,
     );
+    // A file this created and could not start is removed, never left empty.
+    const discard = () => unlink(path).catch(() => undefined);
     let fh: Awaited<typeof opening>;
     try {
-      fh = await bounded(opening, timeoutMs);
+      fh = await bounded(opening, timeoutMs, 'opening the log');
     } catch (err) {
-      // An open that finishes after the bound is closed, never leaked.
-      void opening.then(closeQuietly, () => undefined);
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      // An open that finishes after the bound is closed and removed, never leaked.
+      void opening.then(
+        (late) => closeQuietly(late).then(discard),
+        () => undefined,
+      );
+      return { ok: false, error: errorText(err) };
     }
     const writer = new SessionLogWriter(fh, path, opts);
     writer.buffer.push(CSV_BOM + csvLine(SESSION_LOG_COLUMNS));
     await writer.flush();
     if (writer.error !== undefined) {
       await closeQuietly(fh);
+      await discard();
       return { ok: false, error: writer.error };
     }
     return { ok: true, writer };
   }
 
-  /** A writer over `fh`, for a test that needs a write to hang or fail. */
+  /** A writer over `fh`: the test seam for a write that hangs or fails. */
   static over(fh: LogHandle, path: string, opts: WriterOptions = {}): SessionLogWriter {
     return new SessionLogWriter(fh, path, opts);
   }
 
   /** Buffer one line. Nothing is written here: `flushIfFull` and `close` write. */
   append(line: SessionLogLine): void {
-    if (this.error !== undefined) return;
-    const row = csvLine([line.timestamp, line.level, line.operation, line.item, line.message]);
+    if (this.error !== undefined || this.closing !== undefined) return;
+    const row = csvLine(sessionLogRow(line));
     this.buffer.push(row);
-    this.bytes += row.length;
+    this.bytes += Buffer.byteLength(row);
+  }
+
+  /**
+   * The first write that failed, once one has: the activity stops rather than
+   * carry on with a log it asked for and is no longer getting.
+   */
+  get failure(): string | undefined {
+    return this.error;
   }
 
   /** Write the buffer once it holds `flushBytes`. */
@@ -237,25 +253,34 @@ export class SessionLogWriter {
       if (this.error !== undefined) return;
       const writing = this.fh.write(data);
       try {
-        await bounded(writing, this.timeoutMs);
+        await bounded(writing, this.timeoutMs, 'the write');
       } catch (err) {
         // A write still under way when the bound passes is left to settle.
         writing.catch(() => undefined);
-        this.error = err instanceof Error ? err.message : String(err);
+        this.error = errorText(err);
       }
     });
     return this.chain;
   }
 
-  /** Write the rest and close the file: its path, or the first failure. */
-  async close(): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
+  /**
+   * Write the rest and close the file: its path, or the first failure. Once:
+   * a second call is answered by the first, so a terminal and a `finally`
+   * can both ask.
+   */
+  close(): Promise<Written> {
+    this.closing ??= this.closeOnce();
+    return this.closing;
+  }
+
+  private async closeOnce(): Promise<Written> {
     await this.flush();
     const closing = this.fh.close();
     try {
-      await bounded(closing, this.timeoutMs);
+      await bounded(closing, this.timeoutMs, 'closing the log');
     } catch (err) {
       closing.catch(() => undefined);
-      this.error ??= err instanceof Error ? err.message : String(err);
+      this.error ??= errorText(err);
     }
     return this.error === undefined
       ? { ok: true, path: this.path }

@@ -78,7 +78,8 @@ test.describe('#1600 C6 — Copy session log', () => {
       const pane = properties(page);
       await pane.getByRole('tab', { name: 'Settings', exact: true }).click();
       const level = pane.getByRole('combobox', { name: 'Session log' });
-      // Warnings is the default, written as nothing; there is no Write to until C6c.
+      // Warnings is the default, written as nothing; a rows Copy has no Write to
+      // until C6c-1b.
       await expect(level.locator('option:checked')).toHaveText('Warnings (default)');
       await expect(level.locator('option')).toHaveText([
         'Warnings (default)',

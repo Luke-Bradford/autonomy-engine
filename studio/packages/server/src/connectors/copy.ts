@@ -508,7 +508,7 @@ export async function* runCopyActivity(
     // the catch.
     if (logged) return;
     logged = true;
-    // No folder hint: Copy cannot write its log to a folder until C6c.
+    // No folder hint: a rows Copy cannot write its log to a folder until C6c-1b.
     yield* sessionLogRunEvents(log, { folderHint: false });
   }
 
