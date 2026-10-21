@@ -351,9 +351,10 @@ export async function* runCopyActivity(
     yield* copyRows(ctx, io, held);
   } finally {
     // #1600 OR41 C6c-1b — every terminal closes the folder log; this covers a
-    // consumer that stops iterating early. `close` answers a second call with
-    // its first.
-    void held.log?.close();
+    // consumer that stops iterating early, and waits for it (each write and the
+    // close have their own bound). `close` answers a second call with its
+    // first, and reports a failure rather than throwing it.
+    await held.log?.close();
   }
 }
 
