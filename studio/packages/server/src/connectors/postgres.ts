@@ -632,7 +632,7 @@ const SNAPSHOT_ID = /^[0-9A-F]+(-[0-9A-F]+)*$/;
  * writes. Each reader is one more session on the server: a degree of N holds
  * N + 1 source sessions while it reads.
  */
-async function planPostgresPartitions(
+export async function planPostgresPartitions(
   read: PostgresDatasetRead,
   partition: PartitionedRead,
 ): Promise<PartitionPlan> {
