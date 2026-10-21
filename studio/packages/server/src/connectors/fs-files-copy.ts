@@ -43,6 +43,7 @@ import {
   makeTmpSuffix,
   streamInto,
 } from './fs-write.js';
+import { runPool } from './run-pool.js';
 import type { ActivityContext, ActivityEvent } from './types.js';
 import { FS_STREAM_CHUNK_BYTES } from '../limits.js';
 
@@ -578,6 +579,7 @@ async function writeTarget(
   log: SessionLog,
   openOrSkip: (s: SourceFile) => Promise<OpenedSource | undefined>,
   verify: boolean,
+  probed: readonly SourceFile[] | undefined,
 ): Promise<'written' | 'exists' | 'skipped' | Inconsistent> {
   let read = 0;
   // Each source's bytes, for its FileRead line.
@@ -585,18 +587,10 @@ async function writeTarget(
   // #1600 C6d-2 — a merge first opens each source and closes it again, so a
   // skipped one is known before the file's bits are set from the files it
   // holds. One lost to a race after that is skipped too, leaving the merge's
-  // bits narrower than they need be, never wider.
-  let sources = target.sources;
-  if (sources.length > 1) {
-    const kept: SourceFile[] = [];
-    for (const s of sources) {
-      const probe = await openOrSkip(s);
-      if (probe === undefined) continue;
-      await closeQuietly(probe.fh);
-      kept.push(s);
-    }
-    sources = kept;
-  }
+  // bits narrower than they need be, never wider. `probed` is that list when
+  // the caller has already made it (#1777).
+  let sources = probed ?? target.sources;
+  if (probed === undefined && sources.length > 1) sources = await openable(sources, openOrSkip);
   if (sources.length === 0) return 'skipped';
   // Set when every source was skipped mid-write: no file is landed then.
   let nothingRead = false;
@@ -673,6 +667,21 @@ async function writeTarget(
       : `wrote ${counted(read, 'byte')} merged from ${counted(reads.length, 'file')}`,
   );
   return 'written';
+}
+
+/** The sources that still open, each closed again; a skip is logged and counted by `openOrSkip`. */
+async function openable(
+  sources: readonly SourceFile[],
+  openOrSkip: (s: SourceFile) => Promise<OpenedSource | undefined>,
+): Promise<SourceFile[]> {
+  const kept: SourceFile[] = [];
+  for (const s of sources) {
+    const probe = await openOrSkip(s);
+    if (probe === undefined) continue;
+    await closeQuietly(probe.fh);
+    kept.push(s);
+  }
+  return kept;
 }
 
 interface OpenedSource {
@@ -1054,6 +1063,17 @@ export async function* runFilesCopy(
         : await materialize(moveDir.base, moveDir.missing, changed, made);
     const copyTarget = async (t: Target): Promise<void> => {
       if (signal.aborted) throw new Error('file copy aborted');
+      // #1777 — when this target's sink folder does not exist yet, its sources
+      // are opened first, so one whose every source is skipped as missing or
+      // forbidden makes no folder it would leave empty. Only then: a folder
+      // already there, or made by this run, costs no second open. A source
+      // lost between this open and the copy's own can still leave one.
+      const dir = join(sinkBase, ...t.dirs);
+      let probed: SourceFile[] | undefined;
+      if (t.dirs.length > 0 && !made.has(dir) && (await lstatOrNull(dir)) === null) {
+        probed = await openable(t.sources, openOrSkip);
+        if (probed.length === 0) return;
+      }
       const parent = await materialize(sinkBase, t.dirs, changed, made);
       const finalPath = join(parent, t.name);
       const noClobber = cfg.ifExists !== 'overwrite';
@@ -1111,6 +1131,7 @@ export async function* runFilesCopy(
           log,
           openOrSkip,
           cfg.validateDataConsistency,
+          probed,
         );
         if (outcome === 'skipped') return;
         if (typeof outcome === 'object') {
@@ -1178,27 +1199,14 @@ export async function* runFilesCopy(
       }
     };
     // #1600 OR41 C6f-2 — Degree of copy parallelism: workers sharing one cursor
-    // over the targets (Delete's pool). The first failure stops new work; the
-    // copies already under way finish and are counted, then it is rethrown.
+    // over the targets (`runPool`, #1782). The first failure stops new work;
+    // the copies already under way finish and are counted, then it is rethrown.
     // A merge is one target, so it is one copy. At 1 this is the loop it was.
     width = Math.min(cfg.parallelCopies, targets.length);
-    let next = 0;
-    let failure: { readonly err: unknown } | undefined;
-    const worker = async () => {
-      while (failure === undefined && next < targets.length) {
-        const t = targets[next]!;
-        next += 1;
-        try {
-          await copyTarget(t);
-        } catch (err) {
-          failure ??= { err };
-        }
-      }
-    };
-    await Promise.all(Array.from({ length: width }, worker));
-    // The loop does not test the signal: a target started after an abort
-    // throws it from its own check, so an abort is never a quiet end of work.
-    // At more than one copy, the failure kept is the first to happen.
+    // No `stop`: a target started after an abort throws it from its own
+    // check, so an abort is never a quiet end of work. At more than one copy,
+    // the failure kept is the first to happen.
+    const failure = await runPool(targets, width, copyTarget);
     if (failure !== undefined) throw failure.err;
     // Nothing that can throw sits between the lines and the success, so they
     // are yielded once (a rows Copy needs a guard for that; this does not).

@@ -53,6 +53,7 @@ import {
 } from './fs-select.js';
 import { walkFolder, type WalkedEntry } from './fs-walk.js';
 import { failFromError } from './fs-write.js';
+import { runPool } from './run-pool.js';
 import { sessionLogFileName, writeSessionLogFile } from './session-log-file.js';
 import type { ActivityEvent } from './types.js';
 
@@ -320,42 +321,37 @@ export async function* runDelete(
     return within(base, await realpath(dirname(e.abs)));
   };
 
-  let failure: unknown;
   reportOutputs = true;
   try {
-    // Max concurrent deletes: that many workers take the next file in turn.
-    // The first error stops every worker taking another; the deletes already
-    // under way finish and are counted.
-    let next = 0;
-    const worker = async () => {
-      while (failure === undefined && !signal.aborted && next < files.length) {
-        const e = files[next]!;
-        next += 1;
-        try {
-          if (!(await stillPlanned(e, 'file'))) {
-            log.add('Warning', 'FileSkip', e.name, 'skipped: no longer the file chosen');
-            continue;
-          }
-          await unlink(e.abs);
-          counts.filesDeleted += 1;
-          log.add('Info', 'FileDelete', e.name, 'deleted');
-        } catch (err) {
-          // Gone since it was planned: someone else deleted it.
-          if (isMissingErrno(err)) {
-            log.add('Warning', 'FileSkip', e.name, `skipped: ${REMOVED_BY_SOMEONE_ELSE}`);
-            continue;
-          }
-          if (failure === undefined) {
-            failure = err;
-            failedItem = e.name;
-            failedMessage = errorText(err);
-          }
+    // Max concurrent deletes: that many workers take the next file in turn
+    // (`runPool`, #1782). The first error stops every worker taking another;
+    // the deletes already under way finish and are counted. An abort stops
+    // the taking and is reported below, after the pool.
+    const deleteFile = async (e: Planned): Promise<void> => {
+      try {
+        if (!(await stillPlanned(e, 'file'))) {
+          log.add('Warning', 'FileSkip', e.name, 'skipped: no longer the file chosen');
+          return;
         }
+        await unlink(e.abs);
+        counts.filesDeleted += 1;
+        log.add('Info', 'FileDelete', e.name, 'deleted');
+      } catch (err) {
+        // Gone since it was planned: someone else deleted it.
+        if (isMissingErrno(err)) {
+          log.add('Warning', 'FileSkip', e.name, `skipped: ${REMOVED_BY_SOMEONE_ELSE}`);
+          return;
+        }
+        throw err;
       }
     };
     const width = Math.min(input.maxConcurrentConnections, Math.max(files.length, 1));
-    await Promise.all(Array.from({ length: width }, worker));
-    if (failure !== undefined) throw failure;
+    const failure = await runPool(files, width, deleteFile, () => signal.aborted);
+    if (failure !== undefined) {
+      failedItem = failure.item.name;
+      failedMessage = errorText(failure.err);
+      throw failure.err;
+    }
     for (const f of folders) {
       if (signal.aborted) break;
       try {

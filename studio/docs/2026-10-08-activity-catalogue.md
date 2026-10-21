@@ -355,7 +355,8 @@ Mapping   [Import schemas] [+ New mapping] [Clear] [Reset]                      
   - A file is skipped only before it is read, at its open, listing or stat. ADF can skip one part-way ("skipped after read N bytes"); here an error mid-read fails the copy, which leaves no partial file to explain.
   - ADF lists File System among the stores for *fileMissing* but not *fileForbidden*. Studio's file connection offers both.
   - *Skip missing files* and *Skip forbidden files* are one switch each, not ADF's `skipErrorFile` object. *Data inconsistency* is C6e-2's *Skip inconsistent files* (below), and *Invalid file name* applies only to ADLS Gen2 and S3, which studio does not have.
-- **Residual:** a preserve-hierarchy copy whose only file in a subfolder is skipped as it is opened leaves that subfolder empty in the sink, because the folders are made before the file is opened (#1777). A file C6e-2 skips as inconsistent does the same.
+- **Empty sink subfolders (#1777, fixed):** when a target's sink folder does not exist yet, its sources are opened before the folder is made, so a target whose every source is skipped as missing or forbidden makes no folder. A folder that is already there, or that this run has made, costs no second open.
+- **Residual:** a source lost between that first open and the copy's own still leaves its new subfolder empty, and so does a file C6e-2 skips as inconsistent, because it is skipped only after it is read. No data is affected: nothing is written and the source stays where it is.
 - `CATALOG_VERSION` 59→60: a pre-C6d-2 build strips both keys and fails a copy this build finishes.
 
 **Built (C6e-1, 2026-10-20):** a rows Copy's *Verify after copy*, on the Settings tab between *Skip incompatible rows* (on the same row) and the Session log, the Settings table's order ([data consistency](https://learn.microsoft.com/azure/data-factory/copy-activity-data-consistency): `validateDataConsistency`, default false).
@@ -399,7 +400,7 @@ Mapping   [Import schemas] [+ New mapping] [Clear] [Reset]                      
 - **Residual:**
   - A file system whose modified time is coarse (whole seconds) can miss a same-size rewrite made within one tick.
   - A change made after the check and before the rename lands, a window of one fsync. After copy Delete or Move re-checks the source then, and Keep does not.
-  - #1777's empty subfolder, as for C6d-2's skips.
+  - A skipped file can leave its new sink subfolder empty, because it is judged after it is read (the C6d-2 residual above).
 - No new output: the `consistency` output stays with C6f's complete outputs, for both modes (built in C6f-1, below).
 - `CATALOG_VERSION` 61→62: a pre-C6e-2 build strips both keys and lands a file this build fails or skips.
 
