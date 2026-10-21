@@ -159,6 +159,31 @@ describe('M1 #1104 — the paired binding in the readiness gates', () => {
     expect(unreadyConnectionsForVersion(db, 'local', vOk, pairedCatalog())).toEqual([]);
   });
 
+  it('#1600 OR41 C6c-1a — reports an unready LOG end where the catalog declares one', () => {
+    const { db } = freshDb();
+    const good = readyConnection(db);
+    const log = needsSecretConnection(db);
+    // A real Copy · Files as-is node, so the write gate accepts its log end; the
+    // gate under test reads the override catalog's entry for its type.
+    const node: Node = {
+      ...pairNode('n1', good, good),
+      type: 'copy_files',
+      config: { sourcePath: 'in', logTo: 'folder', logFolder: 'logs' },
+    };
+    node.connectionIds = { ...node.connectionIds!, log };
+    const vId = versionWithNodes(db, 'local', [node]);
+    const entry = { ...pairedCatalog().get('test_copy')!, type: 'copy_files' };
+    const logged: CatalogOverride = new Map([
+      ['copy_files', { ...entry, logConnectionKinds: ['ollama'] }],
+    ]);
+    expect(unreadyConnectionsForVersion(db, 'local', vId, logged)).toEqual([
+      { connectionId: log, reason: 'needs_secret' },
+    ]);
+    // Inert, as dispatch leaves it, where the catalog declares no log connection.
+    const unlogged: CatalogOverride = new Map([['copy_files', entry]]);
+    expect(unreadyConnectionsForVersion(db, 'local', vId, unlogged)).toEqual([]);
+  });
+
   it('SKIPS a ${} -dynamic end, exactly as the singular scan does', () => {
     // The end resolves at dispatch, so it is unresolvable here. Without the skip
     // `getConnection` would be handed a raw template, return null, and report a

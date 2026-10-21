@@ -130,6 +130,13 @@ export interface ActivityContext {
    */
   sink?: { kind: ConnectionKind; connectionConfig: Record<string, unknown> };
   /**
+   * #1600 OR41 C6c-1a — the session log's own connection
+   * (`Node.connectionIds.log`), resolved and readiness-gated as `sink` is, for
+   * an activity whose catalog entry declares `logConnectionKinds`. OMITTED when
+   * the node binds none, `sink`'s rule. No secret: only file systems qualify.
+   */
+  logConnection?: { kind: ConnectionKind; connectionConfig: Record<string, unknown> };
+  /**
    * M5 slice 4a (#1130, data-movement spec §3) — the resolved DATASETS this
    * dispatch addresses, for an activity whose catalog entry declares
    * `datasetKinds`. A connection says WHICH STORE; a dataset says WHERE IN IT.
