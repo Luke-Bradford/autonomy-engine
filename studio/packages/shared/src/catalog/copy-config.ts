@@ -630,9 +630,8 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
       partitionOption: presented(copyPartitionOptionSchema.default('none'), {
         title: 'Partition option',
         description:
-          'Dynamic range reads a PostgreSQL table as ranges of an integer column, read at once ' +
-          'by Degree of copy parallelism readers that share one snapshot. The rows still land ' +
-          'in one transaction, in no fixed order. None reads with one reader.',
+          'Dynamic range reads a PostgreSQL table in ranges of an integer column, at once. ' +
+          'The rows land in one transaction, in no fixed order.',
         options: optionTitles(copyPartitionOptionSchema, {
           none: 'None',
           dynamicRange: 'Dynamic range',

@@ -43,7 +43,7 @@ describe.skipIf(LIVE_HOST === undefined)('Dynamic range against a live postgres'
   const TABLE = 'c6f3_orders';
   beforeAll(async () => {
     await admin(async (c) => {
-      await c.query(`DROP TABLE IF EXISTS ${TABLE}, c6f3_empty, c6f3_small`);
+      await c.query(`DROP TABLE IF EXISTS ${TABLE}, c6f3_empty, c6f3_small, c6f3_quoted`);
       await c.query(`CREATE TABLE ${TABLE} (id bigint, name text)`);
       // 1..100, three NULL ids, and two ids outside the bounds the tests author.
       await c.query(
@@ -54,10 +54,14 @@ describe.skipIf(LIVE_HOST === undefined)('Dynamic range against a live postgres'
       await c.query('CREATE TABLE c6f3_empty (id integer)');
       await c.query('CREATE TABLE c6f3_small (id smallint, name text)');
       await c.query(`INSERT INTO c6f3_small VALUES (1, 'a'), (2, 'b'), (3, 'c')`);
+      await c.query('CREATE TABLE c6f3_quoted ("OrderId" integer, name text)');
+      await c.query(`INSERT INTO c6f3_quoted SELECT g, 'q' || g FROM generate_series(1, 9) g`);
     });
   });
   afterAll(async () => {
-    await admin((c) => c.query(`DROP TABLE IF EXISTS ${TABLE}, c6f3_empty, c6f3_small`));
+    await admin((c) =>
+      c.query(`DROP TABLE IF EXISTS ${TABLE}, c6f3_empty, c6f3_small, c6f3_quoted`),
+    );
   });
 
   const read = (table: string, over: Record<string, unknown> = {}) => ({
@@ -171,6 +175,50 @@ describe.skipIf(LIVE_HOST === undefined)('Dynamic range against a live postgres'
       void _batch;
       break;
     }
+    await plan.close();
+    let after = await sessions();
+    for (let i = 0; i < 20 && after > before; i += 1) {
+      await new Promise((r) => setTimeout(r, 50));
+      after = await sessions();
+    }
+    expect(after).toBe(before);
+  });
+
+  it('quotes the partition column, keeping its case, and refuses a name that is not bare', async () => {
+    const got = await namesOf('c6f3_quoted', { column: 'OrderId', degree: 3 });
+    expect(got.partitions).toBe(3);
+    expect(got.names).toHaveLength(9);
+    await expect(
+      planPostgresPartitions(read('c6f3_quoted'), { column: 'Order Id', degree: 3 }),
+    ).rejects.toMatchObject({ kind: 'permanent' });
+  });
+
+  it('a cancel mid-read fails cancelled and leaves no session behind', async () => {
+    const sessions = () =>
+      admin(async (c) =>
+        Number(
+          (
+            await c.query(
+              `SELECT count(*) AS n FROM pg_stat_activity
+               WHERE datname = current_database() AND pid <> pg_backend_pid() AND backend_type = 'client backend'`,
+            )
+          ).rows[0].n,
+        ),
+      );
+    const before = await sessions();
+    const cancel = new AbortController();
+    const plan = await planPostgresPartitions(read(TABLE, { signal: cancel.signal }), {
+      column: 'id',
+      degree: 4,
+    });
+    await expect(
+      (async () => {
+        for await (const _batch of plan.batches) {
+          void _batch;
+          cancel.abort();
+        }
+      })(),
+    ).rejects.toMatchObject({ kind: 'cancelled' });
     await plan.close();
     let after = await sessions();
     for (let i = 0; i < 20 && after > before; i += 1) {

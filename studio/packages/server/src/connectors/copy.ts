@@ -195,7 +195,7 @@ function copyOutputs(
  * #1600 OR41 C6f-3 — Dynamic range on a source whose store cannot read ranges
  * at once (SQLite, which reads on one thread, and the file formats).
  */
-export const PARTITION_NEEDS_DATABASE =
+export const PARTITION_NEEDS_POSTGRES =
   'Partition option Dynamic range reads a PostgreSQL table; this source is read with one reader (set Partition option to None)';
 
 const logWriteFailure = (error: string) =>
@@ -678,10 +678,12 @@ async function* copyRows(
   let usedParallelCopies = 1;
   if (parsed.data.partitionOption === 'dynamicRange') {
     if (io.planPartitions === undefined) {
-      yield* refuse(failed('permanent', PARTITION_NEEDS_DATABASE));
+      yield* refuse(failed('permanent', PARTITION_NEEDS_POSTGRES));
       return;
     }
     const column = parsed.data.partitionColumnName;
+    // Unreachable past the dispatch schema (`copyPartitionIssues` refuses it);
+    // it narrows the type, and says the same sentence save does.
     if (column === undefined) {
       yield* refuse(failed('permanent', 'Dynamic range needs a partition column'));
       return;
