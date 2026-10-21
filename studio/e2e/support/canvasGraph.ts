@@ -618,6 +618,29 @@ export async function selectEdge(page: Page, index = 0): Promise<void> {
 }
 
 /**
+ * Agreeing probes that make a settle. Two reads that merely coincide are not one
+ * — and since the first agreement costs no time (see `edgeMidpoint`), this must be at least 3
+ * for the enforced window to span more than a single interval.
+ */
+const SETTLE_QUIET_READS = 3;
+/**
+ * Milliseconds between probes. `(SETTLE_QUIET_READS - 1)` of these is the
+ * enforced quiet window, and THAT is the figure that must exceed the layout —
+ * not `SETTLE_QUIET_READS` of them.
+ */
+const SETTLE_INTERVAL_MS = 100;
+
+/** Where the pointer is parked so nothing is hovered while the point is read. */
+const NEUTRAL_PANE_OFFSET = 30;
+/** How long the pane is waited for before saying it is not there. */
+const PANE_TIMEOUT_MS = 5_000;
+/**
+ * How long a fanned node is waited for to close. Far above the fan's close
+ * grace (`CLOSE_DELAY_MS`), so reaching it means something holds the fan open.
+ */
+const FAN_TIMEOUT_MS = 5_000;
+
+/**
  * The screen point at the middle of an edge's rendered path, once it has STOPPED
  * MOVING.
  *
@@ -686,24 +709,24 @@ export async function selectEdge(page: Page, index = 0): Promise<void> {
  * the state that is measured and the state that is clicked the same state. The
  * neutral point is `deselect`'s: 30px into the pane, which this file already
  * relies on being empty canvas.
+ *
+ * THEN WAIT FOR EVERY FAN TO CLOSE, because parking the pointer starts the
+ * collapse but does not finish it (#1687). A fan closes on a grace timer
+ * (`CLOSE_DELAY_MS`, 200ms), and the connect gesture's pointer left the source
+ * node only moments before. So the source can hold its fanned ports, perfectly
+ * still, for as long as the quiet window lasts. The settle then agrees on the
+ * FANNED point and the click arrives after the collapse. MEASURED: the click
+ * landed at the fanned midpoint, 30px above the resting curve, while
+ * `[data-ports-expanded]` had already turned false (2026-10-22, a diagnostic
+ * run of `edge-typing.spec.ts`). A quiet window is a guess about the timer's
+ * length, while the attribute IS the fan's state, so the wait reads that. The
+ * settle that follows still covers the re-measure after the attribute flips.
+ *
+ * Only the pointer is cleared, never focus. A node fanned by keyboard focus
+ * alone stays fanned until focus leaves, and the wait fails on it after
+ * `FAN_TIMEOUT_MS`. A mouse-focused node does not count: parking the pointer
+ * fires its `pointerleave`, which arms the close whatever holds focus.
  */
-/**
- * Agreeing probes that make a settle. Two reads that merely coincide are not one
- * — and since the first agreement costs no time (above), this must be at least 3
- * for the enforced window to span more than a single interval.
- */
-const SETTLE_QUIET_READS = 3;
-/**
- * Milliseconds between probes. `(SETTLE_QUIET_READS - 1)` of these is the
- * enforced quiet window, and THAT is the figure that must exceed the layout —
- * not `SETTLE_QUIET_READS` of them.
- */
-const SETTLE_INTERVAL_MS = 100;
-
-/** Where the pointer is parked so nothing is hovered while the point is read. */
-const NEUTRAL_PANE_OFFSET = 30;
-/** How long the pane is waited for before saying it is not there. */
-const PANE_TIMEOUT_MS = 5_000;
 
 export async function edgeMidpoint(page: Page, index = 0): Promise<{ x: number; y: number }> {
   const pane = await page
@@ -718,6 +741,10 @@ export async function edgeMidpoint(page: Page, index = 0): Promise<{ x: number; 
   if (pane === null)
     throw new Error('no React Flow pane to park the pointer on before reading an edge midpoint');
   await page.mouse.move(pane.x + NEUTRAL_PANE_OFFSET, pane.y + NEUTRAL_PANE_OFFSET);
+  await expect(
+    page.locator('[data-ports-expanded="true"]'),
+    'a node still has its ports fanned, so its edges are not at rest (keyboard focus holds a fan open; blur it first)',
+  ).toHaveCount(0, { timeout: FAN_TIMEOUT_MS });
 
   const read = () =>
     page.evaluate((i) => {
