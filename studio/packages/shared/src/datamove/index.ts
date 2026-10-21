@@ -10,6 +10,7 @@
 export * from './address.js';
 export * from './coerce.js';
 export * from './copy-automap.js';
+export * from './copy-measure.js';
 export * from './dataset-references.js';
 export * from './delimited.js';
 export * from './mapping-agreement.js';

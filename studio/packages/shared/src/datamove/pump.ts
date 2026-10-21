@@ -27,7 +27,8 @@ import { indexSourceColumns, resolveSourceColumn, SOURCE_DRIFT_MESSAGES } from '
  *
  *   - a per-ROW failure is about DATA: this cell said `"1.5"` where an integer
  *     was declared. §6.2 fails that row, names the reason, and the copy carries
- *     on. `rowsFailed` is a declared output precisely so this is visible.
+ *     on. `rowsSkipped` (and its old name `rowsFailed`) is a declared output
+ *     precisely so this is visible.
  *   - a copy-wide REFUSAL is about the MAPPING: an empty mapping, a source
  *     column that does not exist, a case-insensitive match with two candidates,
  *     a constant that cannot coerce. Every one of those is invariant across
