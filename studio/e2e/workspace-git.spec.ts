@@ -131,6 +131,12 @@ test.afterAll(async ({ request }) => {
  * three overlapping ones of which only the newest is applied, so the default
  * 5 s timeout fails while the product is still right. A tolerance until #1689
  * single-flights the sync; not the fix.
+ *
+ * #969 — the first reading after *Check for incoming* waits on it too: the
+ * check fetches the branch and builds an import preview over the same whole
+ * workspace, so it costs what a sync costs. It failed the 5 s default at each
+ * of its first readings in CI (#1784's three attempts and main's), and passed
+ * in 16 s run alone.
  */
 const SYNC_SETTLES = { timeout: 20_000 };
 
@@ -142,7 +148,8 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   // against the 30s default once #1476 slice 6 added a commit, a push and a
   // check (measured from the trace: the last assertion began at 29.6s).
   // 150 s, not 90: up to six readings wait on a CI git sync (`SYNC_SETTLES`, #1689).
-  test.setTimeout(150_000);
+  // 210 s, not 150: four more wait on a check for incoming (#969).
+  test.setTimeout(210_000);
   const problems = collectPageProblems(page);
 
   /**
@@ -259,7 +266,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await incoming.getByRole('button', { name: 'Check for incoming' }).click();
 
   // Never imported before, so there is no base to compare the branch against.
-  await expect(incoming).toContainText('never imported from main');
+  await expect(incoming).toContainText('never imported from main', SYNC_SETTLES);
   const previewRows = incoming.getByRole('table').getByRole('row');
   await expect(previewRows.filter({ hasText: pipelineName })).toContainText('unchanged');
 
@@ -287,7 +294,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
 
   // ── and the workspace is now measurably up to date, not merely unchanged ───
   await incoming.getByRole('button', { name: 'Check for incoming' }).click();
-  await expect(incoming).toContainText('Up to date with main.');
+  await expect(incoming).toContainText('Up to date with main.', SYNC_SETTLES);
 
   /**
    * ── publish (#979, U18 slice 3) ────────────────────────────────────────────
@@ -312,7 +319,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await incoming.getByRole('button', { name: 'Check for incoming' }).click();
   await expect(
     incoming.getByRole('table').getByRole('row').filter({ hasText: publishName }),
-  ).toContainText('new here');
+  ).toContainText('new here', SYNC_SETTLES);
   await expect(incoming.getByRole('heading', { name: 'Will be archived' })).toHaveCount(0);
   await withConfirm(page, () => incoming.getByRole('button', { name: 'Import' }).click());
   // `(new version)` is the part that matters: it says a version was MINTED, and
@@ -684,7 +691,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   pushNewPipelineFile(repoDir, `${pipelineName}-later`);
   await openGitPage(page);
   await incoming.getByRole('button', { name: 'Check for incoming' }).click();
-  await expect(incoming).toContainText(`${pipelineName}-later`);
+  await expect(incoming).toContainText(`${pipelineName}-later`, SYNC_SETTLES);
   await openExistingCanvas(page, publishName);
   await expect(gitPart).toHaveText(/ · behind main — pull first\./, SYNC_SETTLES);
   await expect(gitPart).toHaveAttribute('data-tone', 'warning');
