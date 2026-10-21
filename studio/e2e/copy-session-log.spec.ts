@@ -21,6 +21,7 @@ import { seedConnection, seedDataset } from './support/seedResources';
  * Settings tab and run for real against a SQLite file: a row that cannot be
  * converted is skipped, and the run log says which, whole, in the Monitor's
  * Logs tab. C6b — the same, on Copy · Files as-is against a file connection.
+ * C6c — either mode's log written to a folder on a log connection of its own.
  */
 test.describe('#1600 C6 — Copy session log', () => {
   test('Everything, set on the Settings tab, logs the skipped row and the batch in the Logs tab', async ({
@@ -78,8 +79,7 @@ test.describe('#1600 C6 — Copy session log', () => {
       const pane = properties(page);
       await pane.getByRole('tab', { name: 'Settings', exact: true }).click();
       const level = pane.getByRole('combobox', { name: 'Session log' });
-      // Warnings is the default, written as nothing; a rows Copy has no Write to
-      // until C6c-1b.
+      // Warnings is the default, written as nothing.
       await expect(level.locator('option:checked')).toHaveText('Warnings (default)');
       await expect(level.locator('option')).toHaveText([
         'Warnings (default)',
@@ -87,7 +87,14 @@ test.describe('#1600 C6 — Copy session log', () => {
         'Warnings',
         'Everything',
       ]);
-      await expect(pane.getByRole('combobox', { name: 'Write to' })).toHaveCount(0);
+      // C6c-1b — Write to is drawn while the log is on, at the run log, which
+      // needs no log connection.
+      await expect(
+        pane.getByRole('combobox', { name: 'Write to' }).locator('option:checked'),
+      ).toHaveText('Run log (default)');
+      await expect(pane.getByRole('combobox', { name: 'Log connection', exact: true })).toHaveCount(
+        0,
+      );
       const box = await level.boundingBox();
       expect(box, 'Session log has a box').not.toBeNull();
       expect(box!.y + box!.height).toBeLessThanOrEqual(900);
@@ -442,6 +449,130 @@ test.describe('#1600 C6 — Copy session log', () => {
       expect(
         events.filter((e) => e.type === 'node.output' && e.payload['name'] === 'sessionLog'),
       ).toEqual([]);
+
+      await expectQuiet(page, problems);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(logs, { recursive: true, force: true });
+    }
+  });
+
+  test('Write to Folder writes a rows Copy log through its own log connection', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const problems = collectPageProblems(page);
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'e2e-1600-c6c1b-')));
+    const logs = realpathSync(mkdtempSync(join(tmpdir(), 'e2e-1600-c6c1b-logs-')));
+    try {
+      mkdirSync(join(logs, 'runs'));
+      const dbPath = join(root, 'shop.db');
+      const db = new DatabaseSync(dbPath);
+      db.exec(`
+        CREATE TABLE incoming (id INTEGER, qty TEXT);
+        INSERT INTO incoming VALUES (1, '5'), (2, 'lots'), (3, '7');
+        CREATE TABLE orders (id INTEGER, qty INTEGER);
+      `);
+      db.close();
+      const conn = await seedConnection(page, {
+        name: 'e2e 1600 c6c1b shop',
+        kind: 'sqlite',
+        config: { roots: [root], path: dbPath, writable: true },
+      });
+      const logStore = await seedConnection(page, {
+        name: 'e2e 1600 c6c1b logs',
+        kind: 'fs',
+        config: { roots: [logs], writable: true },
+      });
+      const sink = await seedDataset(page, {
+        name: 'e2e 1600 c6c1b orders',
+        kind: 'table',
+        connectionId: conn,
+        config: { table: 'orders' },
+        columns: [
+          { name: 'id', type: 'integer', nullable: true },
+          { name: 'qty', type: 'integer', nullable: true },
+        ],
+      });
+      const pipelineId = await openSeededCanvas(page, 'e2e 1600 c6c1b rows log folder', {
+        nodes: [
+          {
+            id: 'copy1',
+            type: 'copy',
+            config: {
+              mapping: [
+                { source: 'id', sink: 'id', type: 'integer' },
+                { source: 'qty', sink: 'qty', type: 'integer' },
+              ],
+            },
+            connectionIds: { source: conn, sink: conn },
+            datasetIds: { sink },
+            inlineDatasets: { source: { kind: 'table', config: { table: 'incoming' } } },
+            position: { x: 0, y: 0 },
+          },
+        ],
+        edges: [],
+      });
+
+      await nodeById(page, 'copy1').click();
+      const pane = properties(page);
+      await pane.getByRole('tab', { name: 'Settings', exact: true }).click();
+      const logPicker = pane.getByRole('combobox', { name: 'Log connection', exact: true });
+      await expect(logPicker).toHaveCount(0);
+      await pane.getByRole('combobox', { name: 'Write to' }).selectOption({ label: 'Folder' });
+      const folder = pane.getByRole('textbox', { name: 'Log folder', exact: true });
+      await folder.fill('runs');
+      await pane.getByRole('button', { name: 'Apply config' }).click();
+      await pickConnection(page, 'Log connection', { id: logStore });
+      await expect(logPicker).toHaveValue(/^e2e 1600 c6c1b logs/);
+
+      // Measured at 1440x900: the picker sits directly above the Log folder, and
+      // both fit the docked pane.
+      const pickerBox = await logPicker.boundingBox();
+      const folderBox = await folder.boundingBox();
+      expect(pickerBox, 'Log connection has a box').not.toBeNull();
+      expect(folderBox, 'Log folder has a box').not.toBeNull();
+      expect(pickerBox!.y + pickerBox!.height).toBeLessThanOrEqual(folderBox!.y);
+      expect(folderBox!.y + folderBox!.height).toBeLessThanOrEqual(900);
+
+      await page.getByRole('button', { name: 'Save version' }).click();
+      await expect(page.locator('.notice')).toHaveText('Saved v2.');
+      const versions = (await (
+        await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`)
+      ).json()) as { id: string; version: number; nodes: Record<string, unknown>[] }[];
+      const latest = versions.sort((a, b) => b.version - a.version)[0]!;
+      const copy = latest.nodes.find((n) => n['id'] === 'copy1')!;
+      expect(copy['connectionIds']).toEqual({ source: conn, sink: conn, log: logStore });
+      expect(copy['config']).toMatchObject({ logTo: 'folder', logFolder: 'runs' });
+
+      const runId = await fireAndSettle(page, latest.id, 'e2e 1600 c6c1b');
+      const events = (await (
+        await page.request.get(`/api/runs/${encodeURIComponent(runId)}/events`)
+      ).json()) as { type: string; payload: Record<string, unknown> }[];
+      const done = events.find((e) => e.type === 'node.succeeded');
+      expect(done, `events: ${JSON.stringify(events.map((e) => e.type))}`).toBeDefined();
+      const [file] = readdirSync(join(logs, 'runs'));
+      expect(file).toMatch(/^session-log\.[^/]+\.csv$/);
+      const logPath = join(logs, 'runs', file!);
+      expect((done!.payload['outputs'] as Record<string, unknown>)['logPath']).toBe(logPath);
+      // The skipped row is in the file, at Warnings, and nothing in the run log.
+      const rows = readFileSync(logPath, 'utf8')
+        .split('\r\n')
+        .slice(0, -1)
+        .map((r) => r.slice(r.indexOf(',') + 1));
+      expect(rows).toEqual([
+        'Level,Operation,Item,Message',
+        expect.stringMatching(/^Warning,TabularRowSkip,row 2,not_a_number: into 'qty': /),
+      ]);
+      expect(
+        events.filter((e) => e.type === 'node.output' && e.payload['name'] === 'sessionLog'),
+      ).toEqual([]);
+      const check = new DatabaseSync(dbPath);
+      expect(check.prepare('SELECT id, qty FROM orders ORDER BY id').all()).toEqual([
+        { id: 1, qty: 5 },
+        { id: 3, qty: 7 },
+      ]);
+      check.close();
 
       await expectQuiet(page, problems);
     } finally {
