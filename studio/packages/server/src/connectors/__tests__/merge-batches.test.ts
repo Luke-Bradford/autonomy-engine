@@ -36,13 +36,13 @@ describe('mergeBatches', () => {
     const log: string[] = [];
     let stopped = 0;
     const run = async () => {
-      for await (const _ of mergeBatches(
+      for await (const batch of mergeBatches(
         [source([1, 2, 3, 4, 5], log, 'a'), source([10, 20], log, 'b', 1)],
         () => {
           stopped += 1;
         },
       )) {
-        // drain
+        void batch;
       }
     };
     await expect(run()).rejects.toThrow('b failed');
@@ -80,10 +80,10 @@ describe('mergeBatches', () => {
       }
     })();
     const run = async () => {
-      for await (const _ of mergeBatches([sibling, source([5], log, 'b', 0)], () => {
+      for await (const batch of mergeBatches([sibling, source([5], log, 'b', 0)], () => {
         stop = true;
       })) {
-        // drain
+        void batch;
       }
     };
     await expect(run()).rejects.toThrow('b failed');
