@@ -50,7 +50,7 @@ test.describe('#1600 C6f-2 — Copy · Files as-is Degree of copy parallelism', 
       const pane = properties(page);
       const settingsTab = pane.getByRole('tab', { name: 'Settings', exact: true });
       const sinkTab = pane.getByRole('tab', { name: 'Sink', exact: true });
-      const degree = pane.getByRole('spinbutton', { name: 'Degree of copy parallelism' });
+      const degree = pane.getByRole('textbox', { name: 'Degree of copy parallelism', exact: true });
       const skipMissing = pane.getByRole('checkbox', { name: 'Skip missing files', exact: true });
 
       // Not drawn under Merge, which writes one file.
