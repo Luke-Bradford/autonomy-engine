@@ -126,17 +126,29 @@ export class SessionLog {
   /** Lines the level kept that `keepAtMost` left out. */
   dropped = 0;
   private readonly keepAtMost: number | undefined;
+  private readonly onLine: ((line: SessionLogLine) => void) | undefined;
 
+  /**
+   * #1600 OR41 C6c-1a — `onLine`: every line the level keeps goes to it
+   * instead, and none is held or capped. A folder log keeps every line, and a
+   * Copy's can run to a line per skipped row, so the server streams it to its
+   * file rather than holding it.
+   */
   constructor(
     private readonly level: SessionLogLevel,
     private readonly now: () => Date = () => new Date(),
-    opts: { keepAtMost?: number } = {},
+    opts: { keepAtMost?: number; onLine?: (line: SessionLogLine) => void } = {},
   ) {
     this.keepAtMost = opts.keepAtMost;
+    this.onLine = opts.onLine;
   }
 
   add(level: SessionLogLineLevel, operation: string, item: string, message: string): void {
     if (!keeps(this.level, level)) return;
+    if (this.onLine !== undefined) {
+      this.onLine({ timestamp: this.now().toISOString(), level, operation, item, message });
+      return;
+    }
     if (
       this.keepAtMost !== undefined &&
       level !== 'Error' &&
@@ -162,7 +174,7 @@ export function sessionLogText(line: SessionLogLine): string {
  *
  * `dropped` adds the lines a capped `SessionLog` already left out (C6a).
  * `folderHint` (default on) ends that line by pointing at the folder, which only
- * an activity that can write one should do: Copy cannot until C6c.
+ * an activity that can write one should do: a rows Copy cannot until C6c-1b.
  */
 export function sessionLogRunValues(
   lines: readonly SessionLogLine[],

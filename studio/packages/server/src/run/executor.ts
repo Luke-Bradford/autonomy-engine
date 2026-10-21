@@ -1577,8 +1577,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     let sink: { kind: ConnectionKind; connectionConfig: Record<string, unknown> } | undefined;
     // #1600 OR41 C6c-1a — the session log's connection, when the node binds one.
     let logConnection:
-      | { kind: ConnectionKind; connectionConfig: Record<string, unknown> }
-      | undefined;
+      { kind: ConnectionKind; connectionConfig: Record<string, unknown> } | undefined;
     let sinkSecret: string | null | undefined;
     // M6 slice B (#1149) — the SINK's adapter. Kept rather than discarded (see
     // below) because the sink's ADDRESS can only be resolved by the store that

@@ -136,10 +136,10 @@ export function describeUnserializable(detail: UnserializableRefDetail): string 
           : detail.ref === 'connectionLog'
             ? `log connection "${detail.danglingId}"`
             : detail.ref === 'datasetSource'
-            ? `source dataset "${detail.danglingId}"`
-            : detail.ref === 'datasetSink'
-              ? `sink dataset "${detail.danglingId}"`
-              : `pipeline version "${detail.danglingId}"`;
+              ? `source dataset "${detail.danglingId}"`
+              : detail.ref === 'datasetSink'
+                ? `sink dataset "${detail.danglingId}"`
+                : `pipeline version "${detail.danglingId}"`;
   return detail.nodeId === null
     ? `binds ${what}, which no longer exists`
     : `node "${detail.nodeId}" references ${what}, which no longer exists`;

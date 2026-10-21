@@ -58,7 +58,9 @@ describe('SessionLogWriter', () => {
     expect(await readFile(join(dir, 'log.csv'), 'utf8')).toBe(csvOf([]));
     opened.writer.append(line('b.txt'));
     await opened.writer.flushIfFull();
-    expect(await readFile(join(dir, 'log.csv'), 'utf8')).toBe(csvOf([line('a.txt'), line('b.txt')]));
+    expect(await readFile(join(dir, 'log.csv'), 'utf8')).toBe(
+      csvOf([line('a.txt'), line('b.txt')]),
+    );
     await opened.writer.close();
   });
 

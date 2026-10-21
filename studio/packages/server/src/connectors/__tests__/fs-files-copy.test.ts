@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import {
@@ -28,6 +28,7 @@ import {
 } from '@autonomy-studio/shared';
 import { fsAdapter } from '../fs.js';
 import { runFilesCopy, unchangedSince } from '../fs-files-copy.js';
+import { SessionLogWriter } from '../session-log-file.js';
 import { tmpPathFor } from '../fs-write.js';
 import { wildcardMatcher } from '../fs-select.js';
 import { cleanupTempRoots, tempRoot } from './temp-roots.js';
@@ -56,6 +57,8 @@ async function run(
     sinkRoot?: string;
     maxEntries?: number;
     signal?: AbortSignal;
+    /** #1600 OR41 C6c-1a — the session log's connection. */
+    log?: { root: string; writable?: boolean; kind?: 'fs' | 'sqlite' };
   } = {},
 ): Promise<ActivityEvent[]> {
   const c: ActivityContext = {
@@ -76,6 +79,15 @@ async function run(
         ...(over.sinkWritable !== false && { writable: true }),
       },
     },
+    ...(over.log !== undefined && {
+      logConnection: {
+        kind: over.log.kind ?? 'fs',
+        connectionConfig: {
+          roots: [over.log.root],
+          ...(over.log.writable !== false && { writable: true }),
+        },
+      },
+    }),
     signal: over.signal ?? new AbortController().signal,
   };
   const out: ActivityEvent[] = [];
@@ -148,6 +160,8 @@ describe('Copy · Files as-is — selection', () => {
       consistency: { verified: false, result: 'none' },
       // #1600 OR41 C6f-2 — Degree of copy parallelism defaults to 1.
       usedParallelCopies: 1,
+      // #1600 OR41 C6c-1a — the session log went to the run log, not a file.
+      logPath: null,
     });
     expect(Object.keys(out)).toEqual(declaredNames());
     expect(await tree(dst)).toEqual(['out/a.csv', 'out/sub/c.csv']);
@@ -999,13 +1013,13 @@ describe('#1600 C6b — session log', () => {
     },
   );
 
-  it(`keeps ${SESSION_LOG_RUN_MAX_LINES} lines and counts the rest, with no folder to point at`, async () => {
+  it(`keeps ${SESSION_LOG_RUN_MAX_LINES} lines and counts the rest, pointing at a folder (C6c-1a)`, async () => {
     const n = SESSION_LOG_RUN_MAX_LINES / 2 + 1;
     for (let i = 0; i < n; i += 1) await put(`in/${String(i).padStart(4, '0')}.txt`, 'x');
     const lines = logLines(await run({ sourcePath: 'in', logLevel: 'info' }));
     expect(lines).toHaveLength(SESSION_LOG_RUN_MAX_LINES + 1);
     expect(lines[SESSION_LOG_RUN_MAX_LINES]).toBe(
-      'Warning SessionLog  2 more lines not kept in the run log',
+      'Warning SessionLog  2 more lines not kept in the run log; write the session log to a folder to keep every line',
     );
   });
 });
@@ -1280,5 +1294,154 @@ describe('#1600 OR41 C6f-2 — Degree of copy parallelism', () => {
     // The copies already under way when b failed finish, and are counted.
     const written = events.find((e) => e.type === 'output' && e.name === 'filesWritten');
     expect(written).toMatchObject({ value: (await tree(dst)).length });
+  });
+});
+
+/**
+ * #1600 OR41 C6c-1a — Write to Folder: the session log is written, every line,
+ * to a CSV file in a folder on the log connection (ADF's `logLocationSettings`),
+ * and `logPath` names it. The file is the attempt's own.
+ */
+describe('#1600 C6c-1a — session log to a folder', () => {
+  let logs: string;
+  beforeEach(async () => {
+    logs = tempRoot('copy-files-log-');
+    await mkdir(join(logs, 'runs'));
+  });
+  const toFolder = { logTo: 'folder', logFolder: 'runs' };
+  const FILE = 'session-log.run_1.n1.n1_0.csv';
+  const csv = async () =>
+    (await readFile(join(logs, 'runs', FILE), 'utf8'))
+      .replace(/^\uFEFF/, '')
+      .split('\r\n')
+      .filter((l) => l !== '')
+      .map((l) => l.replace(/^[^,]+,/, ''));
+
+  it('writes every line to the folder, not the run log, and names the file in logPath', async () => {
+    await put('in/a.txt', 'aaa');
+    await put('in/sub/b.txt', 'b');
+    const events = await run(
+      { sourcePath: 'in', logLevel: 'info', ...toFolder },
+      { log: { root: logs } },
+    );
+    expect(outputs(events)['logPath']).toBe(join(logs, 'runs', FILE));
+    expect(logLines(events)).toEqual([]);
+    expect(await csv()).toEqual([
+      'Level,Operation,Item,Message',
+      'Info,FileRead,a.txt,read 3 bytes',
+      "Info,FileWrite,a.txt,wrote 3 bytes from 'a.txt'",
+      'Info,FileRead,sub/b.txt,read 1 byte',
+      "Info,FileWrite,sub/b.txt,wrote 1 byte from 'sub/b.txt'",
+    ]);
+    expect(await tree(dst)).toEqual(['a.txt', 'sub/b.txt']);
+  });
+
+  it('keeps every line past the run log’s cap', async () => {
+    const n = SESSION_LOG_RUN_MAX_LINES / 2 + 1;
+    for (let i = 0; i < n; i += 1) await put(`in/${String(i).padStart(4, '0')}.txt`, 'x');
+    const events = await run(
+      { sourcePath: 'in', logLevel: 'info', ...toFolder },
+      { log: { root: logs } },
+    );
+    expect(last(events).type).toBe('succeeded');
+    // The header, then two lines a file, none dropped.
+    expect(await csv()).toHaveLength(1 + 2 * n);
+  });
+
+  it('writes a header-only file when nothing is selected', async () => {
+    await mkdir(join(src, 'in'));
+    const events = await run({ sourcePath: 'in', ...toFolder }, { log: { root: logs } });
+    expect(outputs(events)['logPath']).toBe(join(logs, 'runs', FILE));
+    expect(await csv()).toEqual(['Level,Operation,Item,Message']);
+  });
+
+  it('keeps the log of a copy that fails after it is opened', async () => {
+    await put('in/a.txt', 'a');
+    await put('out/a.txt', 'old', dst);
+    const events = await run(
+      { sourcePath: 'in', sinkFolder: 'out', ifExists: 'fail', ...toFolder },
+      { log: { root: logs } },
+    );
+    expect(last(events)).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(await csv()).toEqual(['Level,Operation,Item,Message']);
+  });
+
+  it.each([
+    [
+      'no log connection is bound',
+      {},
+      'the session log is written to a folder, and no log connection is bound; pick one on the Settings tab',
+    ],
+    [
+      'the log connection does not allow writes',
+      { writable: false },
+      'the log connection does not allow writes; turn on Allow writes on that connection',
+    ],
+    [
+      'the log connection is not a file one',
+      { kind: 'sqlite' as const },
+      'the log connection is not a file connection',
+    ],
+  ])('refuses before copying anything when %s', async (_why, log, message) => {
+    await put('in/a.txt', 'a');
+    const events = await run(
+      { sourcePath: 'in', ...toFolder },
+      'writable' in log || 'kind' in log ? { log: { root: logs, ...log } } : {},
+    );
+    expect(last(events)).toEqual({ type: 'failed', kind: 'permanent', error: message });
+    expect(await tree(dst)).toEqual([]);
+  });
+
+  it('refuses a log folder that does not exist, before copying anything', async () => {
+    await put('in/a.txt', 'a');
+    const events = await run(
+      { sourcePath: 'in', logTo: 'folder', logFolder: 'missing' },
+      { log: { root: logs } },
+    );
+    expect(last(events)).toMatchObject({
+      type: 'failed',
+      error: "the log folder 'missing' does not exist",
+    });
+    expect(await tree(dst)).toEqual([]);
+  });
+
+  it('refuses a log folder in the source folder it would copy, and writes no log there', async () => {
+    await put('in/a.txt', 'a');
+    await mkdir(join(src, 'in', 'logs'));
+    const events = await run(
+      { sourcePath: 'in', logTo: 'folder', logFolder: 'in/logs' },
+      { log: { root: src } },
+    );
+    expect(last(events)).toMatchObject({
+      type: 'failed',
+      error:
+        'the log folder is inside the source folder, so the copy would copy its own log; pick one outside it',
+    });
+    expect(await tree(src)).toEqual(['in/a.txt']);
+    // Without Include subfolders, a subfolder is never listed, so it is allowed.
+    const flat = await run(
+      { sourcePath: 'in', recursive: false, logTo: 'folder', logFolder: 'in/logs' },
+      { log: { root: src } },
+    );
+    expect(last(flat).type).toBe('succeeded');
+  });
+
+  it('fails a copy whose log cannot be written, reporting the counts first', async () => {
+    await put('in/a.txt', 'a');
+    const spy = vi
+      .spyOn(SessionLogWriter.prototype, 'close')
+      .mockResolvedValueOnce({ ok: false, error: 'disk full' });
+    try {
+      const events = await run({ sourcePath: 'in', ...toFolder }, { log: { root: logs } });
+      expect(last(events)).toEqual({
+        type: 'failed',
+        kind: 'permanent',
+        error: 'copied 1 file, but the session log could not be written: disk full',
+      });
+      expect(events).toContainEqual({ type: 'output', name: 'filesWritten', value: 1 });
+      expect(events).toContainEqual({ type: 'output', name: 'logPath', value: null });
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
