@@ -52,8 +52,8 @@ import {
   within,
 } from './fs-select.js';
 import { walkFolder, type WalkedEntry } from './fs-walk.js';
-import { runPool } from './run-pool.js';
 import { failFromError } from './fs-write.js';
+import { runPool } from './run-pool.js';
 import { sessionLogFileName, writeSessionLogFile } from './session-log-file.js';
 import type { ActivityEvent } from './types.js';
 

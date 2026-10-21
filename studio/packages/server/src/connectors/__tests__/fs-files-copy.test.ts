@@ -1188,6 +1188,21 @@ describe('#1600 C6d-2 — Skip forbidden files', () => {
     expect(await readdir(dst)).toEqual([]);
   });
 
+  it.skipIf(asRoot)('a merge into a new File name subfolder skips a source once', async () => {
+    await put('in/a.txt', 'a');
+    await chmod(await put('in/b.txt', 'b'), 0o000);
+    const events = await run({
+      sourcePath: 'in',
+      copyBehavior: 'merge',
+      sinkFileName: 'x/all.txt',
+      skipForbiddenFiles: true,
+    });
+    // Opened before `x` is made, and not again by the merge's own probe.
+    expect(outputs(events)).toMatchObject({ filesWritten: 1, filesSkipped: 1 });
+    expect(logLines(events)).toHaveLength(1);
+    expect(await readFile(join(dst, 'x/all.txt'), 'utf8')).toBe('a');
+  });
+
   it('still refuses a file-list line naming a file that is not there', async () => {
     await put('in/a.txt', 'a');
     await put('list.txt', 'a.txt\nnope.txt\n');
