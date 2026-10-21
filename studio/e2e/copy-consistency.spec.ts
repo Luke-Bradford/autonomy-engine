@@ -131,6 +131,8 @@ test.describe('#1600 C6e-1 — Copy Verify after copy', () => {
         'durationMs',
         'throughput',
         'consistency',
+        // C6f-2.
+        'usedParallelCopies',
       ]);
 
       const runId = await fireAndSettle(page, latest.id, 'e2e 1600 c6e');
