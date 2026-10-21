@@ -20,6 +20,7 @@ import {
   COPY_FILES_ACTIVITY_TYPE,
   FILE_COPY_ACTIVITY_TYPE,
   FILE_MOVE_ACTIVITY_TYPE,
+  getActivity,
   lowerRetiredTypes,
   SESSION_LOG_OUTPUT,
   SESSION_LOG_RUN_MAX_LINES,
@@ -103,6 +104,13 @@ const outputs = (events: ActivityEvent[]) => {
   if (ev.type !== 'succeeded') throw new Error(`expected succeeded, got ${JSON.stringify(ev)}`);
   return ev.outputs;
 };
+/** #1600 OR41 C6f-1 — bytes/s over the yielded duration, null for an instant copy. */
+const throughputOf = (out: Record<string, unknown>): number | null => {
+  const ms = out['durationMs'] as number;
+  return ms === 0 ? null : Math.round(((out['bytesRead'] as number) * 1000) / ms);
+};
+/** The catalog's contract, name for name and in order (C6f-1). */
+const declaredNames = () => getActivity(COPY_FILES_ACTIVITY_TYPE)!.outputs.map((o) => o.name);
 const failure = (events: ActivityEvent[]) => {
   const ev = last(events);
   if (ev.type !== 'failed') throw new Error(`expected failed, got ${JSON.stringify(ev)}`);
@@ -122,7 +130,8 @@ describe('Copy · Files as-is — selection', () => {
     await put('in/b.txt', 'b');
     await put('in/sub/c.csv', 'ccc');
     const events = await run({ sourcePath: 'in', wildcard: '*.csv', sinkFolder: 'out' });
-    expect(outputs(events)).toEqual({
+    const out = outputs(events);
+    expect(out).toEqual({
       filesRead: 2,
       filesWritten: 2,
       filesSkipped: 0,
@@ -133,7 +142,12 @@ describe('Copy · Files as-is — selection', () => {
       // #1600 C1b — a folder copy names the folders.
       source: join(src, 'in'),
       dest: join(dst, 'out'),
+      // #1600 OR41 C6f-1.
+      durationMs: expect.any(Number),
+      throughput: throughputOf(out),
+      consistency: { verified: false, result: 'none' },
     });
+    expect(Object.keys(out)).toEqual(declaredNames());
     expect(await tree(dst)).toEqual(['out/a.csv', 'out/sub/c.csv']);
     expect(await readFile(join(dst, 'out/sub/c.csv'), 'utf8')).toBe('ccc');
     // Keep source is the default.
@@ -243,6 +257,8 @@ describe('Copy · Files as-is — selection', () => {
     await put('in/a.txt', 'a');
     const events = await run({ sourcePath: 'in', wildcard: '*.csv' });
     expect(outputs(events)).toMatchObject({ filesRead: 0, filesWritten: 0 });
+    // Its own success site, with the whole contract (C6f-1).
+    expect(Object.keys(outputs(events))).toEqual(declaredNames());
   });
 
   it('refuses a source path outside the connection roots', async () => {

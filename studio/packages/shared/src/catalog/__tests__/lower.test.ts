@@ -555,6 +555,35 @@ describe('refreshFormerOutputs (#1600 OR41 C7a)', () => {
     expect(out!.config['path']).toBe('a.txt');
   });
 
+  // #1600 OR41 C6f-1 — a Copy saved before its complete outputs, in either mode,
+  // gains them: written out here, not read off `formerOutputs`, so a snapshot
+  // that drifted from what was stored would fail.
+  it.each([
+    ['copy', ['rowsRead', 'rowsWritten', 'rowsFailed', 'bytesRead'], ['truncated']],
+    [
+      'copy_files',
+      ['filesRead', 'filesWritten', 'filesSkipped', 'filesDeleted', 'filesMoved', 'bytesRead'],
+      ['bytesWritten'],
+    ],
+  ])('re-seeds a %s saved before C6f-1', (type, numbers, rest) => {
+    const stored = [
+      ...numbers.map((name) => ({ name, type: 'number' })),
+      ...rest.map((name) => ({ name, type: name === 'truncated' ? 'boolean' : 'number' })),
+      ...(type === 'copy_files'
+        ? [
+            { name: 'source', type: 'string' },
+            { name: 'dest', type: 'string' },
+          ]
+        : []),
+    ];
+    const node = { id: 'c', type, config: { outputs: stored }, position: { x: 0, y: 0 } } as Node;
+    const [out] = refreshFormerOutputs([node]);
+    expect(out!.config['outputs']).toEqual(getActivity(type)!.outputs);
+    expect((out!.config['outputs'] as { name: string }[]).map((o) => o.name)).toContain(
+      'durationMs',
+    );
+  });
+
   // #1600 OR41 C8c — a former contract with OPTIONAL outputs matches too, and
   // only with its optionality: a node saved under C8a (or a lowered List
   // directory) gains a table's three outputs.

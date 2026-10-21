@@ -7,6 +7,7 @@ import {
   SESSION_LOG_OUTPUT,
   SESSION_LOG_RUN_MAX_LINES,
   WARNING_CODES,
+  getActivity,
   newCopyCounters,
   type DatasetColumn,
 } from '@autonomy-studio/shared';
@@ -105,8 +106,14 @@ async function run(ctx: ActivityContext): Promise<ActivityEvent[]> {
 const terminal = (events: ActivityEvent[]): ActivityEvent =>
   events[events.length - 1] as ActivityEvent;
 
+/** #1600 OR41 C6f-1 — bytes/s over the yielded duration, null for an instant copy. */
+const throughputOf = (outputs: Record<string, unknown>): number | null => {
+  const ms = outputs['durationMs'] as number;
+  return ms === 0 ? null : Math.round(((outputs['bytesRead'] as number) * 1000) / ms);
+};
+
 describe('copy activity — the happy path contract', () => {
-  it('yields ONE terminal event carrying the five declared outputs', async () => {
+  it('yields ONE terminal event carrying the declared outputs', async () => {
     const root = tempRoot();
     const events = await run(
       copyCtx({ root, sourcePath: seedDb(root, 3, 'src.db'), sinkPath: seedSink(root, 'dst.db') }),
@@ -117,13 +124,21 @@ describe('copy activity — the happy path contract', () => {
     expect(events.filter((e) => e.type === 'succeeded' || e.type === 'failed')).toHaveLength(1);
     const end = terminal(events);
     expect(end.type).toBe('succeeded');
-    expect(end.type === 'succeeded' ? end.outputs : null).toEqual({
+    const outputs = end.type === 'succeeded' ? end.outputs : {};
+    expect(outputs).toEqual({
       rowsRead: 3,
       rowsWritten: 3,
+      rowsSkipped: 0,
       rowsFailed: 0,
       bytesRead: expect.any(Number),
       truncated: false,
+      durationMs: expect.any(Number),
+      throughput: throughputOf(outputs),
+      consistency: { verified: false, result: 'none' },
     });
+    // #1600 OR41 C6f-1 — the catalog's contract, name for name and in order:
+    // an output the entry declares and the copy does not yield fails the node.
+    expect(Object.keys(outputs)).toEqual(getActivity('copy')!.outputs.map((o) => o.name));
     // A copy whose store kept exactly what it was sent has nothing to say.
     expect(events.filter((e) => e.type === 'warned')).toEqual([]);
   });
@@ -484,13 +499,9 @@ describe('copy activity — a failure is never a silent partial (§10)', () => {
     );
 
     const outputs = events.filter((e) => e.type === 'output');
-    expect(outputs.map((e) => (e.type === 'output' ? e.name : ''))).toEqual([
-      'rowsRead',
-      'rowsWritten',
-      'rowsFailed',
-      'bytesRead',
-      'truncated',
-    ]);
+    expect(outputs.map((e) => (e.type === 'output' ? e.name : ''))).toEqual(
+      getActivity('copy')!.outputs.map((o) => o.name),
+    );
     expect(events.indexOf(outputs[0] as ActivityEvent)).toBeLessThan(
       events.indexOf(terminal(events)),
     );
@@ -1445,6 +1456,12 @@ describe('copy activity — Verify after copy (#1600 OR41 C6e-1)', () => {
     expect(rowsOf(sinkPath)).toEqual([]);
     // Rolled back, so the honest count is 0, and the post-commit advisory never runs.
     expect(events).toContainEqual({ type: 'output', name: 'rowsWritten', value: 0 });
+    // C6f-1 — ADF's InconsistentData Found, the one place a rows Copy says it.
+    expect(events).toContainEqual({
+      type: 'output',
+      name: 'consistency',
+      value: { verified: true, result: 'found' },
+    });
     expect(events.filter((e) => e.type === 'warned')).toEqual([]);
   });
 
@@ -1496,7 +1513,13 @@ describe('copy activity — Verify after copy (#1600 OR41 C6e-1)', () => {
     // One coercion drop and one row the sink rejected: 4 read = 2 written + 2 skipped.
     expect(end).toMatchObject({
       type: 'succeeded',
-      outputs: { rowsRead: 4, rowsWritten: 2, rowsFailed: 2 },
+      outputs: {
+        rowsRead: 4,
+        rowsWritten: 2,
+        rowsSkipped: 2,
+        rowsFailed: 2,
+        consistency: { verified: true, result: 'none' },
+      },
     });
     expect(rowsOf(sinkPath, 'SELECT id FROM sink ORDER BY id')).toEqual([{ id: 1 }, { id: 2 }]);
   });
