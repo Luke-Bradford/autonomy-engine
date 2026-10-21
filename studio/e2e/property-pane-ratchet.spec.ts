@@ -352,11 +352,14 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   // #1600 OR41 C6d-2's Skip missing files and Skip forbidden files add two `?`s
   // to each walk, measured: the list walk reads 20 (its limit had been one above
   // its count), the folder walk 19.
-  'Copy data (files as-is)': 20,
+  // +2 for C6c-1a's Write to and Log folder: the list walk writes its log to a
+  // folder on a log connection, so both are drawn.
+  'Copy data (files as-is)': 22,
   // +1 for C6e-2's Verify copied files, drawn under Preserve hierarchy (the
   // merge walk above does not draw it, and its skip waits for it to be on).
   // +1 for C6f-2's Degree of copy parallelism, not drawn under Merge either.
-  'Copy data (files from a folder)': 21,
+  // +1 for C6c-1a's Write to, drawn while the session log is on (the default).
+  'Copy data (files from a folder)': 22,
   // +1 for C1q-c's Query timeout, a new field whose `?` says blank means no limit.
   // +1 for C6e-1's Verify after copy, measured at 19.
   'Copy data (inline query)': 19,
@@ -503,7 +506,7 @@ function seeds(ids: SeedIds): Record<string, Seed> {
       node: {
         ...exec,
         type: 'copy_files',
-        connectionIds: { source: ids.fs, sink: ids.fs },
+        connectionIds: { source: ids.fs, sink: ids.fs, log: ids.fs },
         config: {
           pathType: 'list',
           sourcePath: '/tmp/e2e/in',
@@ -516,6 +519,8 @@ function seeds(ids: SeedIds): Record<string, Seed> {
           sinkFileName: 'merged.txt',
           copyBehavior: 'merge',
           ifExists: 'skip',
+          logTo: 'folder',
+          logFolder: '/tmp/e2e/logs',
         },
       },
     },
