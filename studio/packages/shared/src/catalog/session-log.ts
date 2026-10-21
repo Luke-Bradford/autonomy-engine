@@ -59,10 +59,33 @@ export const sessionLogConnectionFolderField = presented(singleLine(z.string()).
     "The folder the CSV file is written to, on the log connection. Absolute, or relative to that connection's first allowed folder. It must exist.",
 });
 
+const logModeSchema = z.enum(['bestEffort', 'reliable']);
+export type SessionLogMode = z.infer<typeof logModeSchema>;
+
+/**
+ * #1600 OR41 C6c-2 — Copy's *Log mode*, ADF's `enableReliableLogging`
+ * (https://learn.microsoft.com/azure/data-factory/copy-activity-log): Reliable
+ * writes the folder log after each file or row batch and stops the copy if it
+ * cannot; Best effort writes it in 64 KiB batches and keeps copying if it
+ * cannot. Copy's only: Delete writes its log once, at the end.
+ *
+ * Reliable by default, unlike ADF's: a node saved before C6c-2 has no mode, and
+ * its copy failed when its log could not be written. Best effort as the default
+ * would turn those failures into successes, with After copy deleting or moving
+ * sources the log does not name.
+ */
+export const sessionLogModeField = presented(logModeSchema.default('reliable'), {
+  title: 'Log mode',
+  description:
+    'Reliable writes the log after each file or batch, and stops the copy if it cannot. Best effort writes it in batches and keeps copying, so the file can miss lines.',
+  options: optionTitles(logModeSchema, { bestEffort: 'Best effort', reliable: 'Reliable' }),
+});
+
 type SessionLogConfig = {
   logLevel: SessionLogLevel;
   logTo: SessionLogDestination;
   logFolder?: string | undefined;
+  logMode?: SessionLogMode | undefined;
 };
 
 /**
@@ -82,6 +105,10 @@ export function sessionLogIssues(
   }
   if (cfg.logTo !== 'folder' && cfg.logFolder !== undefined) {
     issue('logFolder', 'only read when the session log is written to a folder');
+  }
+  // C6c-2 — Reliable is the default, so only Best effort can be a stray.
+  if (cfg.logTo !== 'folder' && cfg.logMode === 'bestEffort') {
+    issue('logMode', 'only read when the session log is written to a folder');
   }
 }
 

@@ -55,6 +55,7 @@ describe('nodeTypeTabs (#1477)', () => {
           'logLevel',
           'logTo',
           'logFolder',
+          'logMode',
         ],
         bindings: ['logConnection'],
       },
@@ -163,6 +164,7 @@ describe('applicableFieldNames (#1686)', () => {
       'skipInconsistentFiles',
       // #1600 C6c-1a — no Log folder while Write to is the run log.
       'logFolder',
+      'logMode',
     ]);
   });
 
@@ -177,6 +179,7 @@ describe('applicableFieldNames (#1686)', () => {
       'skipForbiddenFiles',
       'skipInconsistentFiles',
       'logFolder',
+      'logMode',
     ]);
     expect(hidden({ pathType: 'list', afterCopy: 'move' })).toEqual([
       'wildcard',
@@ -184,6 +187,7 @@ describe('applicableFieldNames (#1686)', () => {
       'sinkFileName',
       'skipInconsistentFiles',
       'logFolder',
+      'logMode',
     ]);
     // Either condition of File name: one file, or a merge. #1600 C6e-2 — a
     // merge is not verified, as in ADF; C6f-2 — nor copied at once.
@@ -193,6 +197,7 @@ describe('applicableFieldNames (#1686)', () => {
       'validateDataConsistency',
       'skipInconsistentFiles',
       'logFolder',
+      'logMode',
       'parallelCopies',
     ]);
     const typed = { ...seedFieldInputs(fields, {}), pathType: 'list' };
@@ -203,6 +208,7 @@ describe('applicableFieldNames (#1686)', () => {
       'sinkFileName',
       'skipInconsistentFiles',
       'logFolder',
+      'logMode',
     ]);
   });
 
@@ -211,14 +217,20 @@ describe('applicableFieldNames (#1686)', () => {
     expect(hidden({ validateDataConsistency: true })).not.toContain('skipInconsistentFiles');
     // Ticked, before any Apply.
     const ticked = { ...seedFieldInputs(fields, {}), validateDataConsistency: true };
-    expect(hidden({}, ticked)).toEqual(['fileListPath', 'moveTo', 'sinkFileName', 'logFolder']);
+    expect(hidden({}, ticked)).toEqual([
+      'fileListPath',
+      'moveTo',
+      'sinkFileName',
+      'logFolder',
+      'logMode',
+    ]);
   });
 
   it('draws a field whose control is an expression', () => {
     // No enum control takes one today, but a typed field that does (UI STANDARD
     // rule 4) must not hide what it may yet select.
     const typed = { ...seedFieldInputs(fields, {}), pathType: '${pipeline().parameters.kind}' };
-    expect(hidden({}, typed)).toEqual(['moveTo', 'skipInconsistentFiles', 'logFolder']);
+    expect(hidden({}, typed)).toEqual(['moveTo', 'skipInconsistentFiles', 'logFolder', 'logMode']);
   });
 
   it('still draws a field that holds a value where it cannot apply', () => {
@@ -231,6 +243,7 @@ describe('applicableFieldNames (#1686)', () => {
       'skipForbiddenFiles',
       'skipInconsistentFiles',
       'logFolder',
+      'logMode',
     ]);
     // #1600 C6d-2 — and a stored Skip forbidden files, which save refuses there.
     expect(hidden({ pathType: 'file', skipForbiddenFiles: true })).not.toContain(
@@ -243,6 +256,7 @@ describe('applicableFieldNames (#1686)', () => {
       'sinkFileName',
       'skipInconsistentFiles',
       'logFolder',
+      'logMode',
     ]);
   });
 

@@ -5,6 +5,7 @@ import { DELETE_MAX_CONCURRENT } from './delete-config.js';
 import {
   sessionLogConfigFields,
   sessionLogConnectionFolderField,
+  sessionLogModeField,
   sessionLogIssues,
 } from './session-log.js';
 
@@ -162,6 +163,8 @@ export const copyFilesConfigSchema = z
     // C6c-1a — Write to the run log or a folder on the log connection.
     logTo: sessionLogConfigFields.logTo,
     logFolder: sessionLogConnectionFolderField,
+    // C6c-2 — Reliable or Best effort, for a folder log.
+    logMode: sessionLogModeField,
     // #1600 OR41 C6f-2 — ADF's `parallelCopies` between file stores: parallel by
     // file. 1 when absent, not ADF's Auto, so a node saved before C6f-2 copies
     // as it did, one file at a time and with its log lines in order.

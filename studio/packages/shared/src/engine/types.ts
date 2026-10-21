@@ -1114,6 +1114,13 @@ export const WARNING_CODES = {
    */
   COPY_STORE_COUNT_DIFFERS: 'copy_store_count_differs',
   /**
+   * #1600 OR41 C6c-2 — a Copy whose *Log mode* is Best effort finished, but its
+   * folder log could not be written to the end: the file at `logPath` is missing
+   * lines, possibly for sources After copy deleted or moved. Reliable fails the
+   * copy instead (and a rows Copy rolls back), so it never emits this.
+   */
+  COPY_SESSION_LOG_INCOMPLETE: 'copy_session_log_incomplete',
+  /**
    * #996 M12 slice 2 (#1221, spec §5) — a `lookup` returned a PREFIX of its
    * source: `LOOKUP_ROW_CAP` or `LOOKUP_BYTE_CAP` bound before the source ran
    * out of rows.

@@ -357,7 +357,8 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   // its count), the folder walk 19.
   // +2 for C6c-1a's Write to and Log folder: the list walk writes its log to a
   // folder on a log connection, so both are drawn.
-  'Copy data (files as-is)': 22,
+  // +1 for C6c-2's Log mode, drawn for that folder log.
+  'Copy data (files as-is)': 23,
   // +1 for C6e-2's Verify copied files, drawn under Preserve hierarchy (the
   // merge walk above does not draw it, and its skip waits for it to be on).
   // +1 for C6f-2's Degree of copy parallelism, not drawn under Merge either.
@@ -525,6 +526,8 @@ function seeds(ids: SeedIds): Record<string, Seed> {
           ifExists: 'skip',
           logTo: 'folder',
           logFolder: '/tmp/e2e/logs',
+          // C6c-2 — Best effort, so the Log mode draws holding a value.
+          logMode: 'bestEffort',
         },
       },
     },

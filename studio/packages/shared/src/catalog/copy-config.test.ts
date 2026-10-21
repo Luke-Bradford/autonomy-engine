@@ -574,7 +574,7 @@ describe('session log to a folder (C6c-1b)', () => {
     expect(entry.appliesWhen?.logFolder).toEqual([{ field: 'logTo', in: ['folder'] }]);
     expect(entry.logConnectionKinds).toEqual(['fs']);
     const settings = entry.tabs!.find((t) => t.key === 'settings')!;
-    expect(settings.fields.slice(-3)).toEqual(['logLevel', 'logTo', 'logFolder']);
+    expect(settings.fields.slice(-4)).toEqual(['logLevel', 'logTo', 'logFolder', 'logMode']);
     expect(settings.bindings).toEqual(['logConnection']);
   });
 
@@ -584,5 +584,34 @@ describe('session log to a folder (C6c-1b)', () => {
     expect(names.at(-1)).toBe('logPath');
     expect(entry.outputs.at(-1)?.optional).toBe(true);
     expect(entry.formerOutputs![0]!).toEqual(entry.outputs.slice(0, -1));
+  });
+});
+
+describe('session log mode (#1600 OR41 C6c-2)', () => {
+  const id = { source: 'a', sink: 'id', type: 'integer' as const };
+  const issues = (extra: Record<string, unknown>) => {
+    const r = copyInputSchema.safeParse({ mapping: [id], ...extra });
+    return r.success ? [] : r.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`);
+  };
+
+  it('is Reliable by default, and Best effort for a folder log', () => {
+    expect(copyInputSchema.parse({ mapping: [id] }).logMode).toBe('reliable');
+    expect(issues({ logTo: 'folder', logFolder: 'logs', logMode: 'bestEffort' })).toEqual([]);
+    expect(issues({ logMode: 'eventually' })).toHaveLength(1);
+  });
+
+  it.each([{}, { logLevel: 'off' }])('refuses Best effort without a folder log (%j)', (extra) => {
+    expect(issues({ ...extra, logMode: 'bestEffort' })).toEqual([
+      'logMode: only read when the session log is written to a folder',
+    ]);
+    // Dispatch checks the same rule, for a `${}` Write to resolved there.
+    expect(
+      copyDispatchInputSchema.safeParse({ mapping: [id], ...extra, logMode: 'bestEffort' }).success,
+    ).toBe(false);
+  });
+
+  it('is drawn for a folder log, after the folder', () => {
+    const entry = getActivity(COPY_ACTIVITY_TYPE)!;
+    expect(entry.appliesWhen?.logMode).toEqual([{ field: 'logTo', in: ['folder'] }]);
   });
 });

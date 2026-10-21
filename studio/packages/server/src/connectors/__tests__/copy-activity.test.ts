@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { mkdir, readdir, readFile, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
@@ -2035,5 +2036,211 @@ describe('copy activity — the session log, to a folder (#1600 OR41 C6c-1b)', (
     } finally {
       close.mockRestore();
     }
+  });
+
+  describe('Log mode (#1600 OR41 C6c-2)', () => {
+    const src = (root: string, n = 3) => seedDb(root, n, 'src.db');
+    const mapId = { mapping: [{ source: 'id', sink: 'id', type: 'integer' }] };
+    const incomplete = (events: ActivityEvent[]) =>
+      events.filter((e) => e.type === 'warned' && e.code === 'copy_session_log_incomplete');
+    /** The log file's operations each time the copy flushed it. */
+    const flushes = () => {
+      const seen: string[][] = [];
+      const real = SessionLogWriter.prototype.flushIfFull;
+      const spy = vi
+        .spyOn(SessionLogWriter.prototype, 'flushIfFull')
+        .mockImplementation(async function (this: SessionLogWriter) {
+          await real.call(this);
+          seen.push(
+            readFileSync(this.path, 'utf8')
+              .split('\r\n')
+              .slice(1)
+              .filter((l) => l !== '')
+              .map((l) => l.split(',')[2]!),
+          );
+        });
+      return { seen, spy };
+    };
+
+    /**
+     * The log opens for real, then every write to it fails, through the
+     * writer's own seam. `flushBytes` 1 writes after every batch in either
+     * mode, so a Best effort write fails mid-copy too.
+     */
+    const failingWrites = () => {
+      const realOpen = SessionLogWriter.open.bind(SessionLogWriter);
+      return vi.spyOn(SessionLogWriter, 'open').mockImplementation(async (dir, name, opts) => {
+        const opened = await realOpen(dir, name, opts);
+        if (!opened.ok) return opened;
+        await opened.writer.close();
+        const fh = {
+          write: () => Promise.reject(new Error('disk full')),
+          close: () => Promise.resolve(),
+        };
+        const writer = SessionLogWriter.over(fh, opened.writer.path, { ...opts, flushBytes: 1 });
+        return { ok: true, writer };
+      });
+    };
+
+    it.each([
+      [
+        'Reliable writes each batch read before the next',
+        {},
+        [['TabularRowSkip'], ['TabularRowSkip', 'TabularRowSkip']],
+      ],
+      ['Best effort holds the lines until 64 KiB, or the end', { logMode: 'bestEffort' }, [[], []]],
+    ])('%s', async (_name, extra, expected) => {
+      const root = tempRoot();
+      const { seen, spy } = flushes();
+      try {
+        const events = await run(
+          withLog(
+            copyCtx({
+              root,
+              sourcePath: src(root, 2),
+              sinkPath: seedSink(root, 'dst.db'),
+              input: dropping({ writeBatchSize: 1, ...extra }),
+            }),
+          ),
+        );
+        expect(only(events)).toMatchObject({ type: 'succeeded' });
+        // The last read finds no batch, so the reads flushed after are the two rows'.
+        expect(seen.slice(0, 2)).toEqual(expected);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('Reliable stops the copy and rolls it back once a write to the log fails', async () => {
+      const root = tempRoot();
+      const sinkPath = seedSink(root, 'dst.db');
+      const spy = failingWrites();
+      try {
+        const events = await run(
+          withLog(
+            copyCtx({
+              root,
+              sourcePath: src(root),
+              sinkPath,
+              input: dropping({ writeBatchSize: 1, logLevel: 'info', ...mapId }),
+            }),
+          ),
+        );
+        expect(only(events)).toEqual({
+          type: 'failed',
+          kind: 'permanent',
+          error: 'the session log could not be written: disk full',
+        });
+        expect(incomplete(events)).toEqual([]);
+        expect(rowsOf(sinkPath)).toEqual([]);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('Best effort keeps copying, commits and warns once a write to the log fails', async () => {
+      const root = tempRoot();
+      const sinkPath = seedSink(root, 'dst.db');
+      const spy = failingWrites();
+      try {
+        const events = await run(
+          withLog(
+            copyCtx({
+              root,
+              sourcePath: src(root),
+              sinkPath,
+              input: dropping({
+                writeBatchSize: 1,
+                logLevel: 'info',
+                logMode: 'bestEffort',
+                ...mapId,
+              }),
+            }),
+          ),
+        );
+        const end = only(events);
+        expect(end).toMatchObject({ type: 'succeeded' });
+        const logPath = end.type === 'succeeded' ? end.outputs['logPath'] : undefined;
+        expect(logPath).toMatch(/session-log\..+\.csv$/);
+        expect(incomplete(events)).toEqual([
+          {
+            type: 'warned',
+            code: 'copy_session_log_incomplete',
+            reason: `the session log '${String(logPath)}' could not be written, so it is missing lines (Best effort): disk full`,
+          },
+        ]);
+        expect(rowsOf(sinkPath)).toHaveLength(3);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('Best effort does not drain the log before COMMIT', async () => {
+      const root = tempRoot();
+      const sinkPath = seedSink(root, 'dst.db');
+      const spy = vi.spyOn(SessionLogWriter.prototype, 'drain').mockResolvedValue('disk full');
+      try {
+        const events = await run(
+          withLog(
+            copyCtx({
+              root,
+              sourcePath: src(root, 2),
+              sinkPath,
+              input: dropping({ logMode: 'bestEffort', ...mapId }),
+            }),
+          ),
+        );
+        expect(only(events)).toMatchObject({ type: 'succeeded' });
+        expect(incomplete(events)).toEqual([]);
+        expect(spy).not.toHaveBeenCalled();
+        expect(rowsOf(sinkPath)).toHaveLength(2);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('Best effort warns, and keeps the rows, when the log cannot be closed', async () => {
+      const root = tempRoot();
+      const sinkPath = seedSink(root, 'dst.db');
+      const spy = vi
+        .spyOn(SessionLogWriter.prototype, 'close')
+        .mockResolvedValue({ ok: false, error: 'disk full' });
+      try {
+        const events = await run(
+          withLog(
+            copyCtx({
+              root,
+              sourcePath: src(root, 2),
+              sinkPath,
+              input: dropping({ logMode: 'bestEffort', ...mapId }),
+            }),
+          ),
+        );
+        const end = only(events);
+        expect(end).toMatchObject({ type: 'succeeded' });
+        expect(end.type === 'succeeded' ? end.outputs['logPath'] : null).toMatch(/\.csv$/);
+        expect(incomplete(events)).toHaveLength(1);
+        expect(rowsOf(sinkPath)).toHaveLength(2);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('still refuses the copy when the log cannot be opened', async () => {
+      const root = tempRoot();
+      const sinkPath = seedSink(root, 'dst.db');
+      const events = await run(
+        withLog(
+          copyCtx({
+            root,
+            sourcePath: src(root, 2),
+            sinkPath,
+            input: dropping({ logMode: 'bestEffort', logFolder: 'missing', ...mapId }),
+          }),
+        ),
+      );
+      expect(only(events)).toMatchObject({ type: 'failed', kind: 'permanent' });
+      expect(rowsOf(sinkPath)).toEqual([]);
+    });
   });
 });
