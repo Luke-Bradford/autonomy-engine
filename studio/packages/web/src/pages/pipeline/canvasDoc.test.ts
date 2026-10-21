@@ -450,7 +450,14 @@ describe('writeAccessWarnings (#1600 OR41 C1b)', () => {
     });
     expect(
       writeAccessWarnings(
-        [rows('a'), rows('b', 'ro'), rows('c', 'rw'), rows('d', undefined, { logTo: 'run' })],
+        [
+          rows('a'),
+          rows('b', 'ro'),
+          rows('c', 'rw'),
+          rows('d', undefined, { logTo: 'run' }),
+          // A rows Copy has no After copy: a stray key is not a files copy's warning.
+          rows('e', 'rw', { afterCopy: 'delete' }),
+        ],
         connections,
       ),
     ).toEqual([

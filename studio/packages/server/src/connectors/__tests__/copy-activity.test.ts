@@ -1609,7 +1609,7 @@ describe('copy activity — the session log, to a folder (#1600 OR41 C6c-1b)', (
     const names = await files();
     expect(names).toHaveLength(1);
     return (await readFile(join(logs, 'runs', names[0]!), 'utf8'))
-      .replace(/^﻿/, '')
+      .replace(/^\uFEFF/, '')
       .split('\r\n')
       .filter((l) => l !== '')
       .map((l, i) => (i === 0 ? l : l.replace(/^[^,]+,/, '')));
