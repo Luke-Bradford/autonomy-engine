@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { optionTitles, presented, singleLine } from '../schemas/field-presentation.js';
 import { instant, modifiedWindowIssue, wildcardIssue } from './file-selection.js';
+import { DELETE_MAX_CONCURRENT } from './delete-config.js';
 import { sessionLogConfigFields } from './session-log.js';
 
 /**
@@ -34,10 +35,10 @@ export type CopyFilesIfExists = z.infer<typeof ifExistsSchema>;
 
 /**
  * #1600 OR41 C6f-2 — the most files a Copy · Files as-is copies at once (ADF's
- * `parallelCopies` takes any integer from 1). Delete's bound: Node's file
- * calls share a small thread pool, so more than a handful rarely helps.
+ * `parallelCopies` takes any integer from 1). Delete's bound, one number for
+ * both: Node's file calls share a small thread pool, so more rarely helps.
  */
-export const COPY_MAX_PARALLEL_COPIES = 64;
+export const COPY_MAX_PARALLEL_COPIES = DELETE_MAX_CONCURRENT;
 
 const IN_ROOTS = "Absolute, or relative to the connection's first allowed folder.";
 

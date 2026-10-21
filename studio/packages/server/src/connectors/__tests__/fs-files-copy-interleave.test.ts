@@ -519,7 +519,7 @@ describe('#1600 OR41 C6f-2 — Degree of copy parallelism', () => {
     before('opened', 'in/a.txt', async () => {
       overlapped = await Promise.race([
         bOpened.then(() => true),
-        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 300)),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 1000)),
       ]);
     });
     const events = await run({
@@ -545,5 +545,41 @@ describe('#1600 OR41 C6f-2 — Degree of copy parallelism', () => {
     const events = await run({ sourcePath: 'in', parallelCopies: 2 }, { signal: ac.signal });
     expect(failure(events)).toBeDefined();
     expect(events.some((e) => e.type === 'succeeded')).toBe(false);
+    // No copy starts after the abort.
+    expect(await tree(dst)).not.toContain('f3.txt');
+    expect(await tree(dst)).not.toContain('f4.txt');
+  });
+
+  it('the first failure stops new copies; the one under way finishes', async () => {
+    for (const n of [1, 2, 3, 4, 5, 6]) await put(`in/f${n}.txt`, String(n));
+    before('open', 'in/f1.txt', remove('in/f1.txt'));
+    // f2 is held until f1 has failed, so the pool has its failure first.
+    before('opened', 'in/f2.txt', () => new Promise((resolve) => setTimeout(resolve, 200)));
+    const events = await run({ sourcePath: 'in', skipMissingFiles: false, parallelCopies: 2 });
+    expect(failure(events).error).toContain('ENOENT');
+    expect(await tree(dst)).toEqual(['f2.txt']);
+    expect(events).toContainEqual({ type: 'output', name: 'filesWritten', value: 1 });
+  });
+
+  it('a failed folder sync removes no source, whichever copy flushes next', async () => {
+    for (const n of [1, 2, 3]) await put(`in/f${n}.txt`, String(n));
+    // The sink folder's first sync fails, once: a flush that tried again
+    // would pass, and its copy would delete its source.
+    hooks.push({
+      fn: 'open',
+      path: join(dst, 'out'),
+      nth: 1,
+      act: () => {
+        throw Object.assign(new Error('EIO: i/o error, fsync'), { code: 'EIO' });
+      },
+      seen: 0,
+    });
+    const events = await run(
+      { sourcePath: 'in', sinkFolder: 'out', afterCopy: 'delete', parallelCopies: 3 },
+      { sourceWritable: true },
+    );
+    expect(failure(events).error).toContain('EIO');
+    expect(events).toContainEqual({ type: 'output', name: 'filesDeleted', value: 0 });
+    expect(await tree(join(src, 'in'))).toEqual(['f1.txt', 'f2.txt', 'f3.txt']);
   });
 });

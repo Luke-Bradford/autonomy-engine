@@ -355,10 +355,15 @@ async function materialize(
         changed?.add(parent);
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+        // #1600 OR41 C6f-2 — marked here too: the folder may be one another
+        // copy running at once has just made under a name that differs only
+        // in case (one folder on a case-insensitive disk), not yet durable.
+        // Once per folder per run (`made`), so it costs at most one more sync.
+        if (made !== undefined) changed?.add(parent);
       }
     };
-    // #1600 OR41 C6f-2 — copies running at once share one creation of a folder,
-    // so the one that loses the `mkdir` race waits until the winner has marked
+    // C6f-2 — copies running at once share one creation of a folder, so the
+    // one that would lose the `mkdir` race waits until the winner has marked
     // its parent for the flush, rather than removing a source before it is.
     // Only the creation is shared: every call still checks the folder below.
     let creating = made?.get(next);
@@ -1191,8 +1196,9 @@ export async function* runFilesCopy(
       }
     };
     await Promise.all(Array.from({ length: width }, worker));
-    // An abort is never a quiet end: the loop does not test the signal, so
-    // the next target's own check throws it.
+    // The loop does not test the signal: a target started after an abort
+    // throws it from its own check, so an abort is never a quiet end of work.
+    // At more than one copy, the failure kept is the first to happen.
     if (failure !== undefined) throw failure.err;
     // Nothing that can throw sits between the lines and the success, so they
     // are yielded once (a rows Copy needs a guard for that; this does not).

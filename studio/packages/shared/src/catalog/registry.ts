@@ -97,8 +97,12 @@ const copyMeasureOutputs = (): Output[] => [
   out('usedParallelCopies', 'number'),
 ];
 
-/** The C6f-1 measures, as a node saved before C6f-2 declares them. */
-const c6f1MeasureOutputs = (): Output[] => copyMeasureOutputs().slice(0, 3);
+/** The C6f-1 measures, as a node saved before C6f-2 declares them: a snapshot. */
+const c6f1MeasureOutputs = (): Output[] => [
+  out('durationMs', 'number'),
+  optionalOut('throughput', 'number'),
+  out('consistency', 'json'),
+];
 
 /**
  * #1396 — the hint on a `${}` duration field (`wait.seconds`,

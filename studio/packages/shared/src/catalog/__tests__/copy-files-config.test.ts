@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { COPY_MAX_PARALLEL_COPIES, copyFilesConfigSchema } from '../copy-files-config.js';
 import { getActivity } from '../registry.js';
 import { COPY_FILES_ACTIVITY_TYPE } from '../types.js';
+import { activityNodeErrors } from '../../engine/activity-config-check.js';
+import type { Node } from '../../schemas/pipeline.js';
 
 /** #1600 OR41 C1a — the Copy · Files as-is config and its catalog entry. */
 const issues = (input: unknown) =>
@@ -285,9 +287,16 @@ describe('copy_files Degree of copy parallelism (#1600 OR41 C6f-2)', () => {
     expect(issues({ ...merge, parallelCopies: 1 })).toEqual([]);
   });
 
-  it('is drawn under Preserve and Flatten', () => {
-    expect(getActivity(COPY_FILES_ACTIVITY_TYPE)!.appliesWhen?.['parallelCopies']).toEqual([
-      { field: 'copyBehavior', in: ['preserve', 'flatten'] },
-    ]);
+  it('takes dynamic content at save (UI STANDARD rule 4)', () => {
+    const node = {
+      id: 'c',
+      type: COPY_FILES_ACTIVITY_TYPE,
+      connectionIds: { source: 's', sink: 's' },
+      config: { sourcePath: 'in', parallelCopies: '${pipeline().parameters.n}' },
+    } as unknown as Node;
+    expect(activityNodeErrors(node)).toEqual([]);
+    // And the same check refuses a literal out of range, so it is not vacuous.
+    const literal = { ...node, config: { sourcePath: 'in', parallelCopies: 0 } } as Node;
+    expect(activityNodeErrors(literal)).toHaveLength(1);
   });
 });
