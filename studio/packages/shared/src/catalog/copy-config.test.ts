@@ -615,3 +615,96 @@ describe('session log mode (#1600 OR41 C6c-2)', () => {
     expect(entry.appliesWhen?.logMode).toEqual([{ field: 'logTo', in: ['folder'] }]);
   });
 });
+
+describe('partitioned reads (C6f-3)', () => {
+  const id = { source: 'a', sink: 'id', type: 'integer' as const };
+  const issues = (extra: Record<string, unknown>) => {
+    const r = copyInputSchema.safeParse({ mapping: [id], ...extra });
+    return r.success ? [] : r.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`);
+  };
+
+  it('defaults to no partitioning and one copy, so a stored copy reads as it did', () => {
+    const cfg = copyInputSchema.parse({ mapping: [id] });
+    expect(cfg.partitionOption).toBe('none');
+    expect(cfg.parallelCopies).toBe(1);
+    expect(cfg.partitionColumnName).toBeUndefined();
+    expect(copyDispatchInputSchema.parse({ mapping: [id] }).partitionOption).toBe('none');
+  });
+
+  it('takes Dynamic range with a column, optional bounds and a degree', () => {
+    expect(
+      issues({
+        partitionOption: 'dynamicRange',
+        partitionColumnName: 'id',
+        partitionLowerBound: 1,
+        partitionUpperBound: 80,
+        parallelCopies: 4,
+      }),
+    ).toEqual([]);
+    expect(issues({ partitionOption: 'dynamicRange', partitionColumnName: 'id' })).toEqual([]);
+  });
+
+  it('needs a partition column under Dynamic range', () => {
+    expect(issues({ partitionOption: 'dynamicRange' })).toEqual([
+      'partitionColumnName: Dynamic range needs a partition column',
+    ]);
+  });
+
+  it('refuses the range settings and a degree without a partition option', () => {
+    expect(issues({ partitionColumnName: 'id' })).toEqual([
+      'partitionColumnName: a partition column needs Partition option Dynamic range',
+    ]);
+    expect(issues({ partitionLowerBound: 1 })).toEqual([
+      'partitionLowerBound: a partition bound needs Partition option Dynamic range',
+    ]);
+    expect(issues({ parallelCopies: 2 })).toEqual([
+      'parallelCopies: a rows Copy reads with one reader unless Partition option is Dynamic range',
+    ]);
+    expect(issues({ parallelCopies: 1 })).toEqual([]);
+  });
+
+  it('refuses a lower bound above the upper bound, and a non-integer bound', () => {
+    expect(
+      issues({
+        partitionOption: 'dynamicRange',
+        partitionColumnName: 'id',
+        partitionLowerBound: 9,
+        partitionUpperBound: 3,
+      }),
+    ).toEqual(['partitionLowerBound: the lower bound is above the upper bound']);
+    expect(
+      issues({ partitionOption: 'dynamicRange', partitionColumnName: 'id', partitionLowerBound: 1.5 })
+        .length,
+    ).toBe(1);
+  });
+
+  it('keeps the partition column literal: a name never comes from an expression', () => {
+    expect(
+      issues({ partitionOption: 'dynamicRange', partitionColumnName: '${pipeline().parameters.c}' }),
+    ).toEqual([
+      'partitionColumnName: the partition column stays literal, so a column name never comes from an expression',
+    ]);
+  });
+
+  it('places the range on the Source tab, drawn only under Dynamic range, and the degree first on Settings', () => {
+    const entry = getActivity(COPY_ACTIVITY_TYPE)!;
+    const tab = (key: string) => entry.tabs?.find((t) => t.key === key)?.fields;
+    expect(tab('source')).toEqual([
+      'partitionOption',
+      'partitionColumnName',
+      'partitionLowerBound',
+      'partitionUpperBound',
+    ]);
+    expect(tab('settings')?.[0]).toBe('parallelCopies');
+    for (const field of [
+      'partitionColumnName',
+      'partitionLowerBound',
+      'partitionUpperBound',
+      'parallelCopies',
+    ]) {
+      expect(entry.appliesWhen?.[field]).toEqual([
+        { field: 'partitionOption', in: ['dynamicRange'] },
+      ]);
+    }
+  });
+});

@@ -45,6 +45,19 @@ export type CopyFilesIfExists = z.infer<typeof ifExistsSchema>;
  */
 export const COPY_MAX_PARALLEL_COPIES = DELETE_MAX_CONCURRENT;
 
+/**
+ * #1600 OR41 C6f-3 — ADF's `parallelCopies`, ONE field for both Copy modes:
+ * files as-is copies that many files at once (C6f-2), a rows Copy reads that
+ * many partitions at once (C6f-3). Only the help differs, because what is
+ * parallel differs. 1 when absent, not ADF's Auto, so a node saved before
+ * either slice copies as it did.
+ */
+export const parallelCopiesField = (description: string) =>
+  presented(z.number().int().min(1).max(COPY_MAX_PARALLEL_COPIES).default(1), {
+    title: 'Degree of copy parallelism',
+    description,
+  });
+
 const IN_ROOTS = "Absolute, or relative to the connection's first allowed folder.";
 
 const path = (title: string, description: string) =>
@@ -168,10 +181,9 @@ export const copyFilesConfigSchema = z
     // #1600 OR41 C6f-2 — ADF's `parallelCopies` between file stores: parallel by
     // file. 1 when absent, not ADF's Auto, so a node saved before C6f-2 copies
     // as it did, one file at a time and with its log lines in order.
-    parallelCopies: presented(z.number().int().min(1).max(COPY_MAX_PARALLEL_COPIES).default(1), {
-      title: 'Degree of copy parallelism',
-      description: `How many files are copied at once, 1 to ${COPY_MAX_PARALLEL_COPIES}. A merge writes one file, so it copies one at a time.`,
-    }),
+    parallelCopies: parallelCopiesField(
+      `How many files are copied at once, 1 to ${COPY_MAX_PARALLEL_COPIES}. A merge writes one file, so it copies one at a time.`,
+    ),
   })
   .superRefine((cfg, ctx) => {
     // Every rule here refuses a config that would do something other than what

@@ -1002,7 +1002,17 @@ const ENTRIES: ActivityCatalogEntry[] = [
     kind: 'execution',
     category: 'general',
     tabs: [
-      { key: 'source', bindings: ['sourceConnection', 'sourceDataset'], fields: [] },
+      {
+        key: 'source',
+        bindings: ['sourceConnection', 'sourceDataset'],
+        // #1600 OR41 C6f-3 — ADF draws the partition option on the Source tab.
+        fields: [
+          'partitionOption',
+          'partitionColumnName',
+          'partitionLowerBound',
+          'partitionUpperBound',
+        ],
+      },
       {
         key: 'sink',
         bindings: ['sinkConnection', 'sinkDataset'],
@@ -1020,11 +1030,13 @@ const ENTRIES: ActivityCatalogEntry[] = [
       { key: 'mapping', fields: ['mapping'] },
       // #1600 OR41 C6a — ADF's Settings tab, after Mapping. C6d-1's fault
       // tolerance comes before the Session log, in ADF's order; C6e-1's Verify
-      // after copy sits between them, the spec's Settings order. Parallelism
-      // joins it with partitioned reads (C6f-3): one reader has no degree.
+      // after copy sits between them, the spec's Settings order. C6f-3's degree
+      // leads it, drawn under Dynamic range: one reader has no degree.
       {
         key: 'settings',
         fields: [
+          // C6f-3 — first, as on Files as-is and in ADF.
+          'parallelCopies',
           'skipIncompatibleRows',
           'validateDataConsistency',
           'logLevel',
@@ -1054,6 +1066,12 @@ const ENTRIES: ActivityCatalogEntry[] = [
       logFolder: [{ field: 'logTo', in: ['folder'] }],
       // C6c-2 — the Log mode, for Folder.
       logMode: [{ field: 'logTo', in: ['folder'] }],
+      // C6f-3 — the range and the degree mean something only under Dynamic
+      // range, and save refuses them under None (`copyPartitionIssues`).
+      partitionColumnName: [{ field: 'partitionOption', in: ['dynamicRange'] }],
+      partitionLowerBound: [{ field: 'partitionOption', in: ['dynamicRange'] }],
+      partitionUpperBound: [{ field: 'partitionOption', in: ['dynamicRange'] }],
+      parallelCopies: [{ field: 'partitionOption', in: ['dynamicRange'] }],
     },
     idempotent: false,
     // #1190 (M10 slice 2) — `postgres` joins the SOURCE allowlist, because the

@@ -5,6 +5,7 @@ import { interpolationMode } from '../engine/expr.js';
 import { isSet } from './config-value.js';
 import { SqlParameterValueSchema } from './dataset-config.js';
 import { nocaseFold } from '../datamove/schema-drift.js';
+import { COPY_MAX_PARALLEL_COPIES, parallelCopiesField } from './copy-files-config.js';
 import {
   sessionLogConfigFields,
   sessionLogConnectionFolderField,
@@ -298,6 +299,67 @@ export function preCopyScriptIssue(config: Record<string, unknown>): string | nu
     : null;
 }
 
+/** #1600 OR41 C6f-3 — ADF's `partitionOption`, Dynamic range only so far. */
+export const COPY_PARTITION_OPTIONS = ['none', 'dynamicRange'] as const;
+export const copyPartitionOptionSchema = z.enum(COPY_PARTITION_OPTIONS);
+
+/**
+ * #1600 OR41 C6f-3 — the partition settings that would do something other than
+ * what they say: a column or bound with nothing to partition, a degree with one
+ * reader, Dynamic range with no column, or bounds the wrong way round. The
+ * column stays literal (§8). A `${}` option or degree is decided at dispatch,
+ * where the dispatch schema (the same shape) sees the resolved value.
+ */
+export function copyPartitionIssues(
+  config: Record<string, unknown>,
+): readonly { readonly field: string; readonly message: string }[] {
+  const option = config['partitionOption'] ?? 'none';
+  if (typeof option !== 'string' || interpolationMode(option).mode !== 'literal') return [];
+  const issues: { field: string; message: string }[] = [];
+  const column = config['partitionColumnName'];
+  if (typeof column === 'string' && column.includes('${')) {
+    issues.push({
+      field: 'partitionColumnName',
+      message:
+        'the partition column stays literal, so a column name never comes from an expression',
+    });
+  }
+  if (option === 'none') {
+    if (column !== undefined) {
+      issues.push({
+        field: 'partitionColumnName',
+        message: 'a partition column needs Partition option Dynamic range',
+      });
+    }
+    for (const field of ['partitionLowerBound', 'partitionUpperBound']) {
+      if (config[field] !== undefined) {
+        issues.push({ field, message: 'a partition bound needs Partition option Dynamic range' });
+      }
+    }
+    const degree = config['parallelCopies'];
+    if (typeof degree === 'number' && degree > 1) {
+      issues.push({
+        field: 'parallelCopies',
+        message:
+          'a rows Copy reads with one reader unless Partition option is Dynamic range',
+      });
+    }
+    return issues;
+  }
+  if (column === undefined) {
+    issues.push({ field: 'partitionColumnName', message: 'Dynamic range needs a partition column' });
+  }
+  const lower = config['partitionLowerBound'];
+  const upper = config['partitionUpperBound'];
+  if (typeof lower === 'number' && typeof upper === 'number' && lower > upper) {
+    issues.push({
+      field: 'partitionLowerBound',
+      message: 'the lower bound is above the upper bound',
+    });
+  }
+  return issues;
+}
+
 /**
  * #1600 OR41 C6d-1 — why Skip incompatible rows cannot apply, or `null`. ADF's
  * `enableSkipIncompatibleRow` "doesn't apply" with Upsert, and studio's
@@ -559,6 +621,44 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
           "column cannot hold) instead of failing. A trigger's rejection still fails. Not with " +
           'Upsert. Slower when on.',
       }),
+      // #1600 OR41 C6f-3 — ADF's `partitionOption` on a database source
+      // (https://learn.microsoft.com/azure/data-factory/connector-azure-database-for-postgresql#parallel-copy-from-azure-database-for-postgresql).
+      // Dynamic range only: Physical partitions, a Query source's partition hook,
+      // date columns and the primary key as the default column are not built.
+      partitionOption: presented(copyPartitionOptionSchema.default('none'), {
+        title: 'Partition option',
+        description:
+          'Dynamic range reads a PostgreSQL table as ranges of an integer column, read at once ' +
+          'by Degree of copy parallelism readers that share one snapshot. The rows still land ' +
+          'in one transaction, in no fixed order. None reads with one reader.',
+        options: optionTitles(copyPartitionOptionSchema, {
+          none: 'None',
+          dynamicRange: 'Dynamic range',
+        }),
+      }),
+      // Literal, as Key columns are: §8 keeps an identifier out of expressions.
+      partitionColumnName: presented(literalText(singleLine(z.string().min(1))).optional(), {
+        title: 'Partition column',
+        description:
+          'An integer column (smallint, integer or bigint) to split the reads on. A unique ' +
+          'column, such as the primary key, splits them evenly.',
+      }),
+      partitionLowerBound: presented(z.number().int().optional(), {
+        title: 'Partition lower bound',
+        description:
+          "Sets the ranges' stride, not a filter: rows below it are still copied. Empty is the " +
+          "column's lowest value.",
+      }),
+      partitionUpperBound: presented(z.number().int().optional(), {
+        title: 'Partition upper bound',
+        description:
+          "Sets the ranges' stride, not a filter: rows above it are still copied. Empty is the " +
+          "column's highest value.",
+      }),
+      parallelCopies: parallelCopiesField(
+        `How many partitions are read at once, 1 to ${COPY_MAX_PARALLEL_COPIES}, each on its ` +
+          'own database session. Used with Partition option Dynamic range.',
+      ),
       // #1600 OR41 C6e-1 — ADF's `validateDataConsistency` for a table copy
       // (https://learn.microsoft.com/azure/data-factory/copy-activity-data-consistency).
       // Literal, like Skip incompatible rows. Off commits exactly as before C6e.
@@ -596,6 +696,9 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
       const verifyIssue = copyVerifyConsistencyIssue(cfg);
       if (verifyIssue !== null) {
         ctx.addIssue({ code: 'custom', path: ['validateDataConsistency'], message: verifyIssue });
+      }
+      for (const issue of copyPartitionIssues(cfg)) {
+        ctx.addIssue({ code: 'custom', path: [issue.field], message: issue.message });
       }
       for (const issue of copyKeyColumnIssues(cfg)) {
         ctx.addIssue({
