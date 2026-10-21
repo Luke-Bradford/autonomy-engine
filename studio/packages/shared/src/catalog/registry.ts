@@ -87,13 +87,18 @@ const optionalOut = (name: string, type: Output['type']): Output => ({
 /**
  * #1600 OR41 C6f-1 — the three outputs both Copy modes end on (`copyMeasure`):
  * the run's duration, its read throughput (null for a copy too quick to divide
- * by, so optional) and its consistency verdict.
+ * by, so optional) and its consistency verdict. C6f-2 adds ADF's
+ * `usedParallelCopies`, how many copies ran at once.
  */
 const copyMeasureOutputs = (): Output[] => [
   out('durationMs', 'number'),
   optionalOut('throughput', 'number'),
   out('consistency', 'json'),
+  out('usedParallelCopies', 'number'),
 ];
+
+/** The C6f-1 measures, as a node saved before C6f-2 declares them. */
+const c6f1MeasureOutputs = (): Output[] => copyMeasureOutputs().slice(0, 3);
 
 /**
  * #1396 — the hint on a `${}` duration field (`wait.seconds`,
@@ -1010,8 +1015,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
       { key: 'mapping', fields: ['mapping'] },
       // #1600 OR41 C6a — ADF's Settings tab, after Mapping. C6d-1's fault
       // tolerance comes before the Session log, in ADF's order; C6e-1's Verify
-      // after copy sits between them, the spec's Settings order, and C6f's
-      // parallelism joins it.
+      // after copy sits between them, the spec's Settings order. Parallelism
+      // joins it with partitioned reads (C6f-3): one reader has no degree.
       {
         key: 'settings',
         fields: ['skipIncompatibleRows', 'validateDataConsistency', 'logLevel'],
@@ -1102,9 +1107,19 @@ const ENTRIES: ActivityCatalogEntry[] = [
       out('truncated', 'boolean'),
       ...copyMeasureOutputs(),
     ],
-    // The five a node saved before C6f-1 declares. Written out, not derived
-    // from `outputs`: it is a snapshot of an old default.
+    // The nine a node saved before C6f-2 declares, and the five one saved
+    // before C6f-1 declares. Written out, not derived from `outputs`: each is a
+    // snapshot of an old default.
     formerOutputs: [
+      [
+        out('rowsRead', 'number'),
+        out('rowsWritten', 'number'),
+        out('rowsSkipped', 'number'),
+        out('rowsFailed', 'number'),
+        out('bytesRead', 'number'),
+        out('truncated', 'boolean'),
+        ...c6f1MeasureOutputs(),
+      ],
       [
         out('rowsRead', 'number'),
         out('rowsWritten', 'number'),
@@ -1172,12 +1187,14 @@ const ENTRIES: ActivityCatalogEntry[] = [
         bindings: ['sinkConnection'],
         fields: ['sinkFolder', 'sinkFileName', 'copyBehavior', 'ifExists'],
       },
-      // #1600 OR41 C6b — a rows Copy's Settings tab (C6a). C6d-2's fault
-      // tolerance comes before the Session log, in ADF's order, then C6e-2's
-      // Verify copied files, then the skip it controls.
+      // #1600 OR41 C6b — a rows Copy's Settings tab (C6a). C6f-2's Degree of
+      // copy parallelism leads it, as in ADF's; C6d-2's fault tolerance comes
+      // before the Session log, in ADF's order, then C6e-2's Verify copied
+      // files, then the skip it controls.
       {
         key: 'settings',
         fields: [
+          'parallelCopies',
           'skipMissingFiles',
           'skipForbiddenFiles',
           'validateDataConsistency',
@@ -1201,6 +1218,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
       // and save refuses it there.
       validateDataConsistency: [{ field: 'copyBehavior', in: ['preserve'] }],
       skipInconsistentFiles: [{ field: 'validateDataConsistency', in: ['true'] }],
+      // C6f-2 — a merge writes one file, and save refuses more than one copy there.
+      parallelCopies: [{ field: 'copyBehavior', in: ['preserve', 'flatten'] }],
       sinkFileName: [
         { field: 'pathType', in: ['file'] },
         { field: 'copyBehavior', in: ['merge'] },
@@ -1221,9 +1240,22 @@ const ENTRIES: ActivityCatalogEntry[] = [
       out('dest', 'string'),
       ...copyMeasureOutputs(),
     ],
-    // The nine a node saved before C6f-1 declares (C1b's), and the seven one
-    // saved before C1b declares (C1a's), as written then.
+    // The twelve a node saved before C6f-2 declares (C6f-1's), the nine one
+    // saved before C6f-1 declares (C1b's), and the seven one saved before C1b
+    // declares (C1a's), as written then.
     formerOutputs: [
+      [
+        out('filesRead', 'number'),
+        out('filesWritten', 'number'),
+        out('filesSkipped', 'number'),
+        out('filesDeleted', 'number'),
+        out('filesMoved', 'number'),
+        out('bytesRead', 'number'),
+        out('bytesWritten', 'number'),
+        out('source', 'string'),
+        out('dest', 'string'),
+        ...c6f1MeasureOutputs(),
+      ],
       [
         out('filesRead', 'number'),
         out('filesWritten', 'number'),

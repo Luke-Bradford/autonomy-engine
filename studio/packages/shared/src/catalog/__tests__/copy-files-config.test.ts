@@ -90,7 +90,8 @@ describe('copy_files config', () => {
     expect(entry.datasetKinds).toBeUndefined();
     // Files and bytes, never rows: a `rowsWritten` of 0 would count as "wrote
     // nothing" in the run's rows total. Plus `source` and `dest`, the retired
-    // Copy file / Move file outputs (#1600 C1b), and the run's measures (C6f-1).
+    // Copy file / Move file outputs (#1600 C1b), the run's measures (C6f-1) and
+    // how many copies ran at once (C6f-2).
     expect(entry.outputs.map((o) => o.name).sort()).toEqual(
       [
         'bytesRead',
@@ -105,6 +106,7 @@ describe('copy_files config', () => {
         'filesWritten',
         'source',
         'throughput',
+        'usedParallelCopies',
       ].sort(),
     );
   });

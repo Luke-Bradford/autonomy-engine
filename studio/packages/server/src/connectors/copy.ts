@@ -169,6 +169,10 @@ function copyOutputs(counters: CopyCounters, measure: CopyMeasure): Record<strin
     bytesRead: counters.bytesRead,
     truncated: counters.truncated,
     ...measure,
+    // #1600 OR41 C6f-2 — one reader pumped into one sink transaction: without
+    // partitioned reads (C6f-3) a rows Copy runs one copy, as ADF's does when
+    // its source has no partition option.
+    usedParallelCopies: 1,
   };
 }
 

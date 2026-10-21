@@ -619,7 +619,10 @@
 // (`rowsSkipped`, `durationMs`, `throughput`, `consistency`), with
 // `formerOutputs` snapshots. A pre-C6f-1 build never yields the required ones,
 // so it fails such a node "missing declared output".
-export const CATALOG_VERSION = 63;
+// BUMP 63→64 for #1600 OR41 C6f-2: Copy's `usedParallelCopies` output, in both
+// modes, and Copy · Files as-is's Degree of copy parallelism. A pre-C6f-2 build
+// never yields the output, so it fails such a node "missing declared output".
+export const CATALOG_VERSION = 64;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the
