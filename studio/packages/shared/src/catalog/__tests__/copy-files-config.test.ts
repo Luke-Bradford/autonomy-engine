@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { copyFilesConfigSchema } from '../copy-files-config.js';
+import { COPY_MAX_PARALLEL_COPIES, copyFilesConfigSchema } from '../copy-files-config.js';
 import { getActivity } from '../registry.js';
 import { COPY_FILES_ACTIVITY_TYPE } from '../types.js';
 
@@ -24,6 +24,7 @@ describe('copy_files config', () => {
       validateDataConsistency: false,
       skipInconsistentFiles: false,
       logLevel: 'warning',
+      parallelCopies: 1,
     });
     expect(issues({})).toEqual([expect.stringMatching(/^sourcePath: /)]);
   });
@@ -127,6 +128,7 @@ describe('copy_files appliesWhen (#1686)', () => {
     sinkFileName: 'all.csv',
     skipForbiddenFiles: true,
     validateDataConsistency: true,
+    parallelCopies: 4,
   };
   const combos = (['file', 'folder', 'list'] as const).flatMap((pathType) =>
     (['keep', 'delete', 'move'] as const).flatMap((afterCopy) =>
@@ -174,6 +176,7 @@ describe('copy_files session log (#1600 OR41 C6b)', () => {
     const tabs = getActivity(COPY_FILES_ACTIVITY_TYPE)!.tabs!;
     expect(tabs.map((t) => t.key)).toEqual(['source', 'sink', 'settings']);
     expect(tabs[2]!.fields).toEqual([
+      'parallelCopies',
       'skipMissingFiles',
       'skipForbiddenFiles',
       'validateDataConsistency',
@@ -257,6 +260,32 @@ describe('copy_files data consistency (#1600 OR41 C6e-2)', () => {
     ]);
     expect(entry.appliesWhen?.['skipInconsistentFiles']).toEqual([
       { field: 'validateDataConsistency', in: ['true'] },
+    ]);
+  });
+});
+
+describe('copy_files Degree of copy parallelism (#1600 OR41 C6f-2)', () => {
+  it('defaults to one at a time and takes 1 to COPY_MAX_PARALLEL_COPIES', () => {
+    expect(copyFilesConfigSchema.parse({ sourcePath: 'in' }).parallelCopies).toBe(1);
+    expect(issues({ sourcePath: 'in', parallelCopies: COPY_MAX_PARALLEL_COPIES })).toEqual([]);
+    expect(issues({ sourcePath: 'in', parallelCopies: 0 })).toHaveLength(1);
+    expect(issues({ sourcePath: 'in', parallelCopies: COPY_MAX_PARALLEL_COPIES + 1 })).toHaveLength(
+      1,
+    );
+    expect(issues({ sourcePath: 'in', parallelCopies: 2.5 })).toHaveLength(1);
+  });
+
+  it('refuses more than one under Merge, which writes one file', () => {
+    const merge = { sourcePath: 'in', copyBehavior: 'merge', sinkFileName: 'all.csv' };
+    expect(issues({ ...merge, parallelCopies: 2 })).toEqual([
+      'parallelCopies: a merge writes one file, so it copies one at a time; leave Degree of copy parallelism at 1',
+    ]);
+    expect(issues({ ...merge, parallelCopies: 1 })).toEqual([]);
+  });
+
+  it('is drawn under Preserve and Flatten', () => {
+    expect(getActivity(COPY_FILES_ACTIVITY_TYPE)!.appliesWhen?.['parallelCopies']).toEqual([
+      { field: 'copyBehavior', in: ['preserve', 'flatten'] },
     ]);
   });
 });

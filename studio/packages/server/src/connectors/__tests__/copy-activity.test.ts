@@ -135,6 +135,9 @@ describe('copy activity — the happy path contract', () => {
       durationMs: expect.any(Number),
       throughput: throughputOf(outputs),
       consistency: { verified: false, result: 'none' },
+      // #1600 OR41 C6f-2 — one reader into one sink transaction: no partitioned
+      // reads yet, so a rows Copy always runs one copy (ADF reports the same).
+      usedParallelCopies: 1,
     });
     // #1600 OR41 C6f-1 — the catalog's contract, name for name and in order:
     // an output the entry declares and the copy does not yield fails the node.

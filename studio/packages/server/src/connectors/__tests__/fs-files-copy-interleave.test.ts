@@ -506,3 +506,40 @@ describe('#1600 C6e-2 — Verify copied files', () => {
     expect(failure(events).error).toMatch(/needs Copy behaviour Preserve hierarchy/);
   });
 });
+
+describe('#1600 OR41 C6f-2 — Degree of copy parallelism', () => {
+  // Whether b is opened while a is held open: a's hook waits for b's open, up
+  // to a bound, so one copy at a time answers false rather than hanging.
+  async function overlaps(parallelCopies: number): Promise<boolean> {
+    hooks.length = 0;
+    let opened!: () => void;
+    const bOpened = new Promise<void>((resolve) => (opened = resolve));
+    let overlapped = false;
+    before('opened', 'in/b.txt', () => opened());
+    before('opened', 'in/a.txt', async () => {
+      overlapped = await Promise.race([
+        bOpened.then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 300)),
+      ]);
+    });
+    const events = await run({ sourcePath: 'in', sinkFolder: `out${parallelCopies}`, parallelCopies });
+    expect(outputs(events)).toMatchObject({ filesWritten: 2, usedParallelCopies: parallelCopies });
+    return overlapped;
+  }
+
+  it('copies files at once, up to the degree, and one at a time at 1', async () => {
+    await put('in/a.txt', 'aa');
+    await put('in/b.txt', 'b');
+    expect(await overlaps(2)).toBe(true);
+    expect(await overlaps(1)).toBe(false);
+  });
+
+  it('an abort while copies are under way is the outcome, never a success', async () => {
+    for (const n of [1, 2, 3, 4]) await put(`in/f${n}.txt`, String(n));
+    const ac = new AbortController();
+    before('opened', 'in/f1.txt', () => ac.abort());
+    const events = await run({ sourcePath: 'in', parallelCopies: 2 }, { signal: ac.signal });
+    expect(failure(events)).toBeDefined();
+    expect(events.some((e) => e.type === 'succeeded')).toBe(false);
+  });
+});
