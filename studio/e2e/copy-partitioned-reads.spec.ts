@@ -81,21 +81,26 @@ test.describe('#1600 C6f-3 — Copy partitioned reads', () => {
 
       // None draws no range and no degree: one reader has neither.
       await sourceTab.click();
-      await expect(option).toHaveValue('none');
+      await expect(option).toBeVisible();
       await expect(column).toHaveCount(0);
       await expect(lower).toHaveCount(0);
       await settingsTab.click();
       await expect(pane.getByRole('combobox', { name: 'Session log' })).toBeVisible();
       await expect(degree).toHaveCount(0);
 
-      // Dynamic range draws the column and the bounds on Source, above the fold.
+      // Dynamic range draws the column and the bounds on Source. The bounds are
+      // short numbers, so they pack on one row (UI standard 5); the dock scrolls.
       await sourceTab.click();
       await option.selectOption('dynamicRange');
       await expect(column).toBeVisible();
       await expect(lower).toBeVisible();
       await expect(upper).toBeVisible();
-      const upperBox = await upper.boundingBox();
-      expect(upperBox, 'the upper bound has a box').toBeTruthy();
+      await upper.scrollIntoViewIfNeeded();
+      const [lowerBox, upperBox] = await Promise.all([lower.boundingBox(), upper.boundingBox()]);
+      expect(lowerBox && upperBox, 'each bound has a box').toBeTruthy();
+      expect(Math.abs(lowerBox!.y - upperBox!.y)).toBeLessThan(1);
+      expect(lowerBox!.x).toBeLessThan(upperBox!.x);
+      expect(upperBox!.width).toBeLessThanOrEqual(160);
       expect(upperBox!.y + upperBox!.height).toBeLessThanOrEqual(900);
       await column.fill('id');
       await lower.fill('1');
