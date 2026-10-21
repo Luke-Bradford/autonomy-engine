@@ -673,14 +673,20 @@ describe('partitioned reads (C6f-3)', () => {
       }),
     ).toEqual(['partitionLowerBound: the lower bound is above the upper bound']);
     expect(
-      issues({ partitionOption: 'dynamicRange', partitionColumnName: 'id', partitionLowerBound: 1.5 })
-        .length,
+      issues({
+        partitionOption: 'dynamicRange',
+        partitionColumnName: 'id',
+        partitionLowerBound: 1.5,
+      }).length,
     ).toBe(1);
   });
 
   it('keeps the partition column literal: a name never comes from an expression', () => {
     expect(
-      issues({ partitionOption: 'dynamicRange', partitionColumnName: '${pipeline().parameters.c}' }),
+      issues({
+        partitionOption: 'dynamicRange',
+        partitionColumnName: '${pipeline().parameters.c}',
+      }),
     ).toEqual([
       'partitionColumnName: the partition column stays literal, so a column name never comes from an expression',
     ]);

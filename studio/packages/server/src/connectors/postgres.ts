@@ -19,7 +19,10 @@ import { runCopyActivity } from './copy.js';
 import { runLookupActivity } from './lookup.js';
 import { postgresTableMetadata } from './postgres-table-metadata.js';
 import { runTableMetadata } from './table-metadata.js';
-import type { SourceIo } from './source-io.js';
+import type { PartitionPlan, PartitionedRead, SourceIo } from './source-io.js';
+import { dynamicRanges, rangePredicate } from './partition-ranges.js';
+import { mergeBatches } from './merge-batches.js';
+import { quoteIdentifier } from './sql-identifier.js';
 import {
   rewriteNamedParametersToPositional,
   type PostgresStatement,
@@ -206,6 +209,8 @@ export function createPostgresAdapter(
         sourceCoercion: () => ({}),
         readBatches: ({ dataset, signal, batchRows }) =>
           readPostgresDatasetBatches(read(dataset, signal, batchRows)),
+        planPartitions: ({ dataset, signal, batchRows, partition }) =>
+          planPostgresPartitions(read(dataset, signal, batchRows), partition),
       };
 
       // #1190 (M10 slice 2) — `copy` is the ONE activity a store connection
@@ -476,10 +481,32 @@ export async function describePostgresDatasetColumns(read: PostgresDatasetRead):
  * (#1600 C1q-c) is the one bound on the whole read: no FETCH starts past it, and
  * in its final stretch the FETCH in flight is cancelled at it.
  */
-export async function* readPostgresDatasetBatches(
+export function readPostgresDatasetBatches(
   read: PostgresDatasetRead,
 ): AsyncIterable<readonly Record<string, unknown>[]> {
-  const statement = sourceStatementFor(read.datasetKind, read.datasetConfig);
+  return readCursorBatches(
+    read,
+    () => sourceStatementFor(read.datasetKind, read.datasetConfig),
+    ['BEGIN READ ONLY'],
+    queryTimeoutSecondsOf(read.datasetKind, read.datasetConfig),
+  );
+}
+
+/**
+ * One cursor read: open a session, run `begin` (the transaction's opening
+ * statements), declare the cursor over `statementOf()` and FETCH it in batches.
+ * The dataset read above and each partition of a partitioned read (C6f-3) are
+ * this one loop, so the batch boundary, the timeouts and the cleanup cannot
+ * drift between them. `statementOf` runs first, before any session opens, so a
+ * refusal it throws holds no client.
+ */
+async function* readCursorBatches(
+  read: PostgresDatasetRead,
+  statementOf: () => PostgresStatement,
+  begin: readonly string[],
+  queryTimeoutSeconds: number | null,
+): AsyncIterable<readonly Record<string, unknown>[]> {
+  const statement = statementOf();
   const batchRows = read.batchRows ?? COPY_BATCH_ROWS;
   if (read.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset read aborted');
 
@@ -497,12 +524,14 @@ export async function* readPostgresDatasetBatches(
   );
   // #1600 C1q-c — started before BEGIN, so connecting does not count against
   // the query timeout.
-  const clock = startQueryClock(queryTimeoutSecondsOf(read.datasetKind, read.datasetConfig));
+  const clock = startQueryClock(queryTimeoutSeconds);
   let inTransaction = false;
   try {
     try {
-      await client.query('BEGIN READ ONLY');
-      inTransaction = true;
+      for (const sql of begin) {
+        await client.query(sql);
+        inTransaction = true;
+      }
       await runBound(
         client,
         `DECLARE ${CURSOR_NAME} NO SCROLL CURSOR FOR ${statement.sql}`,
@@ -569,6 +598,148 @@ export async function* readPostgresDatasetBatches(
       // A close that fails must never replace the outcome being unwound.
     }
   }
+}
+
+/**
+ * #1600 OR41 C6f-3 — why Dynamic range cannot read this source. A Query has no
+ * partition hook yet (ADF's `?AdfDynamicRangePartitionCondition`), so only a
+ * Table is split.
+ */
+export const PARTITION_NEEDS_TABLE =
+  'Partition option Dynamic range reads a PostgreSQL table; a Query source is read with one reader (set Partition option to None)';
+
+/** The integer types Dynamic range splits; dates and timestamps are not built. */
+const PARTITION_COLUMN_TYPES: readonly string[] = ['smallint', 'integer', 'bigint'];
+
+/** What `pg_export_snapshot()` returns (hex groups joined by `-`), checked before it is spelled into SQL. */
+const SNAPSHOT_ID = /^[0-9A-F]+(-[0-9A-F]+)*$/;
+
+/**
+ * #1600 OR41 C6f-3 — ADF's Dynamic range on a PostgreSQL table.
+ *
+ * A COORDINATOR session opens a repeatable-read, read-only transaction and
+ * exports its snapshot. Each range is then read by a session of its own that
+ * imports that snapshot (`SET TRANSACTION SNAPSHOT`), so the N readers see ONE
+ * consistent table, as the single reader they replace did; a row committed
+ * while they run is in none of them. The coordinator's transaction must stay
+ * open while any reader may still import, so it is held until `batches` ends,
+ * or until `close`.
+ *
+ * Planning reads, before any row: the column's type (`pg_typeof` over a
+ * `LIMIT 0` subquery, which scans nothing), and the column's lowest and
+ * highest values only for a bound left empty (a scan, under the connection's
+ * statement timeout). Every refusal is here, so it lands before the sink
+ * writes. Each reader is one more session on the server: a degree of N holds
+ * N + 1 source sessions while it reads.
+ */
+async function planPostgresPartitions(
+  read: PostgresDatasetRead,
+  partition: PartitionedRead,
+): Promise<PartitionPlan> {
+  if (read.datasetKind !== 'table') throw new DatasetIoError('permanent', PARTITION_NEEDS_TABLE);
+  // Validates the dataset config as the one-reader path does, and refuses what it refuses.
+  sourceStatementFor(read.datasetKind, read.datasetConfig);
+  const table = qualifiedTable(tableDatasetConfigSchema.parse(read.datasetConfig));
+  const column = quoteIdentifier(partition.column, 'partition column');
+  if (read.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset read aborted');
+
+  const coordinator = await openSession(
+    read.createClient,
+    read.connectionConfig,
+    read.secret,
+    'cannot reach the postgres server to read the source',
+  );
+  let closed = false;
+  const close = async () => {
+    if (closed) return;
+    closed = true;
+    try {
+      await coordinator.query('ROLLBACK');
+    } catch {
+      // The session is being closed regardless.
+    }
+    try {
+      await coordinator.end();
+    } catch {
+      // A close that fails must never replace the outcome being unwound.
+    }
+  };
+
+  let snapshot: string;
+  let lower: bigint;
+  let upper: bigint;
+  try {
+    try {
+      await coordinator.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+      const exported = await coordinator.query('SELECT pg_export_snapshot() AS id');
+      snapshot = String(exported.rows[0]?.['id']);
+      const typed = await coordinator.query(
+        `SELECT pg_typeof((SELECT ${column} FROM ${table} LIMIT 0))::text AS type`,
+      );
+      const type = String(typed.rows[0]?.['type']);
+      if (!PARTITION_COLUMN_TYPES.includes(type)) {
+        throw new DatasetIoError(
+          'permanent',
+          `the partition column '${partition.column}' is ${type}; Dynamic range splits a smallint, integer or bigint column`,
+        );
+      }
+      if (!SNAPSHOT_ID.test(snapshot)) {
+        throw new DatasetIoError('permanent', `the server exported an unexpected snapshot id`);
+      }
+      let min: string | null = null;
+      let max: string | null = null;
+      if (partition.lower === undefined || partition.upper === undefined) {
+        const range = await coordinator.query(
+          `SELECT min(${column})::text AS lo, max(${column})::text AS hi FROM ${table}`,
+        );
+        min = (range.rows[0]?.['lo'] as string | null | undefined) ?? null;
+        max = (range.rows[0]?.['hi'] as string | null | undefined) ?? null;
+      }
+      const lo = partition.lower !== undefined ? BigInt(partition.lower) : min;
+      const hi = partition.upper !== undefined ? BigInt(partition.upper) : max;
+      // No value to stride over (an empty table, or a column of NULLs): one range.
+      lower = lo === null ? 0n : BigInt(lo);
+      upper = hi === null ? 0n : BigInt(hi);
+    } catch (err) {
+      throw readFailure(err, 'the source could not be partitioned', read.secret);
+    }
+  } catch (err) {
+    await close();
+    throw err;
+  }
+
+  const ranges = dynamicRanges(lower, upper, partition.degree);
+  // Every reader stops at its next batch boundary on the first failure, or when
+  // the copy stops pulling, as well as on the copy's own cancel.
+  const stopReaders = new AbortController();
+  const signal =
+    read.signal === undefined
+      ? stopReaders.signal
+      : AbortSignal.any([read.signal, stopReaders.signal]);
+  const begin = [
+    'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY',
+    `SET TRANSACTION SNAPSHOT '${snapshot}'`,
+  ];
+  const readers = ranges.map((range) => {
+    const where = rangePredicate(column, range);
+    return readCursorBatches(
+      { ...read, signal },
+      () =>
+        where === null
+          ? { sql: `SELECT * FROM ${table}`, values: [] }
+          : { sql: `SELECT * FROM ${table} WHERE ${where.sql}`, values: where.values },
+      begin,
+      null,
+    );
+  });
+  async function* batches(): AsyncIterable<readonly Record<string, unknown>[]> {
+    try {
+      yield* mergeBatches(readers, () => stopReaders.abort());
+    } finally {
+      await close();
+    }
+  }
+  return { partitions: ranges.length, batches: batches(), close };
 }
 
 /**

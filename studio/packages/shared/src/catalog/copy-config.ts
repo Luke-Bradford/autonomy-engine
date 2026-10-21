@@ -340,14 +340,16 @@ export function copyPartitionIssues(
     if (typeof degree === 'number' && degree > 1) {
       issues.push({
         field: 'parallelCopies',
-        message:
-          'a rows Copy reads with one reader unless Partition option is Dynamic range',
+        message: 'a rows Copy reads with one reader unless Partition option is Dynamic range',
       });
     }
     return issues;
   }
   if (column === undefined) {
-    issues.push({ field: 'partitionColumnName', message: 'Dynamic range needs a partition column' });
+    issues.push({
+      field: 'partitionColumnName',
+      message: 'Dynamic range needs a partition column',
+    });
   }
   const lower = config['partitionLowerBound'];
   const upper = config['partitionUpperBound'];

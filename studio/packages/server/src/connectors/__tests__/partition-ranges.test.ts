@@ -5,9 +5,7 @@ import { dynamicRanges, rangePredicate } from '../partition-ranges.js';
 describe('dynamicRanges', () => {
   const owner = (ranges: ReturnType<typeof dynamicRanges>, v: bigint | null) =>
     ranges.filter((r) =>
-      v === null
-        ? r.nulls
-        : (r.from === null || v >= r.from) && (r.to === null || v < r.to),
+      v === null ? r.nulls : (r.from === null || v >= r.from) && (r.to === null || v < r.to),
     ).length;
 
   it("splits ADF's documented example into its four ranges", () => {
