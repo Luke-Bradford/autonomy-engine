@@ -38,7 +38,7 @@ import type { z } from 'zod';
 import type { Node } from '../schemas/pipeline.js';
 import { isSecretRef } from '../schemas/secret-ref.js';
 import { isPresenceOnlyIssue } from '../schemas/zod-issues.js';
-import type { ActivityCatalog } from '../catalog/types.js';
+import type { ActivityCatalog, ActivityCatalogEntry } from '../catalog/types.js';
 import { catalog as sharedCatalog } from '../catalog/registry.js';
 import { getMetadataNodeIssue } from '../catalog/get-metadata-config.js';
 import { GET_METADATA_ACTIVITY_TYPE } from '../catalog/types.js';
@@ -138,6 +138,22 @@ function closestTypes(type: string, known: ActivityCatalog): string[] {
  * diagnostics (`node '<id>': <field path>: <message>`). `catalog` is the one the
  * executor dispatches with — the shared catalog unless a caller injects its own.
  */
+/**
+ * #1600 OR41 C6c-1a — a log connection the session log would not use, refused
+ * rather than quietly ignored (C9c's rule for its fields). The reverse, Write to
+ * Folder with no log connection yet, is NOT refused here: an export strips a
+ * literal end and an import drops it, so refusing it would roll the import
+ * back. It is a binding still to pick, refused at dispatch.
+ */
+function logConnectionIssue(node: Node, entry: ActivityCatalogEntry): string | undefined {
+  if (node.connectionIds?.log === undefined) return undefined;
+  if (entry.logConnectionKinds === undefined) return 'this activity has no log connection';
+  const logTo = node.config['logTo'];
+  if (typeof logTo === 'string' && interpolationMode(logTo).mode !== 'literal') return undefined;
+  if (logTo === 'folder') return undefined;
+  return 'the log connection is only used when the session log is written to a folder';
+}
+
 export function activityNodeErrors(node: Node, catalog: ActivityCatalog = sharedCatalog): string[] {
   if (node.call !== undefined) return [];
   const entry = catalog.get(node.type);
@@ -151,6 +167,8 @@ export function activityNodeErrors(node: Node, catalog: ActivityCatalog = shared
   const nodeIssue =
     node.type === GET_METADATA_ACTIVITY_TYPE ? getMetadataNodeIssue(node) : undefined;
   const nodeErrors = nodeIssue === undefined ? [] : [`node '${node.id}': ${nodeIssue}`];
+  const logIssue = logConnectionIssue(node, entry);
+  if (logIssue !== undefined) nodeErrors.push(`node '${node.id}': connectionIds.log: ${logIssue}`);
   const schema = entry.dispatchConfigSchema;
   if (schema === undefined) return nodeErrors;
   const parsed = schema.safeParse(node.config);

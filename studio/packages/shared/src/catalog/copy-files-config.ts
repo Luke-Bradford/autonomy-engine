@@ -2,7 +2,11 @@ import { z } from 'zod';
 import { optionTitles, presented, singleLine } from '../schemas/field-presentation.js';
 import { instant, modifiedWindowIssue, wildcardIssue } from './file-selection.js';
 import { DELETE_MAX_CONCURRENT } from './delete-config.js';
-import { sessionLogConfigFields } from './session-log.js';
+import {
+  sessionLogConfigFields,
+  sessionLogConnectionFolderField,
+  sessionLogIssues,
+} from './session-log.js';
 
 /**
  * #1600 OR41 C1a — the config of Copy in **Files as-is** mode (activity
@@ -154,8 +158,10 @@ export const copyFilesConfigSchema = z
         'while it was copied, instead of failing.',
     }),
     // #1600 OR41 C6b — the Settings tab's Session log, a rows Copy's field (C6a).
-    // Only the level: the run log is the one destination until C6c.
     logLevel: sessionLogConfigFields.logLevel,
+    // C6c-1a — Write to the run log or a folder on the log connection.
+    logTo: sessionLogConfigFields.logTo,
+    logFolder: sessionLogConnectionFolderField,
     // #1600 OR41 C6f-2 — ADF's `parallelCopies` between file stores: parallel by
     // file. 1 when absent, not ADF's Auto, so a node saved before C6f-2 copies
     // as it did, one file at a time and with its log lines in order.
@@ -173,6 +179,7 @@ export const copyFilesConfigSchema = z
       ctx.addIssue({ code: 'custom', path: [field], message });
     const separator = wildcardIssue(cfg.wildcard);
     if (separator !== undefined) issue('wildcard', separator);
+    sessionLogIssues(cfg, issue);
     if (cfg.pathType !== 'folder' && cfg.wildcard !== '*') {
       issue('wildcard', 'a wildcard is only read when the path type is Folder');
     }

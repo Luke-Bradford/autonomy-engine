@@ -125,6 +125,14 @@ describe('applicableBindingSlots (#1477)', () => {
         datasetKinds: { source: ['table'], sink: ['table'] },
       }),
     ).toEqual(['sourceConnection', 'sinkConnection', 'sourceDataset', 'sinkDataset']);
+    // #1600 OR41 C6c-1a — a paired entry with a session log connection.
+    expect(
+      applicableBindingSlots({
+        connectionKinds: ['fs'],
+        sinkConnectionKinds: ['fs'],
+        logConnectionKinds: ['fs'],
+      }),
+    ).toEqual(['sourceConnection', 'sinkConnection', 'logConnection']);
     expect(
       applicableBindingSlots({ connectionKinds: ['sqlite'], datasetKinds: { source: ['table'] } }),
     ).toEqual(['connection', 'sourceDataset']);

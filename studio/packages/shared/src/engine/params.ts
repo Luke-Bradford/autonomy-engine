@@ -1652,10 +1652,13 @@ export function validateRefs(
     // heterogeneous copy is the same support problem the side-labelled dispatch
     // failure exists to prevent.
     if (node.connectionIds !== undefined) {
-      for (const side of ['source', 'sink'] as const) {
+      // #1600 OR41 C6c-1a — and the optional log end, scanned the same way.
+      for (const side of ['source', 'sink', 'log'] as const) {
+        const ref = node.connectionIds[side];
+        if (ref === undefined) continue;
         scan(
           `nodes.${node.id}.connectionIds.${side}`,
-          node.connectionIds[side],
+          ref,
           scope,
           errors,
           0,

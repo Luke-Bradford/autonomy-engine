@@ -4,6 +4,7 @@ import { getActivity } from '../registry.js';
 import { COPY_FILES_ACTIVITY_TYPE } from '../types.js';
 import { activityNodeErrors } from '../../engine/activity-config-check.js';
 import type { Node } from '../../schemas/pipeline.js';
+import { fieldLabelOf } from '../../schemas/field-presentation.js';
 
 /** #1600 OR41 C1a — the Copy · Files as-is config and its catalog entry. */
 const issues = (input: unknown) =>
@@ -26,6 +27,7 @@ describe('copy_files config', () => {
       validateDataConsistency: false,
       skipInconsistentFiles: false,
       logLevel: 'warning',
+      logTo: 'run',
       parallelCopies: 1,
     });
     expect(issues({})).toEqual([expect.stringMatching(/^sourcePath: /)]);
@@ -106,6 +108,7 @@ describe('copy_files config', () => {
         'filesRead',
         'filesSkipped',
         'filesWritten',
+        'logPath',
         'source',
         'throughput',
         'usedParallelCopies',
@@ -152,7 +155,14 @@ describe('copy_files appliesWhen (#1686)', () => {
 
   it('covers every conditional field', () => {
     expect(Object.keys(rules).sort()).toEqual(
-      [...Object.keys(held), 'recursive', 'skipMissingFiles', 'skipInconsistentFiles'].sort(),
+      [
+        ...Object.keys(held),
+        'recursive',
+        'skipMissingFiles',
+        'skipInconsistentFiles',
+        'logTo',
+        'logFolder',
+      ].sort(),
     );
   });
 
@@ -186,7 +196,50 @@ describe('copy_files session log (#1600 OR41 C6b)', () => {
       'validateDataConsistency',
       'skipInconsistentFiles',
       'logLevel',
+      'logTo',
+      'logFolder',
     ]);
+    expect(tabs[2]!.bindings).toEqual(['logConnection']);
+  });
+});
+
+describe('copy_files session log to a folder (#1600 OR41 C6c-1a)', () => {
+  it('writes to the run log by default, and to a folder on the log connection', () => {
+    const cfg = copyFilesConfigSchema.parse({ sourcePath: 'in' });
+    expect(cfg.logTo).toBe('run');
+    expect(cfg.logFolder).toBeUndefined();
+    expect(issues({ sourcePath: 'in', logTo: 'folder', logFolder: 'logs' })).toEqual([]);
+  });
+
+  it.each([
+    [{ logTo: 'folder' }, 'logFolder: needed to write the session log to a folder'],
+    [{ logFolder: 'logs' }, 'logFolder: only read when the session log is written to a folder'],
+    [
+      { logLevel: 'off', logTo: 'folder', logFolder: 'logs' },
+      'logLevel: the session log is off, but it is set to write to a folder',
+    ],
+  ])('refuses %j', (extra, message) => {
+    expect(issues({ sourcePath: 'in', ...extra })).toEqual([message]);
+  });
+
+  it('draws Write to while the log is on, and the folder (and its connection) for Folder', () => {
+    const entry = getActivity(COPY_FILES_ACTIVITY_TYPE)!;
+    expect(entry.appliesWhen?.logTo).toEqual([{ field: 'logLevel', in: ['warning', 'info'] }]);
+    expect(entry.appliesWhen?.logFolder).toEqual([{ field: 'logTo', in: ['folder'] }]);
+    expect(entry.logConnectionKinds).toEqual(['fs']);
+    // Its own description: the folder is on the LOG connection, not the same one.
+    expect(fieldLabelOf(copyFilesConfigSchema.shape.logFolder)?.description).toMatch(
+      /log connection/,
+    );
+  });
+
+  it('declares logPath, and keeps the outputs a node saved before C6c-1a declares', () => {
+    const entry = getActivity(COPY_FILES_ACTIVITY_TYPE)!;
+    const names = entry.outputs.map((o) => o.name);
+    expect(names).toContain('logPath');
+    expect(entry.outputs.find((o) => o.name === 'logPath')?.optional).toBe(true);
+    const former = entry.formerOutputs![0]!.map((o) => o.name);
+    expect(former).toEqual(names.filter((n) => n !== 'logPath'));
   });
 });
 
@@ -298,5 +351,38 @@ describe('copy_files Degree of copy parallelism (#1600 OR41 C6f-2)', () => {
     // And the same check refuses a literal out of range, so it is not vacuous.
     const literal = { ...node, config: { sourcePath: 'in', parallelCopies: 0 } } as Node;
     expect(activityNodeErrors(literal)).toHaveLength(1);
+  });
+});
+
+describe('copy_files log connection at save (#1600 OR41 C6c-1a)', () => {
+  const node = (config: Record<string, unknown>, log?: string, type = COPY_FILES_ACTIVITY_TYPE) =>
+    ({
+      id: 'c',
+      type,
+      position: { x: 0, y: 0 },
+      connectionIds: { source: 's', sink: 's', ...(log !== undefined && { log }) },
+      config: { sourcePath: 'in', ...config },
+    }) as Node;
+
+  it('accepts a log connection beside Write to Folder, and Folder before one is bound', () => {
+    expect(activityNodeErrors(node({ logTo: 'folder', logFolder: 'logs' }, 'l'))).toEqual([]);
+    // A missing log connection is a binding still to pick, refused at dispatch:
+    // an import strips a literal end, and save must not then refuse the version.
+    expect(activityNodeErrors(node({ logTo: 'folder', logFolder: 'logs' }))).toEqual([]);
+  });
+
+  it('refuses a log connection the session log would not use', () => {
+    expect(activityNodeErrors(node({}, 'l'))).toEqual([
+      "node 'c': connectionIds.log: the log connection is only used when the session log is written to a folder",
+    ]);
+    // A `${}` Write to is decided at dispatch.
+    expect(activityNodeErrors(node({ logTo: '${pipeline().parameters.to}' }, 'l'))).toEqual([]);
+  });
+
+  it('refuses a log connection on an activity that has none', () => {
+    const rows = node({}, 'l', 'copy');
+    expect(activityNodeErrors(rows).filter((e) => e.includes('connectionIds.log'))).toEqual([
+      "node 'c': connectionIds.log: this activity has no log connection",
+    ]);
   });
 });

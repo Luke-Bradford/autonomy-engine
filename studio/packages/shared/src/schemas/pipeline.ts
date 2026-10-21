@@ -576,8 +576,24 @@ export const NodeSchema = z.object({
    * validator all leave it inert, in this build exactly as in a pre-M1 one.
    * `copy` (M5) introduces the first paired activity as a NEW runnable TYPE,
    * and bumps then — the point at which a doc first RUNS differently.
+   *
+   * #1600 OR41 C6c-1a — `log`, an OPTIONAL third end: the connection a session
+   * log is written to (ADF's `logLocationSettings.linkedServiceName`), for an
+   * activity the catalog gives `logConnectionKinds`. It lives INSIDE the pair,
+   * not as a top-level field, because every portability site rebuilds
+   * `{source, sink}` explicitly: a site that forgot it would DROP the end (and
+   * the copy then refuses at dispatch), where a top-level field would ride
+   * `...rest` into an export with its workspace-local id unremapped. It is not
+   * required by a pair, and a pair is still `source` + `sink`. A `${}` end
+   * resolves at dispatch as the others do.
    */
-  connectionIds: z.object({ source: z.string().min(1), sink: z.string().min(1) }).optional(),
+  connectionIds: z
+    .object({
+      source: z.string().min(1),
+      sink: z.string().min(1),
+      log: z.string().min(1).optional(),
+    })
+    .optional(),
   /**
    * M3 (#1117, data-movement spec §3) — the dataset ADDRESSES a `copy` reads
    * from and writes to. Sits BESIDE `connectionIds` and is deliberately NOT

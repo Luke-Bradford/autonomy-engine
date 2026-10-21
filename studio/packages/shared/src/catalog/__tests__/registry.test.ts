@@ -141,6 +141,15 @@ describe('activity catalog', () => {
     }
   });
 
+  it('a declared log connection allowlist is non-empty, and only on a paired entry (C6c-1a)', () => {
+    const withLog = [...catalog.values()].filter((e) => e.logConnectionKinds !== undefined);
+    expect(withLog.map((e) => e.type)).toContain('copy_files');
+    for (const entry of withLog) {
+      expect(entry.logConnectionKinds!.length).toBeGreaterThan(0);
+      expect(entry.sinkConnectionKinds).toBeDefined();
+    }
+  });
+
   it('M5 slice 4c (#1139): `copy` is the ONLY activity that declares a dataset binding', () => {
     // Flipped from `toEqual([])` by the same event, and carrying M3's NO-BUMP the
     // same way the sink pin above carries M1's. One CATALOG_VERSION bump (23)

@@ -1204,7 +1204,11 @@ const ENTRIES: ActivityCatalogEntry[] = [
           'validateDataConsistency',
           'skipInconsistentFiles',
           'logLevel',
+          'logTo',
+          'logFolder',
         ],
+        // C6c-1a — the log connection, drawn beside the Log folder it serves.
+        bindings: ['logConnection'],
       },
     ],
     // #1686 — the same rules `copyFilesConfigSchema`'s superRefine enforces,
@@ -1228,10 +1232,15 @@ const ENTRIES: ActivityCatalogEntry[] = [
         { field: 'pathType', in: ['file'] },
         { field: 'copyBehavior', in: ['merge'] },
       ],
+      // C6c-1a — Delete's rules: Write to while the log is on, the folder for Folder.
+      logTo: [{ field: 'logLevel', in: ['warning', 'info'] }],
+      logFolder: [{ field: 'logTo', in: ['folder'] }],
     },
     idempotent: false,
     connectionKinds: ['fs'],
     sinkConnectionKinds: ['fs'],
+    // C6c-1a — the session log's own connection (ADF's `logLocationSettings`).
+    logConnectionKinds: ['fs'],
     outputs: [
       out('filesRead', 'number'),
       out('filesWritten', 'number'),
@@ -1243,11 +1252,29 @@ const ENTRIES: ActivityCatalogEntry[] = [
       out('source', 'string'),
       out('dest', 'string'),
       ...copyMeasureOutputs(),
+      // C6c-1a — the folder log's file, null when the log is not written to one.
+      optionalOut('logPath', 'string'),
     ],
-    // The twelve a node saved before C6f-2 declares (C6f-1's), the nine one
-    // saved before C6f-1 declares (C1b's), and the seven one saved before C1b
-    // declares (C1a's), as written then.
+    // The thirteen a node saved before C6c-1a declares (C6f-2's), the twelve
+    // one saved before C6f-2 declares (C6f-1's), the nine one saved before
+    // C6f-1 declares (C1b's), and the seven one saved before C1b declares
+    // (C1a's), as written then.
     formerOutputs: [
+      [
+        out('filesRead', 'number'),
+        out('filesWritten', 'number'),
+        out('filesSkipped', 'number'),
+        out('filesDeleted', 'number'),
+        out('filesMoved', 'number'),
+        out('bytesRead', 'number'),
+        out('bytesWritten', 'number'),
+        out('source', 'string'),
+        out('dest', 'string'),
+        out('durationMs', 'number'),
+        optionalOut('throughput', 'number'),
+        out('consistency', 'json'),
+        out('usedParallelCopies', 'number'),
+      ],
       [
         out('filesRead', 'number'),
         out('filesWritten', 'number'),
