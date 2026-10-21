@@ -171,12 +171,13 @@ describe('applicableFieldNames (#1686)', () => {
       'skipInconsistentFiles',
     ]);
     // Either condition of File name: one file, or a merge. #1600 C6e-2 — a
-    // merge is not verified, as in ADF.
+    // merge is not verified, as in ADF; C6f-2 — nor copied at once.
     expect(hidden({ copyBehavior: 'merge' })).toEqual([
       'fileListPath',
       'moveTo',
       'validateDataConsistency',
       'skipInconsistentFiles',
+      'parallelCopies',
     ]);
     const typed = { ...seedFieldInputs(fields, {}), pathType: 'list' };
     expect(hidden({}, typed)).toEqual([
