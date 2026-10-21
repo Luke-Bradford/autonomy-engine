@@ -1150,6 +1150,44 @@ describe('#1600 C6d-2 — Skip forbidden files', () => {
     expect(await tree(join(src, 'in'))).toEqual(['b.txt']);
   });
 
+  // #1777 — a target's sources are opened before a sink folder is made for
+  // them, so one whose every source is skipped leaves no empty folder behind.
+  it.skipIf(asRoot)('makes no sink subfolder for a file it skips', async () => {
+    await put('in/a.txt', 'a');
+    await chmod(await put('in/sub/b.txt', 'b'), 0o000);
+    const events = await run({ sourcePath: 'in', sinkFolder: 'out', skipForbiddenFiles: true });
+    expect(outputs(events)).toMatchObject({ filesWritten: 1, filesSkipped: 1 });
+    expect(await readdir(join(dst, 'out'))).toEqual(['a.txt']);
+  });
+
+  it.skipIf(asRoot)('still makes the subfolder for the files of it it copies', async () => {
+    await chmod(await put('in/sub/b.txt', 'b'), 0o000);
+    await put('in/sub/c.txt', 'c');
+    const events = await run({ sourcePath: 'in', skipForbiddenFiles: true, logLevel: 'info' });
+    expect(outputs(events)).toMatchObject({ filesWritten: 1, filesSkipped: 1 });
+    expect(await tree(dst)).toEqual(['sub/c.txt']);
+    // The open before the folder is made is not a second read or skip.
+    expect(logLines(events)).toEqual([
+      'Warning FileSkip sub/b.txt skipped: permission denied and Skip forbidden files is on',
+      'Info FileRead sub/c.txt read 1 byte',
+      "Info FileWrite sub/c.txt wrote 1 byte from 'sub/c.txt'",
+    ]);
+  });
+
+  it.skipIf(asRoot)('makes no File name subfolder for a merge it skips whole', async () => {
+    await chmod(await put('in/a.txt', 'a'), 0o000);
+    await chmod(await put('in/b.txt', 'b'), 0o000);
+    const events = await run({
+      sourcePath: 'in',
+      copyBehavior: 'merge',
+      sinkFileName: 'x/all.txt',
+      skipForbiddenFiles: true,
+    });
+    expect(outputs(events)).toMatchObject({ filesWritten: 0, filesSkipped: 2 });
+    expect(logLines(events)).toHaveLength(2);
+    expect(await readdir(dst)).toEqual([]);
+  });
+
   it('still refuses a file-list line naming a file that is not there', async () => {
     await put('in/a.txt', 'a');
     await put('list.txt', 'a.txt\nnope.txt\n');
