@@ -602,7 +602,9 @@ describe('M1 #1104 — connectionIds resolution on dispatchNode', () => {
 
   it('resolves the log end too when the pair carries one (#1600 OR41 C6c-1a)', () => {
     const n = pairNode('a', 'src', 'dst');
-    const eng = engine([{ ...n, connectionIds: { ...n.connectionIds!, log: 'logs-${params.env}' } }]);
+    const eng = engine([
+      { ...n, connectionIds: { ...n.connectionIds!, log: 'logs-${params.env}' } },
+    ]);
     const r = eng.reduce(eng.seedState(), started({ env: 'eu' }));
     expect(dispatchCmd(r.commands, 'a').resolvedConnectionIds).toEqual({
       source: 'src',

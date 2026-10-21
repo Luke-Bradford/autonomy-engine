@@ -53,14 +53,11 @@ export const sessionLogConfigFields = {
  * `logLocationSettings.linkedServiceName`), since a database-to-database copy
  * has no file system to write to. Delete's is on its own connection.
  */
-export const sessionLogConnectionFolderField = presented(
-  singleLine(z.string()).min(1).optional(),
-  {
-    title: 'Log folder',
-    description:
-      "The folder the CSV file is written to, on the log connection. Absolute, or relative to that connection's first allowed folder. It must exist.",
-  },
-);
+export const sessionLogConnectionFolderField = presented(singleLine(z.string()).min(1).optional(), {
+  title: 'Log folder',
+  description:
+    "The folder the CSV file is written to, on the log connection. Absolute, or relative to that connection's first allowed folder. It must exist.",
+});
 
 type SessionLogConfig = {
   logLevel: SessionLogLevel;
