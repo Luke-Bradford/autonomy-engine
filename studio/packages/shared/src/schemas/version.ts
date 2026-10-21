@@ -638,7 +638,13 @@
 // Reliable is the default and keeps the old outcome, so a node saved before
 // C6c-2 behaves as it did; its log is now written after each file or batch
 // rather than once 64 KiB is held, more and smaller writes.
-export const CATALOG_VERSION = 67;
+// BUMP 67→68 for #1600 OR41 C6f-3: a rows Copy's Partition option Dynamic range
+// (`partitionOption`, `partitionColumnName`, the two bounds) and its Degree of
+// copy parallelism. `copyInputSchema` is not strict, so a pre-C6f-3 build strips
+// them and reads with one reader: the same rows on PostgreSQL, but a
+// `usedParallelCopies` of 1 where this build reports the ranges, and a SQLite or
+// file source this build refuses would copy. An outcome, not only a speed.
+export const CATALOG_VERSION = 68;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

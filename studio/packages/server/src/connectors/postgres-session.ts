@@ -96,6 +96,13 @@ export interface PostgresClient {
     values?: readonly unknown[],
   ): Promise<PostgresQueryResult>;
   end(): Promise<unknown>;
+  /**
+   * #1600 OR41 C6f-3 — `pg.Client` emits `error` when its connection drops
+   * while no query is running, and an `error` with no listener is an uncaught
+   * exception that ends the server. A session left idle on purpose (a
+   * partitioned read's snapshot holder) listens. Optional, so a fake need not.
+   */
+  on?(event: 'error', listener: (err: Error) => void): unknown;
 }
 
 /**

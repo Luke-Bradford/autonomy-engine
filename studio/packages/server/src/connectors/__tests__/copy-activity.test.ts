@@ -2244,3 +2244,128 @@ describe('copy activity — the session log, to a folder (#1600 OR41 C6c-1b)', (
     });
   });
 });
+
+describe('partitioned reads (#1600 OR41 C6f-3)', () => {
+  const partitioned = {
+    mapping: [
+      { source: 'id', sink: 'id', type: 'integer' },
+      { source: 'name', sink: 'name', type: 'string' },
+    ],
+    partitionOption: 'dynamicRange',
+    partitionColumnName: 'id',
+    parallelCopies: 3,
+  };
+  const outputsOf = (events: ActivityEvent[]) =>
+    Object.fromEntries(
+      events.flatMap((e) =>
+        e.type === 'output'
+          ? [[e.name, e.value]]
+          : e.type === 'succeeded'
+            ? Object.entries(e.outputs ?? {})
+            : [],
+      ),
+    );
+
+  it('refuses Dynamic range on a SQLite source before the sink writes anything', async () => {
+    const root = tempRoot();
+    const sinkPath = seedSink(root, 'dst.db');
+    const events = await run(
+      copyCtx({
+        root,
+        sourcePath: seedDb(root, 3, 'src.db'),
+        sinkPath,
+        input: {
+          ...partitioned,
+          preCopyScript: 'INSERT INTO sink (id, name) VALUES (99, :n)',
+          preCopyScriptParameters: { n: 'x' },
+        },
+      }),
+    );
+    const end = terminal(events);
+    expect(end.type).toBe('failed');
+    expect(end.type === 'failed' ? end.error : '').toMatch(
+      /Partition option Dynamic range reads a PostgreSQL table/,
+    );
+    expect(end.type === 'failed' ? end.kind : '').toBe('permanent');
+    // The Pre-copy script never ran: the refusal is before the sink's transaction.
+    expect(rowsOf(sinkPath)).toEqual([]);
+  });
+
+  function planningIo(over: { fail?: Error; sinkFails?: boolean }) {
+    const log: string[] = [];
+    const io: CopyIo = {
+      describeSource: () => Promise.resolve(['id', 'name']),
+      sourceCoercion: () => ({}),
+      readBatches: async function* () {
+        log.push('one reader');
+        yield [{ id: 0, name: 'z' }];
+      },
+      planPartitions: ({ partition }) => {
+        log.push(`plan ${partition.column} x${partition.degree}`);
+        if (over.fail !== undefined) return Promise.reject(over.fail);
+        return Promise.resolve({
+          partitions: 2,
+          batches: (async function* () {
+            yield [{ id: 1, name: 'a' }];
+            yield [{ id: 2, name: 'b' }];
+          })(),
+          close: () => {
+            log.push('closed');
+            return Promise.resolve();
+          },
+        });
+      },
+      writeRows: async ({ batches, onBatch }) => {
+        log.push('write');
+        if (over.sinkFails === true) throw new DatasetIoError('permanent', 'sink refused');
+        let written = 0;
+        for await (const batch of batches) {
+          written += batch.length;
+          onBatch(written);
+        }
+        return { rowsWritten: written };
+      },
+    };
+    return { io, log };
+  }
+  const ctxFor = (input: unknown = partitioned): ActivityContext =>
+    copyCtx({ root: tempRoot(), sourcePath: 'unused.db', sinkPath: 'unused-dst.db', input });
+  const drain = async (ctx: ActivityContext, io: CopyIo) => {
+    const events: ActivityEvent[] = [];
+    for await (const e of runCopyActivity(ctx, io)) events.push(e);
+    return events;
+  };
+
+  it('reads the planned ranges, not the one reader, and reports the ranges as usedParallelCopies', async () => {
+    const { io, log } = planningIo({});
+    const events = await drain(ctxFor(), io);
+    expect(terminal(events).type).toBe('succeeded');
+    expect(outputsOf(events)).toMatchObject({ rowsRead: 2, rowsWritten: 2, usedParallelCopies: 2 });
+    expect(log).toEqual(['plan id x3', 'write', 'closed']);
+  });
+
+  it('plans before the write, so a planning refusal reaches no sink', async () => {
+    const { io, log } = planningIo({
+      fail: new DatasetIoError('permanent', "the partition column 'id' is text"),
+    });
+    const events = await drain(ctxFor(), io);
+    const end = terminal(events);
+    expect(end.type === 'failed' ? end.error : '').toMatch(/is text/);
+    expect(log).toEqual(['plan id x3']);
+  });
+
+  it('releases the plan when the sink fails before it pulls a row, and still reports the ranges', async () => {
+    const { io, log } = planningIo({ sinkFails: true });
+    const events = await drain(ctxFor(), io);
+    expect(terminal(events).type).toBe('failed');
+    expect(log).toEqual(['plan id x3', 'write', 'closed']);
+    expect(outputsOf(events)['usedParallelCopies']).toBe(2);
+  });
+
+  it('keeps one reader and one copy under None', async () => {
+    const { io, log } = planningIo({});
+    const events = await drain(ctxFor({ mapping: partitioned.mapping }), io);
+    expect(outputsOf(events)['usedParallelCopies']).toBe(1);
+    expect(log).toEqual(['write', 'one reader']);
+  });
+});

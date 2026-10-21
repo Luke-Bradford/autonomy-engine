@@ -28,7 +28,12 @@ describe('nodeTypeTabs (#1477)', () => {
       {
         key: 'source',
         label: 'Source',
-        fields: [],
+        fields: [
+          'partitionOption',
+          'partitionColumnName',
+          'partitionLowerBound',
+          'partitionUpperBound',
+        ],
         bindings: ['sourceConnection', 'sourceDataset'],
       },
       {
@@ -50,6 +55,7 @@ describe('nodeTypeTabs (#1477)', () => {
         key: 'settings',
         label: 'Settings',
         fields: [
+          'parallelCopies',
           'skipIncompatibleRows',
           'validateDataConsistency',
           'logLevel',

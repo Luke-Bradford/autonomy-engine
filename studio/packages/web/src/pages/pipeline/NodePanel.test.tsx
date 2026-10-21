@@ -850,7 +850,11 @@ describe('paired binding pickers (#1139)', () => {
   const pick = (label: string, value: string) => {
     fireEvent.click(picker(label));
     const name = value === '' ? 'None' : CONNS.find((c) => c.id === value)?.name;
-    fireEvent.click(screen.getByRole('option', { name: new RegExp(`^${name}`) }));
+    // Within the picker's own list: Copy's Source tab also holds a native select
+    // with a None option (Partition option, #1600 C6f-3).
+    fireEvent.click(
+      within(screen.getByRole('listbox')).getByRole('option', { name: new RegExp(`^${name}`) }),
+    );
   };
 
   it('offers FOUR pickers for a copy node, and hides the singular one', () => {

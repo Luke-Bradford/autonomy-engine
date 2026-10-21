@@ -35,7 +35,7 @@ import {
   SessionLogWriter,
   sessionLogWriterOptions,
 } from './session-log-file.js';
-import type { SourceIo } from './source-io.js';
+import type { PartitionPlan, SourceIo } from './source-io.js';
 import type { ActivityContext, ActivityEvent, ResolvedDataset } from './types.js';
 
 /** The resolved SINK connection, as `ActivityContext` declares it. */
@@ -172,6 +172,7 @@ function copyOutputs(
   counters: CopyCounters,
   measure: CopyMeasure,
   logPath: string | null,
+  usedParallelCopies: number,
 ): Record<string, unknown> {
   return {
     rowsRead: counters.rowsRead,
@@ -181,14 +182,21 @@ function copyOutputs(
     bytesRead: counters.bytesRead,
     truncated: counters.truncated,
     ...measure,
-    // #1600 OR41 C6f-2 — one reader pumped into one sink transaction: without
-    // partitioned reads (C6f-3) a rows Copy runs one copy, as ADF's does when
-    // its source has no partition option.
-    usedParallelCopies: 1,
+    // #1600 OR41 C6f-2 — one reader pumped into one sink transaction runs one
+    // copy, as ADF's does when its source has no partition option. C6f-3 — a
+    // partitioned read runs one per range, from the moment it is planned.
+    usedParallelCopies,
     // #1600 OR41 C6c-1b — the folder log's file, null for the run log.
     logPath,
   };
 }
+
+/**
+ * #1600 OR41 C6f-3 — Dynamic range on a source whose store cannot read ranges
+ * at once (SQLite, which reads on one thread, and the file formats).
+ */
+export const PARTITION_NEEDS_POSTGRES =
+  'Partition option Dynamic range reads a PostgreSQL table; this source is read with one reader (set Partition option to None)';
 
 const logWriteFailure = (error: string) =>
   new DatasetIoError('permanent', `the session log could not be written: ${error}`);
@@ -659,6 +667,51 @@ async function* copyRows(
     };
   }
 
+  // #1600 OR41 C6f-3 — Dynamic range is planned HERE, after every refusal above
+  // and before the write: its own refusals (a source that cannot be split, a
+  // column that is not an integer) must land before the sink's transaction, its
+  // Pre-copy script or its Auto-create run. The plan holds a session from here,
+  // so every path below releases it (`plan.close` in the write's `finally`).
+  const batchRows =
+    parsed.data.writeBatchSize === undefined ? {} : { batchRows: parsed.data.writeBatchSize };
+  let plan: PartitionPlan | undefined;
+  let usedParallelCopies = 1;
+  if (parsed.data.partitionOption === 'dynamicRange') {
+    if (io.planPartitions === undefined) {
+      yield* refuse(failed('permanent', PARTITION_NEEDS_POSTGRES));
+      return;
+    }
+    const column = parsed.data.partitionColumnName;
+    // Unreachable past the dispatch schema (`copyPartitionIssues` refuses it);
+    // it narrows the type, and says the same sentence save does.
+    if (column === undefined) {
+      yield* refuse(failed('permanent', 'Dynamic range needs a partition column'));
+      return;
+    }
+    try {
+      plan = await io.planPartitions({
+        dataset: source,
+        signal: ctx.signal,
+        ...batchRows,
+        partition: {
+          column,
+          degree: parsed.data.parallelCopies,
+          ...(parsed.data.partitionLowerBound === undefined
+            ? {}
+            : { lower: parsed.data.partitionLowerBound }),
+          ...(parsed.data.partitionUpperBound === undefined
+            ? {}
+            : { upper: parsed.data.partitionUpperBound }),
+        },
+      });
+    } catch (err) {
+      yield* refuse(copyFailure(err));
+      return;
+    }
+    usedParallelCopies = plan.partitions;
+  }
+  const partitionPlan = plan;
+
   // §5 — "a long copy must not look hung". One tick per batch, off the PUMP's
   // `onBatch` rather than the sink's: the pump fires it after the sink has taken
   // the batch (so `counters.rowsWritten` is that batch's number), AND for a batch
@@ -703,13 +756,8 @@ async function* copyRows(
       // so the reader's batch is the sink's; absent keeps the reader's default.
       batches: pumpCopyRows(
         logged(
-          io.readBatches({
-            dataset: source,
-            signal: ctx.signal,
-            ...(parsed.data.writeBatchSize === undefined
-              ? {}
-              : { batchRows: parsed.data.writeBatchSize }),
-          }),
+          partitionPlan?.batches ??
+            io.readBatches({ dataset: source, signal: ctx.signal, ...batchRows }),
         ),
         {
           mapping: mapping as readonly CopyPumpMappingEntry[],
@@ -765,6 +813,8 @@ async function* copyRows(
     // store — running under nobody. Closing waits for it, as the executor waits
     // for its adapter; only a normal exit goes on to read the outcome.
     outcome = await write;
+    // C6f-3 — a sink that failed before pulling a row never iterated the plan.
+    await partitionPlan?.close();
   }
 
   try {
@@ -797,7 +847,9 @@ async function* copyRows(
         // The residual of C6c-1b's rule: everything was written before COMMIT,
         // so only closing the file is left to fail, and the rows are committed.
         // The counts are reported, then the failure (Files as-is's rule, C6c-1a).
-        for (const [name, value] of Object.entries(copyOutputs(counters, measured(), null))) {
+        for (const [name, value] of Object.entries(
+          copyOutputs(counters, measured(), null, usedParallelCopies),
+        )) {
           yield { type: 'output', name, value };
         }
         const n = counters.rowsWritten;
@@ -808,7 +860,10 @@ async function* copyRows(
         return;
       }
     }
-    yield { type: 'succeeded', outputs: copyOutputs(counters, measured(), logPath) };
+    yield {
+      type: 'succeeded',
+      outputs: copyOutputs(counters, measured(), logPath, usedParallelCopies),
+    };
   } catch (err) {
     // §10: "a cancel must never leave a silent partial". `node.failed` carries no
     // outputs, so a failed or cancelled copy would otherwise report how far it
@@ -839,7 +894,9 @@ async function* copyRows(
     // keeps its own error, whatever the folder log's close reports.
     const terminal = copyFailure(err);
     yield* endLog(terminal.type === 'failed' ? terminal.error : undefined);
-    for (const [name, value] of Object.entries(copyOutputs(counters, measured(), logPath))) {
+    for (const [name, value] of Object.entries(
+      copyOutputs(counters, measured(), logPath, usedParallelCopies),
+    )) {
       yield { type: 'output', name, value };
     }
     if (counters.rowsFailed > 0) {

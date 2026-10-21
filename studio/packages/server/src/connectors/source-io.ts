@@ -53,6 +53,20 @@ export interface SourceIo {
     readonly batchRows?: number;
   }) => AsyncIterable<readonly Record<string, unknown>[]>;
   /**
+   * #1600 OR41 C6f-3 — a partitioned read (ADF's Dynamic range), planned BEFORE
+   * the copy writes anything: the plan's refusals (a source kind that cannot be
+   * partitioned, a column that is not an integer) reach the operator before the
+   * sink's transaction, its Pre-copy script or its Auto-create have run.
+   * OPTIONAL: only a store that can read ranges at once implements it, and
+   * `copy` refuses Dynamic range on a source without it.
+   */
+  readonly planPartitions?: (args: {
+    readonly dataset: ResolvedDataset;
+    readonly signal: AbortSignal | undefined;
+    readonly batchRows?: number;
+    readonly partition: PartitionedRead;
+  }) => Promise<PartitionPlan>;
+  /**
    * §6.4's per-source-dataset format facts (`nullValue`, `dateFormat`), read off
    * the SOURCE dataset's own config by the store that knows its shape.
    *
@@ -79,4 +93,28 @@ export interface SourceIo {
    * defaulting to `{}` — see `delimitedCoercionFor`.
    */
   readonly sourceCoercion: (dataset: ResolvedDataset) => CoercionOptions;
+}
+
+/** #1600 OR41 C6f-3 — what a rows Copy asks a partitioned read for. */
+export interface PartitionedRead {
+  /** The partition column, as authored; the store quotes it. */
+  readonly column: string;
+  readonly lower?: number;
+  readonly upper?: number;
+  /** Degree of copy parallelism: the most ranges read at once. */
+  readonly degree: number;
+}
+
+/**
+ * #1600 OR41 C6f-3 — a planned partitioned read. `batches` reads every range
+ * and is the one stream the pump takes. `close` releases what the plan holds
+ * (the session that keeps the shared snapshot alive): it is idempotent, and its
+ * caller calls it on EVERY path, because `batches` may never be iterated (the
+ * sink can fail before it pulls a row) and then nothing else would.
+ */
+export interface PartitionPlan {
+  /** The ranges read at once: ADF's `usedParallelCopies`. */
+  readonly partitions: number;
+  readonly batches: AsyncIterable<readonly Record<string, unknown>[]>;
+  readonly close: () => Promise<void>;
 }

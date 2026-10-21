@@ -62,7 +62,10 @@ const HELP_LIMITS: Record<string, number> = {
   // nothing, and not with Upsert.
   // +1 for C6c-1b's Write to, drawn while the session log is on (the default);
   // Log folder waits for Folder.
-  'Copy data': 16,
+  // +1 for C6f-3's Partition option on the Source tab: what Dynamic range reads
+  // and that the rows land in no fixed order. Its column, bounds and degree
+  // wait for Dynamic range.
+  'Copy data': 17,
   // #1600 OR41 C9a — Delete, measured: the pane's own `?`s and one on each
   // Source and Settings field but Delete empty folders, which waits for
   // Include subfolders. +2 for C9c's Session log and Write to (Log folder
@@ -351,7 +354,8 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   // +1 each for C6d-1's Skip incompatible rows (rows only).
   // +1 each for C6e-1's Verify after copy (rows only).
   // +1 each for C6c-1b's Write to (rows), drawn while the session log is on.
-  'Copy data': 16,
+  // +1 each for C6f-3's Partition option (rows), on the Source tab.
+  'Copy data': 17,
   // #1600 OR41 C6d-2's Skip missing files and Skip forbidden files add two `?`s
   // to each walk, measured: the list walk reads 20 (its limit had been one above
   // its count), the folder walk 19.
@@ -367,7 +371,8 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   // +1 for C1q-c's Query timeout, a new field whose `?` says blank means no limit.
   // +1 for C6e-1's Verify after copy, measured at 19.
   // +1 for C6c-1b's Write to, measured at 20.
-  'Copy data (inline query)': 20,
+  // +1 for C6f-3's Partition option (HELP_LIMITS).
+  'Copy data (inline query)': 21,
   // #1600 OR41 C9a — Delete with every setting showing: the 14 above and
   // Delete empty folders', which says it never removes the folder at the path.
   // +3 for C9c's Session log, Write to and Log folder.
