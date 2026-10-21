@@ -134,11 +134,6 @@ function closestTypes(type: string, known: ActivityCatalog): string[] {
 }
 
 /**
- * Every save-time refusal for one node's `type` and `config`, as `validateDoc`
- * diagnostics (`node '<id>': <field path>: <message>`). `catalog` is the one the
- * executor dispatches with — the shared catalog unless a caller injects its own.
- */
-/**
  * #1600 OR41 C6c-1a — a log connection the session log would not use, refused
  * rather than quietly ignored (C9c's rule for its fields). The reverse, Write to
  * Folder with no log connection yet, is NOT refused here: an export strips a
@@ -154,6 +149,11 @@ function logConnectionIssue(node: Node, entry: ActivityCatalogEntry): string | u
   return 'the log connection is only used when the session log is written to a folder';
 }
 
+/**
+ * Every save-time refusal for one node's `type` and `config`, as `validateDoc`
+ * diagnostics (`node '<id>': <field path>: <message>`). `catalog` is the one the
+ * executor dispatches with — the shared catalog unless a caller injects its own.
+ */
 export function activityNodeErrors(node: Node, catalog: ActivityCatalog = sharedCatalog): string[] {
   if (node.call !== undefined) return [];
   const entry = catalog.get(node.type);
