@@ -393,7 +393,7 @@ test.describe('#1600 C6 — Copy session log', () => {
       await folder.fill('runs');
       await pane.getByRole('button', { name: 'Apply config' }).click();
       await pickConnection(page, 'Log connection', { id: logStore });
-      await expect(logPicker).toContainText('e2e 1600 c6c logs');
+      await expect(logPicker).toHaveValue(/^e2e 1600 c6c logs/);
 
       // Measured at 1440x900: the picker sits directly above the Log folder, and
       // both fit the docked pane.
