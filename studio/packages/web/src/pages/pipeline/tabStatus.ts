@@ -49,6 +49,8 @@ export function issueTarget(raw: string, nodeId: string): IssueTarget | undefine
   ) {
     return { slot: 'sourceDataset' };
   }
+  // #1600 OR41 C6c-1a — the connection pair's log end, on the Settings tab.
+  if (/^connectionIds\.log\b/.test(rest)) return { slot: 'logConnection' };
   const paired = /^(connectionIds|datasetIds|datasetParams)\.(source|sink)\b/.exec(rest);
   if (paired) {
     const side = paired[2] === 'source' ? 'source' : 'sink';

@@ -944,7 +944,8 @@ function restoreFrom(snap: CanvasDocSnapshot, s: CanvasState): Partial<CanvasSta
 
 /** One node's half-picked pair ends, per binding kind (#1139). */
 export interface PendingBindings {
-  connections?: { source?: string; sink?: string };
+  /** #1600 OR41 C6c-1a — `log`, the session log's connection, rides the pair. */
+  connections?: { source?: string; sink?: string; log?: string };
   datasets?: { source?: string; sink?: string };
 }
 
@@ -1488,7 +1489,7 @@ export interface CanvasState {
   setNodeBindingEnd(
     id: string,
     kind: BindingKind,
-    side: 'source' | 'sink',
+    side: 'source' | 'sink' | 'log',
     value: string | undefined,
   ): void;
   /**
@@ -2468,6 +2469,11 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         if (current === undefined || current.type === type) return;
         if (!activityModeGroup(current.type)?.includes(type)) return;
         const next: Node = { ...current, type, config: { ...getActivity(type)?.newNodeConfig } };
+        // #1600 OR41 C6c-1a — the fresh config writes the log to the run log, so
+        // the log connection would be refused at save with no picker drawn.
+        if (next.connectionIds?.log !== undefined) {
+          next.connectionIds = { source: next.connectionIds.source, sink: next.connectionIds.sink };
+        }
         delete next.datasetIds;
         delete next.datasetParams;
         // #1600 C1q — an inline source is a dataset binding too; Files as-is has none.
@@ -2478,9 +2484,14 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         // outside `edit()`); a half-picked connection end stays with the pair.
         set((s) => {
           const held = s.pendingBindings[id];
-          if (held?.datasets === undefined) return {};
+          if (held?.datasets === undefined && held?.connections?.log === undefined) return {};
           const forNode = { ...held };
           delete forNode.datasets;
+          if (forNode.connections !== undefined) {
+            const { source, sink } = forNode.connections;
+            if (source === undefined && sink === undefined) delete forNode.connections;
+            else forNode.connections = { source, sink };
+          }
           const rest = { ...s.pendingBindings };
           if (forNode.connections === undefined) delete rest[id];
           else rest[id] = forNode;
@@ -2666,6 +2677,8 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       setNodeBindingEnd(id, kind, side, value) {
         const state = get();
         if (!state.nodes.some((n) => n.id === id)) return;
+        // #1600 OR41 C6c-1a — only the connection pair has a log end.
+        if (kind === 'datasets' && side === 'log') return;
         const field = kind === 'connections' ? 'connectionIds' : 'datasetIds';
 
         // The node's OWN pair wins over anything pending: a complete pair is the
@@ -2674,9 +2687,15 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         const committed = node?.[field];
         const held = state.pendingBindings[id]?.[kind];
         const current = committed ?? held ?? {};
-        const nextPair = { ...current, [side]: value };
+        const nextPair: { source?: string; sink?: string; log?: string } = {
+          ...current,
+          [side]: value,
+        };
         const source = nextPair.source || undefined;
         const sink = nextPair.sink || undefined;
+        // #1600 OR41 C6c-1a — the log end is not part of what makes the pair
+        // whole: it is written with a whole pair and held with a half one.
+        const log = kind === 'connections' ? nextPair.log || undefined : undefined;
 
         // What counts as a COMPLETE binding is the CATALOG's answer, not a
         // constant — #1221 M12 slice 2. Until `lookup` this read
@@ -2770,7 +2789,11 @@ export function createCanvasStore(): StoreApi<CanvasState> {
               if (bound === undefined) delete next[field];
               else if (kind === 'datasets') next.datasetIds = bound;
               else if (bound.source !== undefined && bound.sink !== undefined)
-                next.connectionIds = { source: bound.source, sink: bound.sink };
+                next.connectionIds = {
+                  source: bound.source,
+                  sink: bound.sink,
+                  ...(log !== undefined && { log }),
+                };
               if (kind === 'datasets' && next.datasetIds?.source !== undefined) {
                 delete next.inlineDatasets;
               }
@@ -2810,9 +2833,9 @@ export function createCanvasStore(): StoreApi<CanvasState> {
           // for a node the author had just returned to fully blank (pick a
           // source, then reselect "— none —"), so the panel claimed a
           // half-bound pair was going unsaved when nothing was bound at all.
-          const emptied = source === undefined && sink === undefined;
+          const emptied = source === undefined && sink === undefined && log === undefined;
           if (complete || emptied) delete forNode[kind];
-          else forNode[kind] = { source, sink };
+          else forNode[kind] = log === undefined ? { source, sink } : { source, sink, log };
           const rest = { ...s.pendingBindings };
           if (forNode.connections === undefined && forNode.datasets === undefined) delete rest[id];
           else rest[id] = forNode;

@@ -58,6 +58,16 @@ describe('issueTarget (#1477)', () => {
     expect(
       issueTarget('nodes.n.userProperties[1].value: ${params.x} is not a declared param', 'n'),
     ).toEqual({ general: true });
+    // #1600 OR41 C6c-1a — the log end, from the ref scan and the save check.
+    expect(issueTarget('nodes.n.connectionIds.log: unknown function', 'n')).toEqual({
+      slot: 'logConnection',
+    });
+    expect(
+      issueTarget(
+        "node 'n': connectionIds.log: the log connection is only used when the session log is written to a folder",
+        'n',
+      ),
+    ).toEqual({ slot: 'logConnection' });
     expect(issueTarget('nodes.n.connectionIds.sink: unknown function', 'n')).toEqual({
       slot: 'sinkConnection',
     });

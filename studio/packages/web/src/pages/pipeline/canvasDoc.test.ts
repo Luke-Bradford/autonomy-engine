@@ -405,7 +405,7 @@ describe('writeAccessWarnings (#1600 OR41 C1b)', () => {
     }) as unknown as ConnectionPublic;
   const copy = (
     id: string,
-    connectionIds: { source: string; sink: string },
+    connectionIds: { source: string; sink: string; log?: string },
     afterCopy = 'keep',
     extra: Partial<Node> = {},
   ): Node => ({
@@ -420,6 +420,26 @@ describe('writeAccessWarnings (#1600 OR41 C1b)', () => {
     conn('no', false),
     conn('db', undefined, 'sqlite'),
   ];
+
+  it('#1600 OR41 C6c-1a — names a folder log with no log connection, or one that does not allow writes', () => {
+    const logged = (id: string, log?: string) =>
+      copy(id, { source: 'rw', sink: 'rw', ...(log !== undefined && { log }) }, 'keep', {
+        config: { pathType: 'file', sourcePath: 'a', logTo: 'folder', logFolder: 'l' },
+      });
+    expect(
+      writeAccessWarnings([logged('a'), logged('b', 'ro'), logged('c', 'rw')], connections),
+    ).toEqual([
+      "node 'a': the session log is written to a folder, and no log connection is bound",
+      "node 'b': the log connection 'Conn ro' does not allow writes, which a folder log needs",
+    ]);
+    // Not while the log is off or goes to the run log.
+    const off = copy('d', { source: 'rw', sink: 'rw' }, 'keep', {
+      config: { pathType: 'file', sourcePath: 'a', logLevel: 'off', logTo: 'folder' },
+    });
+    expect(
+      writeAccessWarnings([off, copy('e', { source: 'rw', sink: 'rw' })], connections),
+    ).toEqual([]);
+  });
 
   it('names a copy whose sink does not allow writes, absent or false', () => {
     expect(

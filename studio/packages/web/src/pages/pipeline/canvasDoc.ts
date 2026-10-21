@@ -186,6 +186,20 @@ export function writeAccessWarnings(
           ];
     }
     if (n.type !== COPY_FILES_ACTIVITY_TYPE) return [];
+    // #1600 OR41 C6c-1a — a folder log is written through its own connection,
+    // and the run refuses one that is missing or read-only before it copies.
+    const toFolder = n.config['logLevel'] !== 'off' && n.config['logTo'] === 'folder';
+    const logEnd = n.connectionIds?.log;
+    const log = toFolder ? readOnly(logEnd) : undefined;
+    const logWarnings = !toFolder
+      ? []
+      : logEnd === undefined
+        ? [`node '${n.id}': the session log is written to a folder, and no log connection is bound`]
+        : log === undefined
+          ? []
+          : [
+              `node '${n.id}': the log connection '${log.name}' does not allow writes, which a folder log needs`,
+            ];
     const sink = readOnly(n.connectionIds?.sink);
     const removes = n.config['afterCopy'] === 'delete' || n.config['afterCopy'] === 'move';
     const source = removes ? readOnly(n.connectionIds?.source) : undefined;
@@ -200,6 +214,7 @@ export function writeAccessWarnings(
         : [
             `node '${n.id}': After copy removes the source, which needs writes allowed on the source connection '${source.name}'`,
           ]),
+      ...logWarnings,
     ];
   });
 }
