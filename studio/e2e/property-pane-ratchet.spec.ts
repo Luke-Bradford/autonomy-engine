@@ -60,7 +60,9 @@ const HELP_LIMITS: Record<string, number> = {
   // rejection still fails, not with Upsert, and that it is slower.
   // +1 for C6e-1's Verify after copy: what is compared, that a failure writes
   // nothing, and not with Upsert.
-  'Copy data': 15,
+  // +1 for C6c-1b's Write to, drawn while the session log is on (the default);
+  // Log folder waits for Folder.
+  'Copy data': 16,
   // #1600 OR41 C9a — Delete, measured: the pane's own `?`s and one on each
   // Source and Settings field but Delete empty folders, which waits for
   // Include subfolders. +2 for C9c's Session log and Write to (Log folder
@@ -348,7 +350,8 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   // the folder walk to 17 and the list walk stayed within its 19.
   // +1 each for C6d-1's Skip incompatible rows (rows only).
   // +1 each for C6e-1's Verify after copy (rows only).
-  'Copy data': 15,
+  // +1 each for C6c-1b's Write to (rows), drawn while the session log is on.
+  'Copy data': 16,
   // #1600 OR41 C6d-2's Skip missing files and Skip forbidden files add two `?`s
   // to each walk, measured: the list walk reads 20 (its limit had been one above
   // its count), the folder walk 19.
@@ -362,7 +365,8 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   'Copy data (files from a folder)': 22,
   // +1 for C1q-c's Query timeout, a new field whose `?` says blank means no limit.
   // +1 for C6e-1's Verify after copy, measured at 19.
-  'Copy data (inline query)': 19,
+  // +1 for C6c-1b's Write to, measured at 20.
+  'Copy data (inline query)': 20,
   // #1600 OR41 C9a — Delete with every setting showing: the 14 above and
   // Delete empty folders', which says it never removes the folder at the path.
   // +3 for C9c's Session log, Write to and Log folder.
