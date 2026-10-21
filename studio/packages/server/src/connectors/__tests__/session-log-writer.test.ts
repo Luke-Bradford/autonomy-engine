@@ -122,4 +122,22 @@ describe('SessionLogWriter', () => {
     expect(await writer.close()).toEqual({ ok: false, error: 'ENOSPC: no space left on device' });
     expect(written).toEqual([]);
   });
+
+  it('drains: writes what is buffered whatever its size, and answers the first failure (C6c-1b)', async () => {
+    const dir = await tempDir();
+    const opened = await SessionLogWriter.open(dir, 'log.csv');
+    if (!opened.ok) throw new Error(opened.error);
+    opened.writer.append(line('a.txt'));
+    expect(await opened.writer.drain()).toBeUndefined();
+    // Far under the 64 KiB flush, and on disk.
+    expect(await readFile(join(dir, 'log.csv'), 'utf8')).toBe(csvOf([line('a.txt')]));
+    await opened.writer.close();
+
+    const failing = SessionLogWriter.over(
+      { write: () => Promise.reject(new Error('EIO')), close: () => Promise.resolve() },
+      '/logs/log.csv',
+    );
+    failing.append(line('b.txt'));
+    expect(await failing.drain()).toBe('EIO');
+  });
 });

@@ -627,7 +627,11 @@
 // and its `logPath` output, with a `formerOutputs` snapshot. A pre-C6c build
 // strips the log end and the two fields and writes no file, and never yields
 // `logPath`.
-export const CATALOG_VERSION = 65;
+// BUMP 65→66 for #1600 OR41 C6c-1b: a rows Copy's session log written to a
+// folder on a log connection, and its `logPath` output, with a `formerOutputs`
+// snapshot. A pre-C6c-1b build strips the log end and the two fields and writes
+// no file, and never yields `logPath`.
+export const CATALOG_VERSION = 66;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

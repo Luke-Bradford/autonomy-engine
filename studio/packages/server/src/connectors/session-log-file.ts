@@ -15,11 +15,16 @@ import { createHash } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import { access, open, realpath, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import { SESSION_LOG_COLUMNS, type SessionLogLine } from '@autonomy-studio/shared';
+import type { z } from 'zod';
+import { formatZodIssues, SESSION_LOG_COLUMNS, type SessionLogLine } from '@autonomy-studio/shared';
 import { CSV_BOM, csvLine, toCsv, type CsvValue } from '../util/csv.js';
 import { O_NOFOLLOW, resolveWithinRootsOrMissing } from './confine.js';
+import { fsConnectionConfigSchema } from './fs-connection.js';
 import { direntType, lstatOrNull } from './fs-select.js';
 import { atomicReplace, closeQuietly } from './fs-write.js';
+import type { ActivityContext } from './types.js';
+
+type FsConfig = z.infer<typeof fsConnectionConfigSchema>;
 
 /**
  * How long the write may take. It also runs after a cancel or timeout, so it
@@ -113,6 +118,56 @@ export async function checkSessionLogFolder(
   return { ok: true, dir: await realpath(resolved.path) };
 }
 
+/**
+ * A file connection an activity writes to (a Copy's sink, a Copy's log),
+ * parsed and required to allow writes: the fail-closed `writable` gate, in one
+ * place.
+ */
+export function writableFs(
+  connectionConfig: Record<string, unknown>,
+  which: 'sink' | 'log',
+): { ok: true; config: FsConfig } | { ok: false; error: string } {
+  const parsed = fsConnectionConfigSchema.safeParse(connectionConfig);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: `invalid fs ${which} connection config: ${formatZodIssues(parsed.error.issues)}`,
+    };
+  }
+  if (parsed.data.writable !== true) {
+    return {
+      ok: false,
+      error: `the ${which} connection does not allow writes; turn on Allow writes on that connection`,
+    };
+  }
+  return { ok: true, config: parsed.data };
+}
+
+/**
+ * #1600 OR41 C6c — Copy's Write to Folder, in either mode: the log connection
+ * (`ctx.logConnection`) must be bound, be a file connection that allows writes,
+ * and its folder must pass `checkSessionLogFolder`. The folder's canonical path
+ * on success. A throw is the caller's to classify.
+ */
+export async function checkLogConnectionFolder(
+  conn: ActivityContext['logConnection'],
+  folder: string | undefined,
+): Promise<Checked> {
+  if (conn === undefined) {
+    return {
+      ok: false,
+      error:
+        'the session log is written to a folder, and no log connection is bound; pick one on the Settings tab',
+    };
+  }
+  if (conn.kind !== 'fs') {
+    return { ok: false, error: 'the log connection is not a file connection' };
+  }
+  const parsed = writableFs(conn.connectionConfig, 'log');
+  if (!parsed.ok) return parsed;
+  return checkSessionLogFolder(parsed.config.roots, folder ?? '');
+}
+
 /** The part of a file handle the writer uses, so a test can hang or fail it. */
 interface LogHandle {
   write(data: string): Promise<unknown>;
@@ -145,9 +200,10 @@ async function bounded<T>(work: Promise<T>, timeoutMs: number, what: string): Pr
 }
 
 /**
- * #1600 OR41 C6c-1a — a session log written as it is kept, for Copy, whose log
- * can run to a line per skipped row (§4.1): one CSV file per attempt, in
- * `writeSessionLogFile`'s format, under the attempt's own name.
+ * #1600 OR41 C6c-1a — a session log written as it is kept, for Copy in either
+ * mode (a rows Copy since C6c-1b), whose log can run to a line per skipped row
+ * (§4.1): one CSV file per attempt, in `writeSessionLogFile`'s format, under
+ * the attempt's own name.
  *
  * Written to its FINAL name as it goes, not a temp renamed at the end: the
  * name is the attempt's own and created exclusively, so nothing is ever
@@ -235,6 +291,16 @@ export class SessionLogWriter {
    * carry on with a log it asked for and is no longer getting.
    */
   get failure(): string | undefined {
+    return this.error;
+  }
+
+  /**
+   * #1600 OR41 C6c-1b — write everything buffered and wait for it: the first
+   * failure, if any. A rows Copy drains before it commits, so a log that could
+   * not be written rolls the copy back.
+   */
+  async drain(): Promise<string | undefined> {
+    await this.flush();
     return this.error;
   }
 

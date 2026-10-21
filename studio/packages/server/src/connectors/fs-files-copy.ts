@@ -44,7 +44,12 @@ import {
   streamInto,
 } from './fs-write.js';
 import { runPool } from './run-pool.js';
-import { checkSessionLogFolder, sessionLogFileName, SessionLogWriter } from './session-log-file.js';
+import {
+  checkLogConnectionFolder,
+  sessionLogFileName,
+  SessionLogWriter,
+  writableFs,
+} from './session-log-file.js';
 import type { ActivityContext, ActivityEvent } from './types.js';
 import { FS_STREAM_CHUNK_BYTES } from '../limits.js';
 
@@ -216,37 +221,12 @@ function outputsOf(
   return { ...c, ...paths, ...measure, usedParallelCopies, logPath };
 }
 
-/**
- * A file connection this copy writes to (the sink, C6c-1a's log), parsed and
- * required to allow writes: the fail-closed `writable` gate, in one place.
- */
-function writableFs(
-  connectionConfig: Record<string, unknown>,
-  which: 'sink' | 'log',
-): { ok: true; config: FsConfig } | { ok: false; error: string } {
-  const parsed = fsConnectionConfigSchema.safeParse(connectionConfig);
-  if (!parsed.success) {
-    return {
-      ok: false,
-      error: `invalid fs ${which} connection config: ${formatZodIssues(parsed.error.issues)}`,
-    };
-  }
-  if (parsed.data.writable !== true) {
-    return {
-      ok: false,
-      error: `the ${which} connection does not allow writes; turn on Allow writes on that connection`,
-    };
-  }
-  return { ok: true, config: parsed.data };
-}
-
 type OpenedLog = { ok: true; writer: SessionLogWriter } | { ok: false; error: string };
 
 /**
- * #1600 OR41 C6c-1a — Write to Folder: the log connection (`ctx.logConnection`)
- * must be a file connection that allows writes, and its folder must exist, be a
- * folder and be writable (Delete's checks, shared). Then the attempt's file is
- * created, so every terminal after this keeps a log.
+ * #1600 OR41 C6c-1a — Write to Folder: the log connection and its folder are
+ * checked (`checkLogConnectionFolder`, shared with a rows Copy). Then the
+ * attempt's file is created, so every terminal after this keeps a log.
  *
  * A Folder source is listed after this, so a log folder that is the source
  * folder, or under it with Include subfolders on, is refused: the copy would
@@ -258,20 +238,7 @@ async function openFolderLog(
   cfg: CopyFilesConfig,
   source: FsConfig,
 ): Promise<OpenedLog> {
-  const conn = ctx.logConnection;
-  if (conn === undefined) {
-    return {
-      ok: false,
-      error:
-        'the session log is written to a folder, and no log connection is bound; pick one on the Settings tab',
-    };
-  }
-  if (conn.kind !== 'fs') {
-    return { ok: false, error: 'the log connection is not a file connection' };
-  }
-  const parsed = writableFs(conn.connectionConfig, 'log');
-  if (!parsed.ok) return parsed;
-  const checked = await checkSessionLogFolder(parsed.config.roots, cfg.logFolder ?? '');
+  const checked = await checkLogConnectionFolder(ctx.logConnection, cfg.logFolder);
   if (!checked.ok) return checked;
   if (cfg.pathType === 'folder') {
     const root = await resolveWithinRoots(source.roots, cfg.sourcePath, 'fs');

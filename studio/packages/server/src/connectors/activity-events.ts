@@ -49,18 +49,10 @@ export function notYet(
  * #1600 OR41 C6b — a session log's lines as the run log takes them: one
  * `node.output sessionLog` each, by `sessionLogRunValues`' rule, counting what a
  * capped log already left out. Delete (C9c), a rows Copy (C6a) and a files Copy
- * (C6b) yield them at the terminal through this one loop. `folderHint` is off
- * for an activity that cannot write its log to a folder (a rows Copy, until
- * C6c-1b).
+ * (C6b) yield them at the terminal through this one loop.
  */
-export function* sessionLogRunEvents(
-  log: SessionLog,
-  opts: { folderHint?: boolean } = {},
-): Generator<ActivityEvent> {
-  for (const value of sessionLogRunValues(log.lines, undefined, {
-    dropped: log.dropped,
-    ...(opts.folderHint !== undefined && { folderHint: opts.folderHint }),
-  })) {
+export function* sessionLogRunEvents(log: SessionLog): Generator<ActivityEvent> {
+  for (const value of sessionLogRunValues(log.lines, undefined, { dropped: log.dropped })) {
     yield { type: 'output', name: SESSION_LOG_OUTPUT, value };
   }
 }

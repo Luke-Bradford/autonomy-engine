@@ -1,6 +1,7 @@
+import { mkdir, readdir, readFile, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   COPY_ACTIVITY_TYPE,
   COPY_PROGRESS_OUTPUT,
@@ -18,6 +19,7 @@ import {
   type CopyIo,
 } from '../copy.js';
 import { DatasetIoError } from '../dataset-io-error.js';
+import { SessionLogWriter } from '../session-log-file.js';
 import { sqliteAdapter } from '../sqlite.js';
 import type { ActivityContext, ActivityEvent } from '../types.js';
 import {
@@ -138,6 +140,8 @@ describe('copy activity — the happy path contract', () => {
       // #1600 OR41 C6f-2 — one reader into one sink transaction: no partitioned
       // reads yet, so a rows Copy always runs one copy (ADF reports the same).
       usedParallelCopies: 1,
+      // #1600 OR41 C6c-1b — the run log, so no file.
+      logPath: null,
     });
     // #1600 OR41 C6f-1 — the catalog's contract, name for name and in order:
     // an output the entry declares and the copy does not yield fails the node.
@@ -1292,7 +1296,7 @@ describe('copy activity — the session log, to the run log (#1600 OR41 C6a)', (
     expect(lineValues(clean)).toEqual([]);
   });
 
-  it(`keeps ${SESSION_LOG_RUN_MAX_LINES} lines and counts the rest, with no folder to point at`, async () => {
+  it(`keeps ${SESSION_LOG_RUN_MAX_LINES} lines and counts the rest, pointing at a folder`, async () => {
     const root = tempRoot();
     const n = SESSION_LOG_RUN_MAX_LINES + 5;
     const events = await run(
@@ -1306,7 +1310,10 @@ describe('copy activity — the session log, to the run log (#1600 OR41 C6a)', (
     const lines = lineValues(events);
     expect(lines).toHaveLength(SESSION_LOG_RUN_MAX_LINES + 1);
     expect(lines.at(-2)).toContain(` row ${SESSION_LOG_RUN_MAX_LINES} `);
-    expect(lines.at(-1)).toMatch(/ SessionLog {2}5 more lines not kept in the run log$/);
+    // #1600 OR41 C6c-1b — a rows Copy can write its log to a folder now.
+    expect(lines.at(-1)).toMatch(
+      / SessionLog {2}5 more lines not kept in the run log; write the session log to a folder to keep every line$/,
+    );
   });
 
   it('a copy that fails keeps the lines it logged, ahead of the terminal, with no Error line', async () => {
@@ -1571,5 +1578,462 @@ describe('verifyAfterCopyFailure — rows read = rows written + rows skipped (C6
       'Verify after copy failed: the copy read 5 row(s) and skipped 2, so 3 should have been ' +
         'written, but the store reports 4',
     );
+  });
+});
+
+describe('copy activity — the session log, to a folder (#1600 OR41 C6c-1b)', () => {
+  let logs: string;
+  beforeEach(async () => {
+    logs = tempRoot();
+    await mkdir(join(logs, 'runs'));
+  });
+  const logConnection = (over: { writable?: boolean; kind?: string } = {}) => ({
+    kind: over.kind ?? 'fs',
+    connectionConfig: { roots: [logs], writable: over.writable ?? true },
+  });
+  const withLog = (ctx: ActivityContext, log: unknown = logConnection()): ActivityContext =>
+    ({ ...ctx, ...(log === null ? {} : { logConnection: log }) }) as ActivityContext;
+  const dropping = (extra: Record<string, unknown> = {}) => ({
+    mapping: [
+      { source: 'id', sink: 'id', type: 'integer' },
+      // `name` holds 'row-N', which cannot become an integer: every row is skipped.
+      { source: 'name', sink: 'flag', type: 'integer' },
+    ],
+    logTo: 'folder',
+    logFolder: 'runs',
+    ...extra,
+  });
+  const files = () => readdir(join(logs, 'runs'));
+  /** The one log file's lines without the timestamp, the header first. */
+  const csv = async () => {
+    const names = await files();
+    expect(names).toHaveLength(1);
+    return (await readFile(join(logs, 'runs', names[0]!), 'utf8'))
+      .replace(/^\uFEFF/, '')
+      .split('\r\n')
+      .filter((l) => l !== '')
+      .map((l, i) => (i === 0 ? l : l.replace(/^[^,]+,/, '')));
+  };
+  /** The one terminal: the executor folds the first it sees. */
+  const only = (events: ActivityEvent[]): ActivityEvent => {
+    const ends = events.filter((e) => e.type === 'succeeded' || e.type === 'failed');
+    expect(ends).toHaveLength(1);
+    expect(events.at(-1)).toBe(ends[0]);
+    return ends[0]!;
+  };
+  const runLogLines = (events: ActivityEvent[]) =>
+    events.filter((e) => e.type === 'output' && e.name === SESSION_LOG_OUTPUT);
+  const outputsOf = (events: ActivityEvent[]): Record<string, unknown> => {
+    const end = events.at(-1)!;
+    if (end.type === 'succeeded') return end.outputs;
+    return Object.fromEntries(
+      events.flatMap((e) => (e.type === 'output' ? [[e.name, e.value]] : [])),
+    );
+  };
+
+  it('writes every line to the folder, not the run log, and names the file in logPath', async () => {
+    const root = tempRoot();
+    const events = await run(
+      withLog(
+        copyCtx({
+          root,
+          sourcePath: seedDb(root, 2, 'src.db'),
+          sinkPath: seedSink(root, 'dst.db'),
+          input: dropping(),
+        }),
+      ),
+    );
+    expect(only(events).type).toBe('succeeded');
+    expect(runLogLines(events)).toEqual([]);
+    const lines = await csv();
+    expect(lines[0]).toBe('Timestamp,Level,Operation,Item,Message');
+    expect(lines.slice(1)).toEqual([
+      expect.stringMatching(/^Warning,TabularRowSkip,row 1,not_a_number: into 'flag': /),
+      expect.stringMatching(/^Warning,TabularRowSkip,row 2,/),
+    ]);
+    const outputs = outputsOf(events);
+    expect(outputs['logPath']).toBe(join(await realpath(join(logs, 'runs')), (await files())[0]!));
+    expect(Object.keys(outputs)).toEqual(getActivity('copy')!.outputs.map((o) => o.name));
+  });
+
+  it('keeps every line past the run log’s cap', async () => {
+    const root = tempRoot();
+    const n = SESSION_LOG_RUN_MAX_LINES + 5;
+    await run(
+      withLog(
+        copyCtx({
+          root,
+          sourcePath: seedDb(root, n, 'src.db'),
+          sinkPath: seedSink(root, 'dst.db'),
+          input: dropping(),
+        }),
+      ),
+    );
+    const lines = await csv();
+    expect(lines).toHaveLength(n + 1);
+    expect(lines.at(-1)).toMatch(new RegExp(`^Warning,TabularRowSkip,row ${n},`));
+  });
+
+  it('writes a header-only file for a copy of no rows', async () => {
+    const root = tempRoot();
+    const events = await run(
+      withLog(
+        copyCtx({
+          root,
+          sourcePath: seedDb(root, 0, 'src.db'),
+          sinkPath: seedSink(root, 'dst.db'),
+          input: dropping(),
+        }),
+      ),
+    );
+    expect(only(events).type).toBe('succeeded');
+    expect(await csv()).toHaveLength(1);
+    expect(outputsOf(events)['logPath']).toEqual(expect.any(String));
+  });
+
+  it.each([
+    [
+      'no log connection is bound',
+      null,
+      'the session log is written to a folder, and no log connection is bound; pick one on the Settings tab',
+    ],
+    [
+      'the log connection does not allow writes',
+      { writable: false },
+      'the log connection does not allow writes; turn on Allow writes on that connection',
+    ],
+    [
+      'the log connection is not a file one',
+      { kind: 'sqlite' },
+      'the log connection is not a file connection',
+    ],
+  ])('refuses before opening a store when %s', async (_why, over, message) => {
+    const root = tempRoot();
+    const events = await run(
+      withLog(
+        copyCtx({
+          root,
+          // Never opened: the refusal comes first, so a missing source is not reported.
+          sourcePath: join(root, 'missing.db'),
+          sinkPath: seedSink(root, 'dst.db'),
+          input: dropping(),
+        }),
+        over === null ? null : logConnection(over),
+      ),
+    );
+    expect(events).toEqual([{ type: 'failed', kind: 'permanent', error: message }]);
+    expect(await files()).toEqual([]);
+  });
+
+  it('refuses a log folder that does not exist, before opening a store', async () => {
+    const root = tempRoot();
+    const events = await run(
+      withLog(
+        copyCtx({
+          root,
+          sourcePath: join(root, 'missing.db'),
+          sinkPath: seedSink(root, 'dst.db'),
+          input: dropping({ logFolder: 'nope' }),
+        }),
+      ),
+    );
+    expect(events).toEqual([
+      { type: 'failed', kind: 'permanent', error: "the log folder 'nope' does not exist" },
+    ]);
+  });
+
+  it('keeps the log of a copy refused after it is opened, ending with the refusal', async () => {
+    const root = tempRoot();
+    const events = await run(
+      withLog(
+        copyCtx({
+          root,
+          sourcePath: seedDb(root, 2, 'src.db'),
+          sinkPath: seedSink(root, 'dst.db'),
+          input: dropping({
+            mapping: [{ source: 'nope', sink: 'id', type: 'integer' }],
+          }),
+        }),
+      ),
+    );
+    const end = only(events);
+    expect(end.type).toBe('failed');
+    const lines = await csv();
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toBe(`Error,Copy,,${end.type === 'failed' ? end.error : ''}`);
+  });
+
+  it('keeps the log of a copy the sink fails, ending with the failure', async () => {
+    const root = tempRoot();
+    const sinkPath = join(root, 'dst.db');
+    const dst = new Database(sinkPath);
+    dst.exec('CREATE TABLE sink (id INTEGER, flag INTEGER, note TEXT NOT NULL)');
+    dst.close();
+    const events = await run(
+      withLog(
+        copyCtx({
+          root,
+          sourcePath: seedDb(root, 2, 'src.db'),
+          sinkPath,
+          input: dropping({
+            logLevel: 'info',
+            mapping: [
+              { source: 'id', sink: 'id', type: 'integer' },
+              { source: 'nope', sink: 'note', type: 'string', onError: 'null' },
+            ],
+          }),
+        }),
+      ),
+    );
+    const end = only(events);
+    expect(end.type).toBe('failed');
+    // The message holds commas, so the cell is quoted.
+    expect((await csv()).at(-1)).toBe(`Error,Copy,,"${end.type === 'failed' ? end.error : ''}"`);
+    expect(outputsOf(events)['logPath']).toEqual(expect.any(String));
+  });
+
+  it('keeps the log of a cancelled copy, ending with the cancel, and rolls the rows back', async () => {
+    const root = tempRoot();
+    const sinkPath = seedSink(root, 'dst.db');
+    const controller = new AbortController();
+    const ctx = withLog({
+      ...copyCtx({
+        root,
+        sourcePath: seedDb(root, 5, 'src.db'),
+        sinkPath,
+        input: dropping({
+          logLevel: 'info',
+          writeBatchSize: 1,
+          mapping: [{ source: 'id', sink: 'id', type: 'integer' }],
+        }),
+      }),
+      signal: controller.signal,
+    } as ActivityContext);
+    const events: ActivityEvent[] = [];
+    for await (const event of sqliteAdapter.runActivity(ctx, null)) {
+      events.push(event);
+      if (event.type === 'output' && event.name === COPY_PROGRESS_OUTPUT) controller.abort();
+    }
+    const end = only(events);
+    expect(end).toMatchObject({ type: 'failed', kind: 'cancelled' });
+    expect((await csv()).at(-1)).toMatch(/^Error,Copy,,/);
+    expect(rowsOf(sinkPath)).toEqual([]);
+  });
+
+  it('stops the copy and rolls it back once the log can no longer be written', async () => {
+    const root = tempRoot();
+    const sinkPath = seedSink(root, 'dst.db');
+    const spy = vi
+      .spyOn(SessionLogWriter.prototype, 'failure', 'get')
+      .mockReturnValueOnce(undefined)
+      .mockReturnValue('disk full');
+    try {
+      const events = await run(
+        withLog(
+          copyCtx({
+            root,
+            sourcePath: seedDb(root, 3, 'src.db'),
+            sinkPath,
+            input: dropping({
+              writeBatchSize: 1,
+              mapping: [{ source: 'id', sink: 'id', type: 'integer' }],
+            }),
+          }),
+        ),
+      );
+      expect(only(events)).toEqual({
+        type: 'failed',
+        kind: 'permanent',
+        error: 'the session log could not be written: disk full',
+      });
+      expect(outputsOf(events)['rowsWritten']).toBe(0);
+      expect(rowsOf(sinkPath)).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('rolls the copy back when the log cannot be written before COMMIT', async () => {
+    const root = tempRoot();
+    const sinkPath = seedSink(root, 'dst.db');
+    const spy = vi.spyOn(SessionLogWriter.prototype, 'drain').mockResolvedValue('disk full');
+    try {
+      const events = await run(
+        withLog(
+          copyCtx({
+            root,
+            sourcePath: seedDb(root, 2, 'src.db'),
+            sinkPath,
+            input: dropping({ mapping: [{ source: 'id', sink: 'id', type: 'integer' }] }),
+          }),
+        ),
+      );
+      expect(only(events)).toEqual({
+        type: 'failed',
+        kind: 'permanent',
+        error: 'the session log could not be written: disk full',
+      });
+      expect(rowsOf(sinkPath)).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('fails a committed copy whose log cannot be closed, reporting the counts first', async () => {
+    const root = tempRoot();
+    const sinkPath = seedSink(root, 'dst.db');
+    const spy = vi
+      .spyOn(SessionLogWriter.prototype, 'close')
+      .mockResolvedValue({ ok: false, error: 'disk full' });
+    try {
+      const events = await run(
+        withLog(
+          copyCtx({
+            root,
+            sourcePath: seedDb(root, 2, 'src.db'),
+            sinkPath,
+            input: dropping({ mapping: [{ source: 'id', sink: 'id', type: 'integer' }] }),
+          }),
+        ),
+      );
+      const end = only(events);
+      expect(end).toMatchObject({ type: 'failed', kind: 'permanent' });
+      expect(end.type === 'failed' ? end.error : '').toMatch(
+        /^copied 2 rows, but the session log '.+session-log\..+\.csv' could not be written: disk full$/,
+      );
+      const outputs = outputsOf(events);
+      expect(outputs['rowsWritten']).toBe(2);
+      expect(outputs['logPath']).toBeNull();
+      // Committed: the store holds the rows the counts report.
+      expect(rowsOf(sinkPath)).toHaveLength(2);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('stops a copy whose batches are all skipped once the log can no longer be written', async () => {
+    // No row reaches the sink, so only the reader's batches can flush the log.
+    const root = tempRoot();
+    const sinkPath = seedSink(root, 'dst.db');
+    const spy = vi
+      .spyOn(SessionLogWriter.prototype, 'failure', 'get')
+      .mockReturnValueOnce(undefined)
+      .mockReturnValue('disk full');
+    try {
+      const events = await run(
+        withLog(
+          copyCtx({
+            root,
+            sourcePath: seedDb(root, 3, 'src.db'),
+            sinkPath,
+            input: dropping({ writeBatchSize: 1 }),
+          }),
+        ),
+      );
+      expect(only(events)).toEqual({
+        type: 'failed',
+        kind: 'permanent',
+        error: 'the session log could not be written: disk full',
+      });
+      // Stopped after the second batch, not read to the end.
+      expect(outputsOf(events)['rowsRead']).toBe(2);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('drains before COMMIT with every line in: none is added after the drain', async () => {
+    const root = tempRoot();
+    const sinkPath = join(root, 'dst.db');
+    const dst = new Database(sinkPath);
+    // Row 2's id breaks the key, so the sink rejects it in the last batch.
+    dst.exec('CREATE TABLE sink (id INTEGER PRIMARY KEY, flag INTEGER)');
+    dst.exec('INSERT INTO sink VALUES (2, 0)');
+    dst.close();
+    let appended = 0;
+    let atDrain = -1;
+    const append = SessionLogWriter.prototype.append;
+    const drain = SessionLogWriter.prototype.drain;
+    const appendSpy = vi.spyOn(SessionLogWriter.prototype, 'append').mockImplementation(function (
+      this: SessionLogWriter,
+      line,
+    ) {
+      appended += 1;
+      append.call(this, line);
+    });
+    const drainSpy = vi.spyOn(SessionLogWriter.prototype, 'drain').mockImplementation(function (
+      this: SessionLogWriter,
+    ) {
+      atDrain = appended;
+      return drain.call(this);
+    });
+    try {
+      const events = await run(
+        withLog(
+          copyCtx({
+            root,
+            sourcePath: seedDb(root, 2, 'src.db'),
+            sinkPath,
+            input: dropping({
+              logLevel: 'info',
+              skipIncompatibleRows: true,
+              mapping: [{ source: 'id', sink: 'id', type: 'integer' }],
+            }),
+          }),
+        ),
+      );
+      expect(only(events).type).toBe('succeeded');
+      const lines = await csv();
+      expect(lines.slice(1)).toEqual([
+        expect.stringMatching(/^Warning,TabularRowSkip,row 2,sink_rejected: /),
+        'Info,TabularRowBatch,rows 1-2,"read 2 rows, 1 skipped"',
+      ]);
+      expect(atDrain).toBe(2);
+      expect(appended).toBe(2);
+    } finally {
+      appendSpy.mockRestore();
+      drainSpy.mockRestore();
+    }
+  });
+
+  it('writes the log of an Upsert, which the Settings fields before it refuse', async () => {
+    const root = tempRoot();
+    const sinkPath = join(root, 'dst.db');
+    const dst = new Database(sinkPath);
+    dst.exec('CREATE TABLE sink (id INTEGER PRIMARY KEY, flag INTEGER)');
+    dst.close();
+    const events = await run(
+      withLog(
+        copyCtx({
+          root,
+          sourcePath: seedDb(root, 2, 'src.db'),
+          sinkPath,
+          input: dropping({ mode: 'upsert' }),
+        }),
+      ),
+    );
+    expect(only(events).type).toBe('succeeded');
+    expect((await csv()).slice(1)).toHaveLength(2);
+  });
+
+  it('closes the log of a consumer that stops early', async () => {
+    const root = tempRoot();
+    const close = vi.spyOn(SessionLogWriter.prototype, 'close');
+    try {
+      const ctx = withLog(
+        copyCtx({
+          root,
+          sourcePath: seedDb(root, 3, 'src.db'),
+          sinkPath: seedSink(root, 'dst.db'),
+          input: dropping({ writeBatchSize: 1 }),
+        }),
+      );
+      for await (const event of sqliteAdapter.runActivity(ctx, null)) {
+        if (event.type === 'output' && event.name === COPY_PROGRESS_OUTPUT) break;
+      }
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      close.mockRestore();
+    }
   });
 });

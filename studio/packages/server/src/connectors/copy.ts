@@ -24,9 +24,15 @@ import {
 import { AsyncEventQueue } from '../util/async-event-queue.js';
 import { failed, sessionLogRunEvents } from './activity-events.js';
 import { DatasetIoError } from './dataset-io-error.js';
+import { makeTmpSuffix } from './fs-write.js';
 import type { PreCopyScript } from './pre-copy-script.js';
 import type { AutoCreateColumn } from './auto-create-table.js';
 import { refuseNullOnNonNullable } from './sink-columns.js';
+import {
+  checkLogConnectionFolder,
+  sessionLogFileName,
+  SessionLogWriter,
+} from './session-log-file.js';
 import type { SourceIo } from './source-io.js';
 import type { ActivityContext, ActivityEvent, ResolvedDataset } from './types.js';
 
@@ -160,7 +166,11 @@ export interface CopyIo extends SourceIo {
  * advisory below. `rowsSkipped` is ADF's name for `rowsFailed`, which stays
  * the same number so the nodes that read it keep working.
  */
-function copyOutputs(counters: CopyCounters, measure: CopyMeasure): Record<string, unknown> {
+function copyOutputs(
+  counters: CopyCounters,
+  measure: CopyMeasure,
+  logPath: string | null,
+): Record<string, unknown> {
   return {
     rowsRead: counters.rowsRead,
     rowsWritten: counters.rowsWritten,
@@ -173,7 +183,39 @@ function copyOutputs(counters: CopyCounters, measure: CopyMeasure): Record<strin
     // partitioned reads (C6f-3) a rows Copy runs one copy, as ADF's does when
     // its source has no partition option.
     usedParallelCopies: 1,
+    // #1600 OR41 C6c-1b — the folder log's file, null for the run log.
+    logPath,
   };
+}
+
+const logWriteFailure = (error: string) =>
+  new DatasetIoError('permanent', `the session log could not be written: ${error}`);
+
+/**
+ * #1600 OR41 C6c-1b — the READER's batches, with the folder log written as they
+ * go. The pump asks for the next one once it has handled the last (and the
+ * sink has taken what it yielded of it, so its rejected rows are logged too),
+ * so the log is flushed then (once it holds 64 KiB), and awaited, so a slow
+ * mount holds the copy back rather than the buffer growing past 64 KiB and one
+ * batch's lines. The reader's, not the pump's: a batch whose rows were all
+ * skipped never reaches the sink, and is the batch that logs the most. After
+ * the last batch it is drained.
+ *
+ * A failure is thrown from here, through the pump, inside the sink's write
+ * transaction, so the copy stops and ROLLS BACK: both sinks pass a
+ * `DatasetIoError` through as it is. The drain comes after the pump's last
+ * batch line and the sink's last statement, so no line is added after it
+ * before COMMIT. The throw is in the loop body, so `for await` closes the
+ * reader.
+ */
+async function* writingLog<T>(batches: AsyncIterable<T>, log: SessionLogWriter): AsyncGenerator<T> {
+  for await (const batch of batches) {
+    yield batch;
+    await log.flushIfFull();
+    if (log.failure !== undefined) throw logWriteFailure(log.failure);
+  }
+  const failure = await log.drain();
+  if (failure !== undefined) throw logWriteFailure(failure);
 }
 
 /**
@@ -304,6 +346,23 @@ export async function* runCopyActivity(
   ctx: ActivityContext,
   io: CopyIo,
 ): AsyncGenerator<ActivityEvent> {
+  const held: { log?: SessionLogWriter } = {};
+  try {
+    yield* copyRows(ctx, io, held);
+  } finally {
+    // #1600 OR41 C6c-1b — every terminal closes the folder log; this covers a
+    // consumer that stops iterating early, and waits for it (each write and the
+    // close have their own bound). `close` answers a second call with its
+    // first, and reports a failure rather than throwing it.
+    await held.log?.close();
+  }
+}
+
+async function* copyRows(
+  ctx: ActivityContext,
+  io: CopyIo,
+  held: { log?: SessionLogWriter },
+): AsyncGenerator<ActivityEvent> {
   // #1600 OR41 C6f-1 — the copy's duration runs from here to its terminal.
   const startedMs = performance.now();
   const source = ctx.datasets?.source;
@@ -373,6 +432,73 @@ export async function* runCopyActivity(
     return;
   }
 
+  // #1600 OR41 C6c-1b — Write to Folder: the log's connection and folder are the
+  // ladder's last rung, before anything opens a store, so a bad one fails the
+  // copy with nothing read or written (Files as-is's rule, C6c-1a). No source
+  // overlap rule: a rows source is one table or file, and the log's name is the
+  // attempt's own, created exclusively. From here every terminal keeps the file.
+  let logFile: SessionLogWriter | undefined;
+  if (parsed.data.logLevel !== 'off' && parsed.data.logTo === 'folder') {
+    let opened: { ok: true; writer: SessionLogWriter } | { ok: false; error: string };
+    try {
+      const checked = await checkLogConnectionFolder(ctx.logConnection, parsed.data.logFolder);
+      opened = checked.ok
+        ? await SessionLogWriter.open(checked.dir, sessionLogFileName(makeTmpSuffix(ctx)))
+        : checked;
+    } catch (err) {
+      yield copyFailure(err);
+      return;
+    }
+    if (!opened.ok) {
+      yield failed('permanent', opened.error);
+      return;
+    }
+    logFile = opened.writer;
+    held.log = logFile;
+  }
+  // #1600 OR41 C6a — the session log (catalogue §4.1, §5). To the run log, capped
+  // as it is kept: a copy can skip every row it reads, and the run log shows
+  // only the first `SESSION_LOG_RUN_MAX_LINES`. Its lines are yielded at the
+  // terminal, never streamed: a running row's latest `node.output` is its
+  // progress hint, which a log line would replace. C6c-1b — to a folder, every
+  // line, handed to the file as it is kept.
+  const folderLog = logFile;
+  const log = new SessionLog(
+    parsed.data.logLevel,
+    undefined,
+    folderLog === undefined
+      ? { keepAtMost: SESSION_LOG_RUN_MAX_LINES }
+      : { onLine: (line) => folderLog.append(line) },
+  );
+  let logPath: string | null = null;
+  let logEnded = false;
+  /**
+   * The log's last act before a terminal, once (a throw after the success
+   * path's yield reaches the catch): the run log's lines, or the folder log
+   * ended with `failure` as an Error line (the file is read without the node's
+   * error beside it, as Delete's and Files as-is's are; the run log needs
+   * none, C6a), closed, and `logPath` set. The folder log's error if it could
+   * not be closed. The executor drains an adapter to its terminal, so every
+   * terminal below ends the log.
+   */
+  async function* endLog(failure?: string): AsyncGenerator<ActivityEvent, string | undefined> {
+    if (logEnded) return undefined;
+    logEnded = true;
+    if (folderLog === undefined) {
+      yield* sessionLogRunEvents(log);
+      return undefined;
+    }
+    if (failure !== undefined) log.add('Error', 'Copy', '', failure);
+    const closed = await folderLog.close();
+    if (closed.ok) logPath = closed.path;
+    return closed.ok ? undefined : closed.error;
+  }
+  /** A refusal once the log is open: the log ended with it, then the refusal. */
+  async function* refuse(terminal: ActivityEvent): AsyncGenerator<ActivityEvent> {
+    yield* endLog(terminal.type === 'failed' ? terminal.error : undefined);
+    yield terminal;
+  }
+
   // §7's SOURCE half, and the reason M6 exists: until now the only source-column
   // check ran inside `planColumns`, from the FIRST ROW's key set. That meant it
   // fired from inside the sink's already-open write transaction, and did not
@@ -422,7 +548,7 @@ export async function* runCopyActivity(
     // REACHED keeps its own `kind`. Reporting a `SQLITE_BUSY` here as a
     // permanent mapping fault would send an operator to fix a mapping that is
     // correct, and would deny a retry that would have worked.
-    yield copyFailure(err);
+    yield* refuse(copyFailure(err));
     return;
   }
   const drift = checkSourceDrift(mapping as readonly CopyPumpMappingEntry[], sourceColumns);
@@ -443,7 +569,7 @@ export async function* runCopyActivity(
             'missing_source_column',
             SOURCE_DRIFT_MESSAGES.missing(drift.missing),
           );
-    yield copyFailure(error);
+    yield* refuse(copyFailure(error));
     return;
   }
 
@@ -461,14 +587,6 @@ export async function* runCopyActivity(
       verified: parsed.data.validateDataConsistency,
       result: inconsistent ? 'found' : 'none',
     });
-  // #1600 OR41 C6a — the session log, to the run log (catalogue §4.1, §5). Capped
-  // as it is kept: a copy can skip every row it reads, and the run log shows
-  // only the first `SESSION_LOG_RUN_MAX_LINES`. Its lines are yielded at the
-  // terminal, never streamed: a running row's latest `node.output` is its
-  // progress hint, which a log line would replace.
-  const log = new SessionLog(parsed.data.logLevel, undefined, {
-    keepAtMost: SESSION_LOG_RUN_MAX_LINES,
-  });
   // #1600 OR41 C6d-1 — the read index of each row in the batch the sink is
   // writing, so a row it rejects is numbered as the source row it came from.
   let sinkBatchRows: readonly number[] = [];
@@ -502,15 +620,6 @@ export async function* runCopyActivity(
   }
   // Where the batch just pumped began, for Everything's per-batch line.
   let batchFrom = { rowsRead: 0, rowsFailed: 0 };
-  let logged = false;
-  function* logLines(): Generator<ActivityEvent> {
-    // Yields only once, because a throw after the success path's yield reaches
-    // the catch.
-    if (logged) return;
-    logged = true;
-    // No folder hint: a rows Copy cannot write its log to a folder until C6c-1b.
-    yield* sessionLogRunEvents(log, { folderHint: false });
-  }
 
   // §7 row 4 — ALLOWED, so it never blocks the copy, and never silent either.
   // Yielded HERE, before the write, rather than beside the terminal like
@@ -544,6 +653,9 @@ export async function* runCopyActivity(
   // An async IIFE rather than a bare call: a `writeRows` that throws
   // SYNCHRONOUSLY must still land in the catch below, as it did when the call
   // sat inside that `try`.
+  // C6c-1b — the folder log is written between the batches the reader gives.
+  const logged = <T>(batches: AsyncIterable<T>): AsyncIterable<T> =>
+    folderLog === undefined ? batches : writingLog(batches, folderLog);
   const write = (async () =>
     io.writeRows({
       columns,
@@ -570,13 +682,15 @@ export async function* runCopyActivity(
       // #1600 OR41 C3b — Batch size. The pump passes batches through one for one,
       // so the reader's batch is the sink's; absent keeps the reader's default.
       batches: pumpCopyRows(
-        io.readBatches({
-          dataset: source,
-          signal: ctx.signal,
-          ...(parsed.data.writeBatchSize === undefined
-            ? {}
-            : { batchRows: parsed.data.writeBatchSize }),
-        }),
+        logged(
+          io.readBatches({
+            dataset: source,
+            signal: ctx.signal,
+            ...(parsed.data.writeBatchSize === undefined
+              ? {}
+              : { batchRows: parsed.data.writeBatchSize }),
+          }),
+        ),
         {
           mapping: mapping as readonly CopyPumpMappingEntry[],
           counters,
@@ -637,7 +751,9 @@ export async function* runCopyActivity(
     if (!outcome.ok) throw outcome.error;
     const { result } = outcome;
     counters.rowsWritten = result.rowsWritten;
-    yield* logLines();
+    // `close` reports a failure rather than throwing it, so the committed count
+    // is never zeroed by the catch below.
+    const logError = yield* endLog();
     if (counters.rowsFailed > 0) {
       yield {
         type: 'warned',
@@ -653,7 +769,21 @@ export async function* runCopyActivity(
         reason: discrepancy,
       };
     }
-    yield { type: 'succeeded', outputs: copyOutputs(counters, measured()) };
+    if (logError !== undefined && folderLog !== undefined) {
+      // The residual of C6c-1b's rule: everything was written before COMMIT, so
+      // only closing the file is left to fail, and the rows are committed. The
+      // counts are reported, then the failure (Files as-is's rule, C6c-1a).
+      for (const [name, value] of Object.entries(copyOutputs(counters, measured(), null))) {
+        yield { type: 'output', name, value };
+      }
+      const n = counters.rowsWritten;
+      yield failed(
+        'permanent',
+        `copied ${n} row${n === 1 ? '' : 's'}, but the session log '${folderLog.path}' could not be written: ${logError}`,
+      );
+      return;
+    }
+    yield { type: 'succeeded', outputs: copyOutputs(counters, measured(), logPath) };
   } catch (err) {
     // §10: "a cancel must never leave a silent partial". `node.failed` carries no
     // outputs, so a failed or cancelled copy would otherwise report how far it
@@ -679,10 +809,12 @@ export async function* runCopyActivity(
     if (err instanceof DatasetIoError && !err.partialWritePossible) {
       counters.rowsWritten = 0;
     }
-    // No Error line: the failure is the node's error, which the Logs tab
-    // already shows; Delete adds one only for the item it failed on.
-    yield* logLines();
-    for (const [name, value] of Object.entries(copyOutputs(counters, measured()))) {
+    // The run log gets no Error line: the failure is the node's error, which the
+    // Logs tab already shows. A folder log ends with it (`endLog`). A failure
+    // keeps its own error, whatever the folder log's close reports.
+    const terminal = copyFailure(err);
+    yield* endLog(terminal.type === 'failed' ? terminal.error : undefined);
+    for (const [name, value] of Object.entries(copyOutputs(counters, measured(), logPath))) {
       yield { type: 'output', name, value };
     }
     if (counters.rowsFailed > 0) {
@@ -692,6 +824,6 @@ export async function* runCopyActivity(
         reason: failureSummary(counters),
       };
     }
-    yield copyFailure(err);
+    yield terminal;
   }
 }

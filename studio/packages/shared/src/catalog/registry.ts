@@ -983,8 +983,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
      * refuse a non-`sqlite` sink at the ladder's `refuseSink` rung.
      *
      * `outputs` mirrors `connectors/copy.ts`'s `copyOutputs` exactly, in order,
-     * and every one but `throughput` is REQUIRED. That is load-bearing rather
-     * than incidental: F13b lowering seeds these into a node's `config.outputs`
+     * and every one but `throughput` and `logPath` is REQUIRED. That is
+     * load-bearing rather than incidental: F13b lowering seeds these into a
+     * node's `config.outputs`
      * at SAVE, and `validateOutputs` then fails the node for any the adapter
      * omits. The adapter yields them all unconditionally on success, and on
      * the WRITE-failure path emits them as
@@ -1023,7 +1024,15 @@ const ENTRIES: ActivityCatalogEntry[] = [
       // joins it with partitioned reads (C6f-3): one reader has no degree.
       {
         key: 'settings',
-        fields: ['skipIncompatibleRows', 'validateDataConsistency', 'logLevel'],
+        fields: [
+          'skipIncompatibleRows',
+          'validateDataConsistency',
+          'logLevel',
+          'logTo',
+          'logFolder',
+        ],
+        // C6c-1b — the log connection, drawn beside the Log folder it serves.
+        bindings: ['logConnection'],
       },
     ],
     // #1600 OR41 C3a — Key columns are read only by Upsert, and save refuses
@@ -1038,6 +1047,10 @@ const ENTRIES: ActivityCatalogEntry[] = [
       skipIncompatibleRows: [{ field: 'mode', in: ['append', 'overwrite', 'truncate'] }],
       // C6e-1 — likewise for Verify after copy (`copyVerifyConsistencyIssue`).
       validateDataConsistency: [{ field: 'mode', in: ['append', 'overwrite', 'truncate'] }],
+      // C6c-1b — Delete's and Files as-is's rules: Write to while the log is on,
+      // the folder for Folder.
+      logTo: [{ field: 'logLevel', in: ['warning', 'info'] }],
+      logFolder: [{ field: 'logTo', in: ['folder'] }],
     },
     idempotent: false,
     // #1190 (M10 slice 2) — `postgres` joins the SOURCE allowlist, because the
@@ -1100,6 +1113,10 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // there is nothing to copy INTO a workbook with, and offering the pairing
     // would only produce a dispatch that always refuses.
     datasetKinds: { source: ['table', 'query', 'delimited', 'excel'], sink: ['table'] },
+    // #1600 OR41 C6c-1b — the session log's own connection (ADF's
+    // `logLocationSettings`), as Files as-is's (C6c-1a): a database-to-database
+    // copy has no file connection to write its log through.
+    logConnectionKinds: ['fs'],
     // #1600 OR41 C6f-1 — `rowsSkipped` is ADF's name for `rowsFailed`, which
     // stays (the same number) so a node that reads it keeps working (§8).
     outputs: [
@@ -1110,11 +1127,26 @@ const ENTRIES: ActivityCatalogEntry[] = [
       out('bytesRead', 'number'),
       out('truncated', 'boolean'),
       ...copyMeasureOutputs(),
+      // C6c-1b — the folder log's file, null when the log is not written to one.
+      optionalOut('logPath', 'string'),
     ],
-    // The nine a node saved before C6f-2 declares, and the five one saved
-    // before C6f-1 declares. Written out, not derived from `outputs`: each is a
-    // snapshot of an old default.
+    // The ten a node saved before C6c-1b declares (C6f-2's), the nine one saved
+    // before C6f-2 declares, and the five one saved before C6f-1 declares.
+    // Written out, not derived from `outputs`: each is a snapshot of an old
+    // default.
     formerOutputs: [
+      [
+        out('rowsRead', 'number'),
+        out('rowsWritten', 'number'),
+        out('rowsSkipped', 'number'),
+        out('rowsFailed', 'number'),
+        out('bytesRead', 'number'),
+        out('truncated', 'boolean'),
+        out('durationMs', 'number'),
+        optionalOut('throughput', 'number'),
+        out('consistency', 'json'),
+        out('usedParallelCopies', 'number'),
+      ],
       [
         out('rowsRead', 'number'),
         out('rowsWritten', 'number'),

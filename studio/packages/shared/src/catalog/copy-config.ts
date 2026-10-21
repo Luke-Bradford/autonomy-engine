@@ -5,7 +5,11 @@ import { interpolationMode } from '../engine/expr.js';
 import { isSet } from './config-value.js';
 import { SqlParameterValueSchema } from './dataset-config.js';
 import { nocaseFold } from '../datamove/schema-drift.js';
-import { sessionLogConfigFields } from './session-log.js';
+import {
+  sessionLogConfigFields,
+  sessionLogConnectionFolderField,
+  sessionLogIssues,
+} from './session-log.js';
 
 /** §6.2's per-column opt-out, named once so its display names can be checked against it. */
 const copyOnErrorSchema = z.enum(['fail', 'null']);
@@ -536,11 +540,12 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
         unit: 'rows',
         description: `Read and written per batch, 1 to ${COPY_MAX_BATCH_ROWS}. Empty is ${COPY_DEFAULT_BATCH_ROWS}.`,
       }),
-      // #1600 OR41 C6a — the Settings tab's Session log, Delete's field. Only the
-      // level: a rows Copy's run log is its one destination until C6c-1b brings
-      // Write to and a log folder (Files as-is has them, C6c-1a), so there is
-      // nothing for `sessionLogIssues` to refuse yet.
+      // #1600 OR41 C6a — the Settings tab's Session log, Delete's field. C6c-1b —
+      // Write to the run log or a folder on the log connection, as Files as-is
+      // (C6c-1a).
       logLevel: sessionLogConfigFields.logLevel,
+      logTo: sessionLogConfigFields.logTo,
+      logFolder: sessionLogConnectionFolderField,
       // #1600 OR41 C6d-1 — ADF's `enableSkipIncompatibleRow`, Settings · Fault
       // tolerance. Literal like every boolean today (ⓕ on typed fields is OR38
       // #1573). Off writes exactly the statements a copy wrote before C6d.
@@ -563,6 +568,9 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
       }),
     })
     .superRefine((cfg, ctx) => {
+      sessionLogIssues(cfg, (field, message) =>
+        ctx.addIssue({ code: 'custom', path: [field], message }),
+      );
       const tableIssue = copyTableOptionIssue(cfg);
       if (tableIssue !== null) {
         ctx.addIssue({ code: 'custom', path: ['tableOption'], message: tableIssue });

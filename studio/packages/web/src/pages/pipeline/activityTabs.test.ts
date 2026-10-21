@@ -49,8 +49,14 @@ describe('nodeTypeTabs (#1477)', () => {
       {
         key: 'settings',
         label: 'Settings',
-        fields: ['skipIncompatibleRows', 'validateDataConsistency', 'logLevel'],
-        bindings: [],
+        fields: [
+          'skipIncompatibleRows',
+          'validateDataConsistency',
+          'logLevel',
+          'logTo',
+          'logFolder',
+        ],
+        bindings: ['logConnection'],
       },
     ]);
   });

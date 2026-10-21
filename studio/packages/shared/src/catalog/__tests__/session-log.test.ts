@@ -104,16 +104,15 @@ describe('SessionLog with keepAtMost', () => {
     expect(log.dropped).toBe(0);
   });
 
-  it('reports the lines it dropped in the run log, without a folder hint where there is no folder', () => {
+  it('reports the lines it dropped in the run log, pointing at a folder', () => {
     const log = new SessionLog('warning', at('2026-10-20T00:00:00Z'), { keepAtMost: 1 });
     for (let i = 0; i < 4; i += 1) log.add('Warning', 'TabularRowSkip', `row ${i + 1}`, 'skipped');
     const values = sessionLogRunValues(log.lines, at('2026-10-20T00:00:09Z'), {
       dropped: log.dropped,
-      folderHint: false,
     });
     expect(values).toEqual([
       '2026-10-20T00:00:00.000Z Warning TabularRowSkip row 1 skipped',
-      '2026-10-20T00:00:09.000Z Warning SessionLog  3 more lines not kept in the run log',
+      '2026-10-20T00:00:09.000Z Warning SessionLog  3 more lines not kept in the run log; write the session log to a folder to keep every line',
     ]);
   });
 });
