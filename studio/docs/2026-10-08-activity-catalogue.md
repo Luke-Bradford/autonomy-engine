@@ -277,7 +277,7 @@ Mapping   [Import schemas] [+ New mapping] [Clear] [Reset]                      
   - **C6c:** *Write to* a folder, which needs a log connection binding of its own. A database-to-database copy has no file system connection, and ADF's `logLocationSettings` names a linked service. C6c also brings `logPath`, an appending writer and *Mode* Best effort · Reliable.
   - **C6d:** fault tolerance: **C6d-1** the rows the sink rejects (built, below); **C6d-2** a files-as-is Copy's *Skip missing files* and *Skip forbidden files* (built, below).
   - **C6e:** consistency: **C6e-1** a rows Copy's *Verify after copy* (built, below); **C6e-2** Files as-is's *Verify copied files* and *Skip inconsistent files* (built, below).
-  - **C6f:** parallelism and the complete outputs.
+  - **C6f:** **C6f-1** the complete outputs (built, below); **C6f-2** parallelism.
 
 **Built (C6b, 2026-10-20):** a files-as-is Copy's session log, to the run log, with ADF's file operations ([session log](https://learn.microsoft.com/azure/data-factory/copy-activity-log): `FileRead`, `FileWrite`, `FileSkip`).
 - **Setting:** the same *Session log* field (`logLevel`, default Warnings) on a new Settings tab after Sink, as on a rows Copy. Switching the *Copy mode* restarts it at its default, as it does every other setting.
@@ -315,7 +315,7 @@ Mapping   [Import schemas] [+ New mapping] [Clear] [Reset]                      
   - Any other failure.
   - A deferred constraint, which fails at COMMIT.
 - **Counted and logged as a coercion skip is:**
-  - `rowsFailed` and `COPY_ROWS_FAILED`'s tally count it under the code `sink_rejected` (renaming to ADF's `rowsSkipped` is C6f's complete outputs).
+  - `rowsFailed` and `COPY_ROWS_FAILED`'s tally count it under the code `sink_rejected` (C6f-1 adds ADF's `rowsSkipped`, the same number, below).
   - It is a *Warning* `TabularRowSkip`, `row N`, numbered as the source row it came from. The pump hands the sink each batch's read indices (`onSinkBatch`), and a sink finishes a batch before it pulls the next.
   - The message is `sink_rejected: into '<table>': <reason>`.
   - The batch line's "M skipped" includes it.
@@ -371,7 +371,7 @@ Mapping   [Import schemas] [+ New mapping] [Clear] [Reset]                      
   - No session-log line. The failure is the node's error, as for every rows Copy failure (C6a).
 - **Not built here:**
   - **C6e-2:** Files as-is (built, below).
-  - **The `consistency` output** (`{verified, result}`, ADF's `dataConsistencyVerification`) moves to C6f's complete outputs, so Copy's output contract changes once, with its `formerOutputs` snapshot and the `rowsFailed` → `rowsSkipped` rename. A failed verification fails the node, so on a rows Copy the output would say only what the config already says.
+  - **The `consistency` output** (`{verified, result}`, ADF's `dataConsistencyVerification`) moves to C6f's complete outputs, so Copy's output contract changes once, with its `formerOutputs` snapshot and the `rowsFailed` → `rowsSkipped` rename (built in C6f-1, below).
 - `CATALOG_VERSION` 60→61: a pre-C6e build strips the key and commits a copy this build rolls back and fails.
 
 **Built (C6e-2, 2026-10-21):** a files-as-is Copy's *Verify copied files* and *Skip inconsistent files*, on the Settings tab after the C6d-2 skips and before the Session log ([data consistency](https://learn.microsoft.com/azure/data-factory/copy-activity-data-consistency): `validateDataConsistency` and `skipErrorFile.dataInconsistency`, both default false).
@@ -400,8 +400,30 @@ Mapping   [Import schemas] [+ New mapping] [Clear] [Reset]                      
   - A file system whose modified time is coarse (whole seconds) can miss a same-size rewrite made within one tick.
   - A change made after the check and before the rename lands, a window of one fsync. After copy Delete or Move re-checks the source then, and Keep does not.
   - #1777's empty subfolder, as for C6d-2's skips.
-- No new output: the `consistency` output stays with C6f's complete outputs, for both modes.
+- No new output: the `consistency` output stays with C6f's complete outputs, for both modes (built in C6f-1, below).
 - `CATALOG_VERSION` 61→62: a pre-C6e-2 build strips both keys and lands a file this build fails or skips.
+
+**Built (C6f-1, 2026-10-21):** Copy's complete outputs, in both modes ([monitor copy activity](https://learn.microsoft.com/azure/data-factory/copy-activity-monitoring), [data consistency](https://learn.microsoft.com/azure/data-factory/copy-activity-data-consistency#monitoring)).
+- **Outputs, in the catalog's order:**
+  - **Rows:** `rowsRead`, `rowsWritten`, `rowsSkipped`, `rowsFailed`, `bytesRead`, `truncated`, `durationMs`, `throughput`, `consistency`.
+  - **Files as-is:** C1b's nine, then `durationMs`, `throughput`, `consistency`.
+  - Every one but `throughput` is required, and each is yielded on success and on a write failure's output events (`copyOutputs`, `outputsOf`; a Files as-is Copy that selected nothing too).
+- **`rowsSkipped`** is ADF's name for the rows a copy skipped: coercion drops and the rows Skip incompatible rows let the sink reject. **`rowsFailed` stays** with the same number, so a node that reads it keeps working (§8, as Lookup kept `rowCount`). The run card, `COPY_ROWS_FAILED` and the progress tick's `rowsFailed` are unchanged.
+- **`durationMs`** is the copy's own time on a monotonic clock (`performance.now()`), from the adapter's start to its terminal, rounded. **`throughput`** is `bytesRead` per second over that rounded duration, and null for a copy that took under half a millisecond, so the two always agree (`copyMeasure`, `datamove/copy-measure.ts`).
+- **`consistency`** is `{verified, result}`:
+  - `verified` says the check was on (ADF's `Verified` · `NotVerified`). It does not say the data was consistent; `result` does. ADF's `Unsupported` cannot arise, because save and dispatch refuse a check a copy cannot make (Upsert, a hierarchy other than Preserve).
+  - `result` is ADF's `InconsistentData`: `none`, `found` (the check failed the copy, so it appears only in the output events ahead of the failure) or `skipped` (Files as-is: Skip inconsistent files stepped over a file).
+- **Stored contracts:** a node saved before C6f-1 holds the five (rows) or nine (Files as-is) former outputs; `formerOutputs` re-seeds it on the editor's load, as C7a's Lookup does, and the next Save writes it.
+- **Deliberate differences from ADF:**
+  - `bytesRead`/`bytesWritten`, not `dataRead`/`dataWritten`; `rowsWritten`, not `rowsCopied`, which studio's runs list already totals.
+  - `durationMs` in milliseconds, not `copyDuration` in seconds, as Web's `durationMs`. `throughput` in bytes/s, not KBps, so it shares `bytesRead`'s unit.
+  - `consistency` holds a boolean and a lower-case result rather than ADF's two strings.
+- **Not built here:**
+  - **C6f-2:** parallelism, with ADF's `usedParallelCopies`.
+  - A rows Copy's `bytesWritten`. ADF's `dataWritten` is what the store kept, which a database sink does not report; a count of the bytes sent would read as that and is not.
+  - `filesRead` for a delimited or Excel source. A rows Copy reads one file today, so the count would always be 1.
+  - `logPath` is C6c's and `watermark` C5's.
+- `CATALOG_VERSION` 62→63: a pre-C6f-1 build never yields the required new outputs, so it fails such a node "missing declared output".
 
 ### 4.2 Lookup
 Source: [Lookup](https://learn.microsoft.com/azure/data-factory/control-flow-lookup-activity).
@@ -878,7 +900,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
 | C3 | Copy: database sink. Truncate, upsert (keys), auto-create from mapping, pre-copy script, batch size. Split: **C3a** Write behaviour Truncate then insert and Upsert with Key columns (built); **C3b** Pre-copy script and Batch size (built); **C3c** *Auto-create from mapping* (built) | OR15 upsert/auto-create |
 | C4 | Copy: mapping redesign (x → y rows from imported schemas, map-by-name default, type conversion settings, ƒx whole mapping, additional columns) | depends on OR10 import |
 | C5 | Copy: incremental (watermark Automatic / Expression; files modified-since-last-success) | OR15 incremental |
-| C6 | Copy: settings. Fault tolerance, consistency check, parallelism, session log; complete outputs. Split: **C6a** the session log of a rows Copy, to the run log (built); **C6b** files-as-is lines (built); **C6c** Write to a folder on a log connection, `logPath`, Mode; **C6d-1** Skip incompatible rows, the rows the sink rejects (built); **C6d-2** Skip missing and forbidden files (built); **C6e-1** Verify after copy on a rows Copy, before COMMIT, not with Upsert (built); **C6e-2** Files as-is *Verify copied files* (size and modified time, before the file lands) and *Skip inconsistent files* (built); **C6f** parallelism and complete outputs, including `consistency` {verified, result} for both modes | — |
+| C6 | Copy: settings. Fault tolerance, consistency check, parallelism, session log; complete outputs. Split: **C6a** the session log of a rows Copy, to the run log (built); **C6b** files-as-is lines (built); **C6c** Write to a folder on a log connection, `logPath`, Mode; **C6d-1** Skip incompatible rows, the rows the sink rejects (built); **C6d-2** Skip missing and forbidden files (built); **C6e-1** Verify after copy on a rows Copy, before COMMIT, not with Upsert (built); **C6e-2** Files as-is *Verify copied files* (size and modified time, before the file lands) and *Skip inconsistent files* (built); **C6f-1** complete outputs: `rowsSkipped`, `durationMs`, `throughput` and `consistency` {verified, result} for both modes (built); **C6f-2** parallelism | — |
 | C7 | Lookup: first-row-only, max rows, over-limit choice, whole-file text. Lower lookup and file_read. Split: **C7a** Settings (First row only, Max rows, When over the limit), `count`/`firstRow`, a stored node's former contract refreshed on load (built); **C7b** Read as Rows · Whole file as text (`file_read` as Lookup's second type), the title *Lookup* (built); **C7c** *When over the limit* and `bytes`/`truncated` for the text mode, limited by the connection's `maxBytes` rather than the 1 MiB byte cap (built); **C7d** the workspace Lookup max rows (1000 by default, up to ADF's 5000) and the Monitor Rows read column (built) | — |
 | C8 | Get metadata + wait-until. Lower file_list. Split: **C8a** the `get_metadata` type on a file system connection, the field list as tick boxes, child items with filter, entries and modified window (built); **C8b** the `file_list` lowering with the `entries` → `childItems` rewrite, List directory retired from the palette (built); **C8c-1** tables (SQLite, Postgres) with per-kind field options (built); **C8c-2** a delimited or Excel dataset source's structure and column count (built); **C8d-1** Wait until on a file system path (built); **C8d-2a** Wait until on a delimited or Excel dataset, with #1743 (built); **C8d-2b** Wait until on a table dataset (built); **C8e** Include subfolders (built) | OR17 #1408 |
 | C9 | Delete: wildcard, folders, dates, log. Lower file_delete. Split: **C9a** the `delete` type on a file system connection, with path type, wildcard, Include subfolders, modified window, Max concurrent deletes, Fail if nothing matched and Delete empty folders, on Get metadata's walk (built); **C9b** the `file_delete` lowering (Path type File, Fail if nothing matched on, `path` kept), Delete file retired from the palette (built); **C9c** the session log and `logPath` (a new output, so a `formerOutputs` snapshot and a version bump), shared with Copy's (built) | OR17 #1408 |
