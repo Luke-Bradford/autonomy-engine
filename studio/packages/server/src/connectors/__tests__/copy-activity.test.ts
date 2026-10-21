@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -1639,13 +1639,13 @@ describe('copy activity — the session log, to a folder (#1600 OR41 C6c-1b)', (
     expect(terminal(events).type).toBe('succeeded');
     expect(runLogLines(events)).toEqual([]);
     const lines = await csv();
-    expect(lines[0]).toBe('Timestamp,Level,OperationName,OperationItem,Message');
+    expect(lines[0]).toBe('Timestamp,Level,Operation,Item,Message');
     expect(lines.slice(1)).toEqual([
       expect.stringMatching(/^Warning,TabularRowSkip,row 1,not_a_number: into 'flag': /),
       expect.stringMatching(/^Warning,TabularRowSkip,row 2,/),
     ]);
     const outputs = outputsOf(events);
-    expect(outputs['logPath']).toBe(join(await realpathOf(join(logs, 'runs')), (await files())[0]!));
+    expect(outputs['logPath']).toBe(join(await realpath(join(logs, 'runs')), (await files())[0]!));
     expect(Object.keys(outputs)).toEqual(getActivity('copy')!.outputs.map((o) => o.name));
   });
 
@@ -1756,7 +1756,7 @@ describe('copy activity — the session log, to a folder (#1600 OR41 C6c-1b)', (
     expect(lines[1]).toBe(`Error,Copy,,${end.type === 'failed' ? end.error : ''}`);
   });
 
-  it('keeps the log of a copy that fails mid-write, ending with the failure', async () => {
+  it('keeps the log of a copy the sink fails, ending with the failure', async () => {
     const root = tempRoot();
     const sinkPath = join(root, 'dst.db');
     const dst = new Database(sinkPath);
@@ -1780,8 +1780,8 @@ describe('copy activity — the session log, to a folder (#1600 OR41 C6c-1b)', (
     );
     const end = terminal(events);
     expect(end.type).toBe('failed');
-    const lines = await csv();
-    expect(lines.at(-1)).toBe(`Error,Copy,,${end.type === 'failed' ? end.error : ''}`);
+    // The message holds commas, so the cell is quoted.
+    expect((await csv()).at(-1)).toBe(`Error,Copy,,"${end.type === 'failed' ? end.error : ''}"`);
     expect(outputsOf(events)['logPath']).toEqual(expect.any(String));
   });
 
@@ -1904,8 +1904,3 @@ describe('copy activity — the session log, to a folder (#1600 OR41 C6c-1b)', (
     }
   });
 });
-
-async function realpathOf(path: string): Promise<string> {
-  const { realpath } = await import('node:fs/promises');
-  return realpath(path);
-}

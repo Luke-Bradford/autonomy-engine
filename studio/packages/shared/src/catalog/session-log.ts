@@ -169,29 +169,27 @@ export function sessionLogText(line: SessionLogLine): string {
  * one, and it says why the attempt failed), and then, LAST so it stays in the
  * Logs tab's most recent rows, one line saying how many were not kept.
  *
- * `dropped` adds the lines a capped `SessionLog` already left out (C6a).
- * `folderHint` (default on) ends that line by pointing at the folder, which only
- * an activity that can write one should do: a rows Copy cannot until C6c-1b.
+ * `dropped` adds the lines a capped `SessionLog` already left out (C6a). The
+ * line points at a folder: every activity with a session log can write one
+ * (a rows Copy since C6c-1b).
  */
 export function sessionLogRunValues(
   lines: readonly SessionLogLine[],
   now: () => Date = () => new Date(),
-  opts: { dropped?: number; folderHint?: boolean } = {},
+  opts: { dropped?: number } = {},
 ): string[] {
   const rest = lines.slice(SESSION_LOG_RUN_MAX_LINES);
   const errors = rest.filter((l) => l.level === 'Error');
   const kept = [...lines.slice(0, SESSION_LOG_RUN_MAX_LINES), ...errors].map(sessionLogText);
   const dropped = rest.length - errors.length + (opts.dropped ?? 0);
   if (dropped > 0) {
-    const hint =
-      opts.folderHint === false ? '' : '; write the session log to a folder to keep every line';
     kept.push(
       sessionLogText({
         timestamp: now().toISOString(),
         level: 'Warning',
         operation: 'SessionLog',
         item: '',
-        message: `${dropped} more line${dropped === 1 ? '' : 's'} not kept in the run log${hint}`,
+        message: `${dropped} more line${dropped === 1 ? '' : 's'} not kept in the run log; write the session log to a folder to keep every line`,
       }),
     );
   }
