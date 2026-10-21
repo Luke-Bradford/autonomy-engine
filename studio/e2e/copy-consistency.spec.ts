@@ -58,6 +58,16 @@ test.describe('#1600 C6e-1 — Copy Verify after copy', () => {
                 { source: 'id', sink: 'id', type: 'integer' },
                 { source: 'qty', sink: 'qty', type: 'integer' },
               ],
+              // #1600 OR41 C6f-1 — the five a Copy saved before its complete
+              // outputs declares. The editor re-seeds them on load, so Save
+              // writes today's contract and the run may yield `consistency`.
+              outputs: [
+                { name: 'rowsRead', type: 'number' },
+                { name: 'rowsWritten', type: 'number' },
+                { name: 'rowsFailed', type: 'number' },
+                { name: 'bytesRead', type: 'number' },
+                { name: 'truncated', type: 'boolean' },
+              ],
             },
             connectionIds: { source: conn, sink: conn },
             datasetIds: { sink },
@@ -109,6 +119,19 @@ test.describe('#1600 C6e-1 — Copy Verify after copy', () => {
       const latest = versions.sort((a, b) => b.version - a.version)[0]!;
       const copy = latest.nodes.find((n) => n['id'] === 'copy1')!;
       expect(copy['config']).toMatchObject({ mode: 'append', validateDataConsistency: true });
+      expect(
+        (copy['config'] as { outputs: { name: string }[] }).outputs.map((o) => o.name),
+      ).toEqual([
+        'rowsRead',
+        'rowsWritten',
+        'rowsSkipped',
+        'rowsFailed',
+        'bytesRead',
+        'truncated',
+        'durationMs',
+        'throughput',
+        'consistency',
+      ]);
 
       const runId = await fireAndSettle(page, latest.id, 'e2e 1600 c6e');
       const run = await (await page.request.get(`/api/runs/${encodeURIComponent(runId)}`)).json();
@@ -123,6 +146,11 @@ test.describe('#1600 C6e-1 — Copy Verify after copy', () => {
           'Verify after copy failed: the copy read 3 row(s) and skipped 0, so 3 should have ' +
           'been written, but the store reports 2',
       });
+      // C6f-1 — ADF's InconsistentData Found, reported ahead of the failure.
+      const consistency = events.find(
+        (e) => e.type === 'node.output' && e.payload['name'] === 'consistency',
+      );
+      expect(consistency?.payload['value']).toEqual({ verified: true, result: 'found' });
       const back = new DatabaseSync(dbPath, { readOnly: true });
       try {
         expect(back.prepare('SELECT id FROM orders').all()).toEqual([]);
@@ -237,6 +265,9 @@ test.describe('#1600 C6e-2 — Copy · Files as-is Verify copied files', () => {
         filesRead: 2,
         filesWritten: 2,
         filesSkipped: 0,
+        // C6f-1 — the run's measures.
+        durationMs: expect.any(Number),
+        consistency: { verified: true, result: 'none' },
       });
       expect(readFileSync(join(root, 'out', 'a.txt'), 'utf8')).toBe('alpha\n');
       expect(readFileSync(join(root, 'out', 'sub', 'b.txt'), 'utf8')).toBe('beta\n');

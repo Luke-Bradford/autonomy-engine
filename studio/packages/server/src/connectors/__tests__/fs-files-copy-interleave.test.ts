@@ -331,8 +331,9 @@ describe('#1600 C6e-2 — Verify copied files', () => {
   it('copies files that do not change exactly as an unverified copy does', async () => {
     // The measured duration and throughput differ run to run, and the
     // consistency output is what tells the two apart (C6f-1).
-    const counts = ({ durationMs, throughput, consistency, ...rest }: Record<string, unknown>) =>
-      rest;
+    const MEASURES = ['durationMs', 'throughput', 'consistency'];
+    const counts = (out: Record<string, unknown>) =>
+      Object.fromEntries(Object.entries(out).filter(([k]) => !MEASURES.includes(k)));
     const verified = outputs(await run(verify));
     await rm(join(dst, 'a.txt'));
     await writeFile(join(dst, 'b.txt'), 'old');

@@ -126,6 +126,8 @@ test.describe('#1600 C6d-1 — Copy Skip incompatible rows', () => {
       expect(succeeded?.payload['outputs']).toMatchObject({
         rowsRead: 3,
         rowsWritten: 2,
+        // #1600 OR41 C6f-1 — ADF's name, and the old one kept beside it.
+        rowsSkipped: 1,
         rowsFailed: 1,
       });
       const back = new DatabaseSync(dbPath, { readOnly: true });
