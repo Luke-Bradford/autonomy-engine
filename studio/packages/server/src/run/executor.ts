@@ -1575,6 +1575,9 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // M1 (#1104) — the SINK end, resolved only for a PAIRED activity. Both stay
     // `undefined` for every single-connection activity (all of them at M1).
     let sink: { kind: ConnectionKind; connectionConfig: Record<string, unknown> } | undefined;
+    // #1600 OR41 C6c-1a — the session log's connection, when the node binds one.
+    let logConnection:
+      { kind: ConnectionKind; connectionConfig: Record<string, unknown> } | undefined;
     let sinkSecret: string | null | undefined;
     // M6 slice B (#1149) — the SINK's adapter. Kept rather than discarded (see
     // below) because the sink's ADDRESS can only be resolved by the store that
@@ -1666,6 +1669,37 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         };
         sinkSecret = resolvedSink.secret;
         sinkAdapter = resolvedSink.adapter;
+        // #1600 OR41 C6c-1a — the session log's own connection, resolved after
+        // the pair and only where the catalog gives the activity one. It is
+        // labelled in the message, not by `side`: that durable field names the
+        // pair's two ends. Write to Folder without one is the adapter's refusal,
+        // made where the `${}` Write to is known.
+        const logKinds = entry.logConnectionKinds;
+        const logRef = command.resolvedConnectionIds?.log;
+        if (logKinds !== undefined && logRef !== undefined) {
+          const resolvedLog = await resolveConnection(
+            logRef,
+            logKinds,
+            node.type,
+            ownerId,
+            undefined,
+          );
+          if ('error' in resolvedLog) {
+            yield preflightFailure(
+              runId,
+              nodeId,
+              attemptId,
+              { ...resolvedLog, error: `log connection: ${resolvedLog.error}` },
+              undefined,
+              'connection',
+            );
+            return;
+          }
+          logConnection = {
+            kind: resolvedLog.connectionKind,
+            connectionConfig: resolvedLog.connectionConfig,
+          };
+        }
       }
     } else {
       // An EXECUTION activity is connector-dispatched by definition (spec #4),
@@ -2019,6 +2053,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       // M1 (#1104) — omitted (not present-undefined) for a single-connection
       // activity, so `'sink' in ctx` stays an honest test of "is this paired".
       ...(sink !== undefined ? { sink } : {}),
+      ...(logConnection !== undefined ? { logConnection } : {}),
       // M5 slice 4a (#1130) — OMITTED, not present-undefined, for every activity
       // that is not dataset-bound, so `'datasets' in ctx` stays an honest test.
       // M1's rule for `sink` directly above, followed rather than re-invented.

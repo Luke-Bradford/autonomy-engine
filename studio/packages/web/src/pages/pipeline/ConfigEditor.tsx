@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from 'react';
+import { Fragment, useId, type ReactNode } from 'react';
 import { ConfigFieldControl, type FieldChoices, type FieldPicker } from './ConfigFieldControl';
 import { emptyControlValue, fieldSpan, type ConfigField } from './configForm';
 import type { ConfigEditorState } from './useConfigEditor';
@@ -27,6 +27,7 @@ export function ConfigEditor<K extends string>({
   emptyHint = 'This kind has no settings.',
   fieldModeExtra,
   fieldActions,
+  fieldBefore,
   errorFor,
   fieldNames,
   toolbar = true,
@@ -57,6 +58,11 @@ export function ConfigEditor<K extends string>({
   fieldModeExtra?: ReactNode;
   /** #1694 OR42 — a field's extra acts, in its row list's toolbar (`ConfigFieldControl`'s `actions`). */
   fieldActions?: (fieldName: string) => ReactNode;
+  /**
+   * #1600 OR41 C6c-1a — a control drawn just before a field, in its own cell,
+   * and only while that field is: Copy's log connection, before *Log folder*.
+   */
+  fieldBefore?: (fieldName: string) => ReactNode;
   /**
    * #1396 — a resource form's inline validation: each control is keyed
    * `config.<name>` and the JSON textarea `config`, and shows its error. The
@@ -129,28 +135,34 @@ export function ConfigEditor<K extends string>({
           {fields.map((field) => {
             const choices = choicesFor?.(field.name);
             const offered = optionsFor?.(field);
+            const before = fieldBefore?.(field.name);
             // #1477 OR29 — one box per field, so the property dock's grid can
             // pack or span it. `display: contents` everywhere else, which
             // leaves a resource form's column exactly as it was.
             return (
-              <FieldCell key={field.name} span={fieldSpan(field)}>
-                <ConfigFieldControl
-                  field={offered === undefined ? field : { ...field, enumOptions: [...offered] }}
-                  value={editor.inputs[field.name] ?? emptyControlValue(field)}
-                  onChange={(next) => editor.setInput(field.name, next)}
-                  {...(choices === undefined ? {} : { choices })}
-                  {...(picker === undefined ? {} : { picker })}
-                  actions={fieldActions?.(field.name)}
-                  {...(errorFor === undefined
-                    ? {}
-                    : {
-                        validation: {
-                          key: `config.${field.name}`,
-                          error: errorFor(`config.${field.name}`),
-                        },
-                      })}
-                />
-              </FieldCell>
+              <Fragment key={field.name}>
+                {before !== undefined && before !== null && (
+                  <FieldCell span="long">{before}</FieldCell>
+                )}
+                <FieldCell span={fieldSpan(field)}>
+                  <ConfigFieldControl
+                    field={offered === undefined ? field : { ...field, enumOptions: [...offered] }}
+                    value={editor.inputs[field.name] ?? emptyControlValue(field)}
+                    onChange={(next) => editor.setInput(field.name, next)}
+                    {...(choices === undefined ? {} : { choices })}
+                    {...(picker === undefined ? {} : { picker })}
+                    actions={fieldActions?.(field.name)}
+                    {...(errorFor === undefined
+                      ? {}
+                      : {
+                          validation: {
+                            key: `config.${field.name}`,
+                            error: errorFor(`config.${field.name}`),
+                          },
+                        })}
+                  />
+                </FieldCell>
+              </Fragment>
             );
           })}
           {fieldModeExtra}

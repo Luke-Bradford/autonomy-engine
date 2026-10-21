@@ -56,7 +56,7 @@ export interface SeedNode {
    * Until it could, no spec could put a runnable copy node in front of the
    * engine, which is why nothing exercised the dispatch path end to end.
    */
-  connectionIds?: { source: string; sink: string };
+  connectionIds?: { source: string; sink: string; log?: string };
   /** Per-dispatch overrides of the connection's declared `parameters` (#2 L13b),
    * a node FIELD like `connectionId` — #890's spec needs one to show the
    * parameters a dispatch applied. Passed through as authored. */

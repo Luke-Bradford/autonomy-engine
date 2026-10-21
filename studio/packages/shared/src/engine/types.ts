@@ -2493,7 +2493,9 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
      * env to resolve. Ephemeral like its two neighbours — commands are re-derived
      * on each reduce and never persisted, so no replay/migration concern.
      */
-    resolvedConnectionIds: z.object({ source: z.string(), sink: z.string() }).optional(),
+    resolvedConnectionIds: z
+      .object({ source: z.string(), sink: z.string(), log: z.string().optional() })
+      .optional(),
     /**
      * M5 slice 4a (#1130) — the node's `datasetIds` after the reducer resolved
      * each end's `${}` expression against the run env, on the IDENTICAL contract

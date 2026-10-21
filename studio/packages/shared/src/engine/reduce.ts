@@ -493,7 +493,7 @@ type PreparedDispatch = {
   /** #2 L13b — per-dispatch connection-parameter bindings, `${}`-resolved. */
   resolvedConnectionParams: Record<string, unknown> | undefined;
   /** M1 (#1104) — the paired source/sink binding, both ends `${}`-resolved. */
-  resolvedConnectionIds: { source: string; sink: string } | undefined;
+  resolvedConnectionIds: { source: string; sink: string; log?: string } | undefined;
   /** M12 slice 1 (#1220) — `sink` optional: a source-only reader binds one address. */
   resolvedDatasetIds: { source?: string; sink?: string } | undefined;
   /** #1144 — per-end dataset-parameter bindings, `${}`-resolved. */
@@ -1490,12 +1490,15 @@ export function createEngine(doc: EngineDoc): Engine {
     state: RunState,
     node: Node,
     item: { value: unknown } | undefined,
-  ): { source: string; sink: string } | undefined {
+  ): { source: string; sink: string; log?: string } | undefined {
     if (node.connectionIds === undefined) return undefined;
     const ctx = buildCtx(state);
+    const { log } = node.connectionIds;
     return {
       source: String(substitute(node.connectionIds.source, ctx, 0, item)),
       sink: String(substitute(node.connectionIds.sink, ctx, 0, item)),
+      // #1600 OR41 C6c-1a — the session log's connection, in the same env.
+      ...(log !== undefined && { log: String(substitute(log, ctx, 0, item)) }),
     };
   }
 

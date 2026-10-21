@@ -622,7 +622,12 @@
 // BUMP 63→64 for #1600 OR41 C6f-2: Copy's `usedParallelCopies` output, in both
 // modes, and Copy · Files as-is's Degree of copy parallelism. A pre-C6f-2 build
 // never yields the output, so it fails such a node "missing declared output".
-export const CATALOG_VERSION = 64;
+// BUMP 64→65 for #1600 OR41 C6c-1a: Copy · Files as-is's session log written
+// to a folder on a log connection (`connectionIds.log`, `logTo`, `logFolder`)
+// and its `logPath` output, with a `formerOutputs` snapshot. A pre-C6c build
+// strips the log end and the two fields and writes no file, and never yields
+// `logPath`.
+export const CATALOG_VERSION = 65;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

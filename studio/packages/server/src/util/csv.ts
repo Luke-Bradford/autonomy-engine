@@ -43,6 +43,11 @@ export function csvCell(value: CsvValue): string {
  * CRLF (RFC 4180's "the last record may or may not have an ending line break" —
  * it does, so concatenating two files is never a joined line). */
 export function toCsv(header: readonly string[], rows: readonly (readonly CsvValue[])[]): string {
-  const line = (cells: readonly CsvValue[]) => `${cells.map(csvCell).join(',')}\r\n`;
-  return CSV_BOM + line(header) + rows.map(line).join('');
+  return CSV_BOM + csvLine(header) + rows.map(csvLine).join('');
+}
+
+/** One line of cells, escaped and ending CRLF: `toCsv`'s, for a file written
+ * a line at a time (#1600 OR41 C6c-1a's session log). */
+export function csvLine(cells: readonly CsvValue[]): string {
+  return `${cells.map(csvCell).join(',')}\r\n`;
 }

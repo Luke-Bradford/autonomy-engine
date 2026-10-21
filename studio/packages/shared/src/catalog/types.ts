@@ -89,7 +89,12 @@ export const ACTIVITY_TAB_TITLES: Readonly<Record<ActivityTabKey, string>> = {
  * its catalog entry alone — see `applicableBindingSlots`.
  */
 export type ActivityBindingSlot =
-  'connection' | 'sourceConnection' | 'sinkConnection' | 'sourceDataset' | 'sinkDataset';
+  | 'connection'
+  | 'sourceConnection'
+  | 'sinkConnection'
+  | 'logConnection'
+  | 'sourceDataset'
+  | 'sinkDataset';
 
 export interface ActivityTab {
   readonly key: ActivityTabKey;
@@ -123,11 +128,17 @@ export type ActivityFieldCondition =
  * catalog test, the web's tab resolver and the panel that draws them.
  */
 export function applicableBindingSlots(
-  entry: Pick<ActivityCatalogEntry, 'connectionKinds' | 'sinkConnectionKinds' | 'datasetKinds'>,
+  entry: Pick<
+    ActivityCatalogEntry,
+    'connectionKinds' | 'sinkConnectionKinds' | 'logConnectionKinds' | 'datasetKinds'
+  >,
 ): ActivityBindingSlot[] {
   const slots: ActivityBindingSlot[] = [];
-  if (entry.sinkConnectionKinds !== undefined) slots.push('sourceConnection', 'sinkConnection');
-  else if (entry.connectionKinds.length > 0) slots.push('connection');
+  if (entry.sinkConnectionKinds !== undefined) {
+    slots.push('sourceConnection', 'sinkConnection');
+    // C6c-1a — the session log's connection, beside the fields it serves.
+    if (entry.logConnectionKinds !== undefined) slots.push('logConnection');
+  } else if (entry.connectionKinds.length > 0) slots.push('connection');
   if (entry.datasetKinds !== undefined) {
     slots.push('sourceDataset');
     if (entry.datasetKinds.sink !== undefined) slots.push('sinkDataset');
@@ -573,6 +584,14 @@ export interface ActivityCatalogEntry {
    * `CATALOG_VERSION` bump for POPULATING it (see `schemas/version.ts`).
    */
   sinkConnectionKinds?: ConnectionKind[];
+  /**
+   * #1600 OR41 C6c-1a — the kinds the session log's own connection
+   * (`Node.connectionIds.log`) may be, and the declaration that the activity has
+   * one. Only a PAIRED entry may declare it (pinned by the registry test), and a
+   * declared list is non-empty, as `sinkConnectionKinds` is. `undefined` ⇒ a
+   * `connectionIds.log` is inert, and is refused at save.
+   */
+  logConnectionKinds?: ConnectionKind[];
   /**
    * M5 slice 4a (#1130, data-movement spec §3.1) — the DATASET kinds this
    * activity accepts per side, and the declaration that makes it DATASET-BOUND.

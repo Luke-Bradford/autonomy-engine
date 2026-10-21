@@ -50,7 +50,8 @@ export function notYet(
  * `node.output sessionLog` each, by `sessionLogRunValues`' rule, counting what a
  * capped log already left out. Delete (C9c), a rows Copy (C6a) and a files Copy
  * (C6b) yield them at the terminal through this one loop. `folderHint` is off
- * for an activity that cannot write its log to a folder (Copy, until C6c).
+ * for an activity that cannot write its log to a folder (a rows Copy, until
+ * C6c-1b).
  */
 export function* sessionLogRunEvents(
   log: SessionLog,

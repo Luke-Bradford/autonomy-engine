@@ -150,7 +150,14 @@ describe('applicableFieldNames (#1686)', () => {
   it('reads each control at its schema default while it is empty', () => {
     // Folder, Keep, Preserve: no file list, no move-to, no file name, and
     // (#1600 C6e-2) no Skip inconsistent files while Verify copied files is off.
-    expect(hidden({})).toEqual(['fileListPath', 'moveTo', 'sinkFileName', 'skipInconsistentFiles']);
+    expect(hidden({})).toEqual([
+      'fileListPath',
+      'moveTo',
+      'sinkFileName',
+      'skipInconsistentFiles',
+      // #1600 C6c-1a — no Log folder while Write to is the run log.
+      'logFolder',
+    ]);
   });
 
   it('follows the draft as the controls change', () => {
@@ -163,12 +170,14 @@ describe('applicableFieldNames (#1686)', () => {
       'skipMissingFiles',
       'skipForbiddenFiles',
       'skipInconsistentFiles',
+      'logFolder',
     ]);
     expect(hidden({ pathType: 'list', afterCopy: 'move' })).toEqual([
       'wildcard',
       'recursive',
       'sinkFileName',
       'skipInconsistentFiles',
+      'logFolder',
     ]);
     // Either condition of File name: one file, or a merge. #1600 C6e-2 — a
     // merge is not verified, as in ADF; C6f-2 — nor copied at once.
@@ -177,6 +186,7 @@ describe('applicableFieldNames (#1686)', () => {
       'moveTo',
       'validateDataConsistency',
       'skipInconsistentFiles',
+      'logFolder',
       'parallelCopies',
     ]);
     const typed = { ...seedFieldInputs(fields, {}), pathType: 'list' };
@@ -186,6 +196,7 @@ describe('applicableFieldNames (#1686)', () => {
       'moveTo',
       'sinkFileName',
       'skipInconsistentFiles',
+      'logFolder',
     ]);
   });
 
@@ -194,14 +205,14 @@ describe('applicableFieldNames (#1686)', () => {
     expect(hidden({ validateDataConsistency: true })).not.toContain('skipInconsistentFiles');
     // Ticked, before any Apply.
     const ticked = { ...seedFieldInputs(fields, {}), validateDataConsistency: true };
-    expect(hidden({}, ticked)).toEqual(['fileListPath', 'moveTo', 'sinkFileName']);
+    expect(hidden({}, ticked)).toEqual(['fileListPath', 'moveTo', 'sinkFileName', 'logFolder']);
   });
 
   it('draws a field whose control is an expression', () => {
     // No enum control takes one today, but a typed field that does (UI STANDARD
     // rule 4) must not hide what it may yet select.
     const typed = { ...seedFieldInputs(fields, {}), pathType: '${pipeline().parameters.kind}' };
-    expect(hidden({}, typed)).toEqual(['moveTo', 'skipInconsistentFiles']);
+    expect(hidden({}, typed)).toEqual(['moveTo', 'skipInconsistentFiles', 'logFolder']);
   });
 
   it('still draws a field that holds a value where it cannot apply', () => {
@@ -213,6 +224,7 @@ describe('applicableFieldNames (#1686)', () => {
       'skipMissingFiles',
       'skipForbiddenFiles',
       'skipInconsistentFiles',
+      'logFolder',
     ]);
     // #1600 C6d-2 — and a stored Skip forbidden files, which save refuses there.
     expect(hidden({ pathType: 'file', skipForbiddenFiles: true })).not.toContain(
@@ -220,7 +232,12 @@ describe('applicableFieldNames (#1686)', () => {
     );
     // Typed, then its control moved away: it stays until it is cleared.
     const typed = { ...seedFieldInputs(fields, {}), afterCopy: 'keep', moveTo: 'done' };
-    expect(hidden({}, typed)).toEqual(['fileListPath', 'sinkFileName', 'skipInconsistentFiles']);
+    expect(hidden({}, typed)).toEqual([
+      'fileListPath',
+      'sinkFileName',
+      'skipInconsistentFiles',
+      'logFolder',
+    ]);
   });
 
   it('draws every field of an entry with no rules', () => {

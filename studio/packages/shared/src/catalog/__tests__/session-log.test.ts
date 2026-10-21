@@ -72,6 +72,21 @@ describe('sessionLogRunValues', () => {
 });
 
 /** #1600 OR41 C6a — Copy's log can run to a line per skipped row, so it is capped as it is kept. */
+describe('SessionLog with onLine (#1600 OR41 C6c-1a)', () => {
+  it('hands every line its level keeps to the sink, uncapped, and holds none', () => {
+    const sent: string[] = [];
+    const log = new SessionLog('warning', at('2026-10-20T00:00:00Z'), {
+      onLine: (l) => sent.push(`${l.level} ${l.item}`),
+    });
+    for (let i = 0; i < 3; i += 1) log.add('Warning', 'FileSkip', `f${i}`, 'skipped');
+    log.add('Info', 'FileRead', 'f9', 'read');
+    log.add('Error', 'Copy', '', 'failed');
+    expect(sent).toEqual(['Warning f0', 'Warning f1', 'Warning f2', 'Error ']);
+    expect(log.lines).toEqual([]);
+    expect(log.dropped).toBe(0);
+  });
+});
+
 describe('SessionLog with keepAtMost', () => {
   it('keeps the first lines, counts the rest, and still keeps an Error line', () => {
     const log = new SessionLog('info', at('2026-10-20T00:00:00Z'), { keepAtMost: 2 });

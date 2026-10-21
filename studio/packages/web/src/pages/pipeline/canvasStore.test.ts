@@ -360,6 +360,58 @@ describe('canvasStore', () => {
     expect(s.getState().nodes).toBe(settled);
   });
 
+  // #1600 OR41 C6c-1a — the session log's connection rides the pair, and a mode
+  // switch (which starts the config fresh, Write to back at Run log) drops it.
+  it('the log connection end rides the connection pair, and a mode switch drops it', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        nodes: [
+          {
+            id: 'n_c',
+            type: 'copy_files',
+            config: { sourcePath: 'in', logTo: 'folder', logFolder: 'logs' },
+            position: { x: 10, y: 20 },
+          },
+        ],
+        edges: [],
+      }),
+    );
+    const store = s.getState();
+    // Picked before the pair is whole: held with the half-picked ends.
+    store.setNodeBindingEnd('n_c', 'connections', 'log', 'c_log');
+    expect(s.getState().nodes[0]!.connectionIds).toBeUndefined();
+    store.setNodeBindingEnd('n_c', 'connections', 'source', 'c_src');
+    store.setNodeBindingEnd('n_c', 'connections', 'sink', 'c_sink');
+    expect(s.getState().nodes[0]!.connectionIds).toEqual({
+      source: 'c_src',
+      sink: 'c_sink',
+      log: 'c_log',
+    });
+    expect(s.getState().pendingBindings['n_c']).toBeUndefined();
+    // Clearing one end of the pair keeps the log end with the half-picked rest.
+    store.setNodeBindingEnd('n_c', 'connections', 'sink', undefined);
+    expect(s.getState().nodes[0]!.connectionIds).toBeUndefined();
+    store.setNodeBindingEnd('n_c', 'connections', 'sink', 'c_sink2');
+    expect(s.getState().nodes[0]!.connectionIds).toEqual({
+      source: 'c_src',
+      sink: 'c_sink2',
+      log: 'c_log',
+    });
+    // Cleared alone: the key goes, never present-undefined.
+    store.setNodeBindingEnd('n_c', 'connections', 'log', undefined);
+    expect(s.getState().nodes[0]!.connectionIds).toEqual({ source: 'c_src', sink: 'c_sink2' });
+    expect('log' in s.getState().nodes[0]!.connectionIds!).toBe(false);
+    // A dataset pair has no log end.
+    store.setNodeBindingEnd('n_c', 'datasets', 'log', 'd_log');
+    expect(s.getState().nodes[0]!.datasetIds).toBeUndefined();
+    expect(s.getState().pendingBindings['n_c']).toBeUndefined();
+
+    store.setNodeBindingEnd('n_c', 'connections', 'log', 'c_log');
+    s.getState().setActivityMode('n_c', 'copy');
+    expect(s.getState().nodes[0]!.connectionIds).toEqual({ source: 'c_src', sink: 'c_sink2' });
+  });
+
   // #1600 OR41 C7b — Lookup's *Read as*: Rows (`lookup`) ⇄ Whole file as text
   // (`file_read`). The same switch as Copy's, within Lookup's own group only.
   it('setActivityMode switches a Lookup between rows and whole file as text', () => {

@@ -88,8 +88,10 @@ function stripNodeConnectionPair(
   // would skip the second end's classification entirely.
   const source = portableEnd(pair.source);
   const sink = portableEnd(pair.sink);
+  // #1600 OR41 C6c-1a — the optional log end: omitted when absent, never `null`.
+  const log = pair.log === undefined ? {} : { log: portableEnd(pair.log) };
   if (stripped) strippedIds.add(node.id);
-  return { ...rest, connectionId: null, connectionIds: { source, sink } };
+  return { ...rest, connectionId: null, connectionIds: { source, sink, ...log } };
 }
 
 function stripNodeConnectionId(node: Node, strippedIds: Set<string>): NodeExport {

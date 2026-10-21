@@ -537,8 +537,9 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
         description: `Read and written per batch, 1 to ${COPY_MAX_BATCH_ROWS}. Empty is ${COPY_DEFAULT_BATCH_ROWS}.`,
       }),
       // #1600 OR41 C6a — the Settings tab's Session log, Delete's field. Only the
-      // level: the run log is the one destination until C6c brings Write to and
-      // a log folder, so there is nothing for `sessionLogIssues` to refuse yet.
+      // level: a rows Copy's run log is its one destination until C6c-1b brings
+      // Write to and a log folder (Files as-is has them, C6c-1a), so there is
+      // nothing for `sessionLogIssues` to refuse yet.
       logLevel: sessionLogConfigFields.logLevel,
       // #1600 OR41 C6d-1 — ADF's `enableSkipIncompatibleRow`, Settings · Fault
       // tolerance. Literal like every boolean today (ⓕ on typed fields is OR38

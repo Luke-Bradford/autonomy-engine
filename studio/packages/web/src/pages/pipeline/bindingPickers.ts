@@ -47,7 +47,7 @@ export function eligibleForBinding<T extends { id: string }>(
  * #1477 — which side of an activity a connection picker binds. `single` is the
  * one `connectionId` an unpaired activity (HTTP, LLM, Lookup) carries.
  */
-export type ConnectionSlotSide = 'single' | 'source' | 'sink';
+export type ConnectionSlotSide = 'single' | 'source' | 'sink' | 'log';
 
 /**
  * #1477 — why a connection kind cannot be bound on this side of this activity,
@@ -62,7 +62,11 @@ export function connectionSlotReason(
   side: ConnectionSlotSide,
 ): ConnectionKindDisabledReason {
   const reason =
-    side === 'single' ? `${title} can't use this kind yet` : `Can't be a ${title} ${side} yet`;
+    side === 'single'
+      ? `${title} can't use this kind yet`
+      : side === 'log'
+        ? `${title} can't write its session log here yet`
+        : `Can't be a ${title} ${side} yet`;
   return (kind) => (accepted.includes(kind) ? undefined : reason);
 }
 

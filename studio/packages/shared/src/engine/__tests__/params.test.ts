@@ -862,6 +862,15 @@ describe('M1 (#1104) — connectionIds ${} refs at SAVE time', () => {
     expect(errors[0]).toMatch(/connectionIds\.sink/);
   });
 
+  it('REJECTS an undeclared ref on the LOG end, naming that end (#1600 OR41 C6c-1a)', () => {
+    const n = pairNode('n', 'conn-a', 'conn-b');
+    const errors = validateRefs(
+      doc([{ ...n, connectionIds: { ...n.connectionIds!, log: '${params.nope}' } }], []),
+    );
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/connectionIds\.log/);
+  });
+
   it('REJECTS a malformed ${} expression on either end', () => {
     expect(validateRefs(doc([pairNode('n', '${params.a[0}', 'conn-b')], []))).toHaveLength(1);
     expect(validateRefs(doc([pairNode('n', 'conn-a', '${params.a[0}')], []))).toHaveLength(1);

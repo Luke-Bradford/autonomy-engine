@@ -600,6 +600,26 @@ describe('M1 #1104 — connectionIds resolution on dispatchNode', () => {
     });
   });
 
+  it('resolves the log end too when the pair carries one (#1600 OR41 C6c-1a)', () => {
+    const n = pairNode('a', 'src', 'dst');
+    const eng = engine([
+      { ...n, connectionIds: { ...n.connectionIds!, log: 'logs-${params.env}' } },
+    ]);
+    const r = eng.reduce(eng.seedState(), started({ env: 'eu' }));
+    expect(dispatchCmd(r.commands, 'a').resolvedConnectionIds).toEqual({
+      source: 'src',
+      sink: 'dst',
+      log: 'logs-eu',
+    });
+    // No log end: the key is absent, not `undefined`-valued.
+    const plain = engine([pairNode('a', 'src', 'dst')]);
+    const p = plain.reduce(plain.seedState(), started());
+    expect(Object.keys(dispatchCmd(p.commands, 'a').resolvedConnectionIds!)).toEqual([
+      'source',
+      'sink',
+    ]);
+  });
+
   it('leaves resolvedConnectionIds undefined when the node carries no pair', () => {
     const eng = engine([connNode('a', 'conn-single')]);
     const r = eng.reduce(eng.seedState(), started());

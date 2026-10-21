@@ -868,6 +868,47 @@ describe('paired binding pickers (#1139)', () => {
     expect(screen.queryByRole('combobox', { name: 'Connection' })).toBeNull();
   });
 
+  it('#1600 OR41 C6c-1a — draws the Log connection just before Log folder, while Write to is Folder', () => {
+    const files = (config: Record<string, unknown>, log?: string): Node => ({
+      ...node('n_cf', 'copy_files', { sourcePath: 'in', ...config }),
+      connectionIds: { source: 'c_fs', sink: 'c_fs', ...(log !== undefined && { log }) },
+    });
+    const { store } = mountOver(files({ logTo: 'folder', logFolder: 'logs' }), CONNS, SETS);
+    openTab('Settings');
+    const log = screen.getByRole('combobox', { name: 'Log connection' });
+    const folder = screen.getByRole('textbox', { name: 'Log folder' });
+    // In the grid, the picker's cell comes straight before the folder's.
+    const cell = (el: HTMLElement) => el.closest('.config-cell');
+    expect(cell(log)?.nextElementSibling).toBe(cell(folder));
+    fireEvent.click(log);
+    // Only a file system can hold the log; the rest are listed, disabled, with why.
+    expect(screen.getByRole('option', { name: /^Source store/ }).textContent).toContain(
+      "can't write its session log here yet",
+    );
+    fireEvent.click(screen.getByRole('option', { name: /^Files/ }));
+    expect(store.getState().nodes[0]!.connectionIds).toEqual({
+      source: 'c_fs',
+      sink: 'c_fs',
+      log: 'c_fs',
+    });
+  });
+
+  it('#1600 OR41 C6c-1a — hides the Log connection for the run log, unless one is bound', () => {
+    const files = (log?: string): Node => ({
+      ...node('n_cf', 'copy_files', { sourcePath: 'in' }),
+      connectionIds: { source: 'c_fs', sink: 'c_fs', ...(log !== undefined && { log }) },
+    });
+    const first = mountOver(files(), CONNS, SETS);
+    openTab('Settings');
+    expect(screen.queryByRole('combobox', { name: 'Log connection' })).toBeNull();
+    cleanup();
+    void first;
+    // Bound while the log goes to the run log (save refuses it): drawn, so it can be cleared.
+    mountOver(files('c_fs'), CONNS, SETS);
+    openTab('Settings');
+    expect(screen.getByRole('combobox', { name: 'Log connection' })).toBeTruthy();
+  });
+
   it('leaves a SINGLE-connection activity picker exactly as it was', () => {
     mountOver(httpNode({}), CONNS, SETS);
     expect(screen.getByRole('combobox', { name: 'Connection' })).toBeTruthy();

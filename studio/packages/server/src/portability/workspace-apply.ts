@@ -307,11 +307,17 @@ function remapNodeToDb(
   if (connectionIds !== undefined) {
     const source = toDbRef(connectionIds.source, connById, 'source connection');
     const sink = toDbRef(connectionIds.sink, connById, 'sink connection');
+    // #1600 OR41 C6c-1a — the optional log end, mapped on the same rule. A
+    // `null` (stripped) one drops alone; an absent one stays absent.
+    const log =
+      connectionIds.log === undefined
+        ? undefined
+        : toDbRef(connectionIds.log, connById, 'log connection');
     // A half-resolved pair drops WHOLE: `NodeSchema.connectionIds` requires both
     // ends, so keeping one would be unsavable, and inventing the other is the
     // fail-open this codebase refuses. The importer rebinds it.
     if (source !== undefined && sink !== undefined) {
-      dbNode = { ...dbNode, connectionIds: { source, sink } };
+      dbNode = { ...dbNode, connectionIds: { source, sink, ...(log !== undefined && { log }) } };
     }
   }
 

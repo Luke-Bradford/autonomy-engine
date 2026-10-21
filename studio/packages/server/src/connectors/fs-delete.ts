@@ -35,8 +35,7 @@
  * memory until then, bounded by the connection's entry limit; a server that
  * dies mid-delete loses them (ADF's Reliable mode is not built).
  */
-import { constants as fsConstants } from 'node:fs';
-import { access, realpath, rmdir, unlink } from 'node:fs/promises';
+import { realpath, rmdir, unlink } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 import type { z } from 'zod';
 import { SessionLog, type DeleteConfig } from '@autonomy-studio/shared';
@@ -54,7 +53,11 @@ import {
 import { walkFolder, type WalkedEntry } from './fs-walk.js';
 import { failFromError } from './fs-write.js';
 import { runPool } from './run-pool.js';
-import { sessionLogFileName, writeSessionLogFile } from './session-log-file.js';
+import {
+  checkSessionLogFolder,
+  sessionLogFileName,
+  writeSessionLogFile,
+} from './session-log-file.js';
 import type { ActivityEvent } from './types.js';
 
 type FsConfig = z.infer<typeof fsConnectionConfigSchema>;
@@ -123,30 +126,15 @@ export async function* runDelete(
   // anything is planned, so a bad one fails the node with every file there.
   let logDir: string | undefined;
   if (input.logLevel !== 'off' && input.logTo === 'folder') {
-    const folder = input.logFolder ?? '';
     try {
-      const resolved = await resolveWithinRootsOrMissing(cfg.roots, folder, 'fs');
-      if (!resolved.ok) {
-        yield failed('permanent', `the log folder: ${resolved.error}`);
-        return;
-      }
-      const st = await lstatOrNull(resolved.path);
-      if (st === null || direntType(st) !== 'directory') {
-        yield failed(
-          'permanent',
-          `the log folder '${folder}' ${st === null ? 'does not exist' : 'is not a folder'}`,
-        );
-        return;
-      }
       // Written to only after the deletes, so a folder it cannot write to is
       // refused now, with every file still there.
-      try {
-        await access(resolved.path, fsConstants.W_OK);
-      } catch {
-        yield failed('permanent', `the log folder '${folder}' is not writable`);
+      const checked = await checkSessionLogFolder(cfg.roots, input.logFolder ?? '');
+      if (!checked.ok) {
+        yield failed('permanent', checked.error);
         return;
       }
-      logDir = await realpath(resolved.path);
+      logDir = checked.dir;
     } catch (err) {
       yield signal.aborted ? failed('cancelled', DELETE_ABORTED) : failFromError(err, signal);
       return;

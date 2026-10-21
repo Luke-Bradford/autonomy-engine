@@ -117,6 +117,11 @@ function connectionEndsOfNode(
       : [
           { ref: pair.source, kinds: entry.connectionKinds },
           { ref: pair.sink, kinds: entry.sinkConnectionKinds },
+          // #1600 OR41 C6c-1a — the session log's connection, which dispatch
+          // resolves too, so the gate and the dependency preview count it.
+          ...(pair.log !== undefined && entry.logConnectionKinds !== undefined
+            ? [{ ref: pair.log, kinds: entry.logConnectionKinds }]
+            : []),
         ];
   }
   return node.connectionId === undefined

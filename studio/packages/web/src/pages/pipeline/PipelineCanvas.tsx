@@ -3950,6 +3950,7 @@ export function NodePanel({
   if (thisNode?.connectionIds === undefined) {
     if (pending?.connections?.source !== undefined) pendingSlots.add('sourceConnection');
     if (pending?.connections?.sink !== undefined) pendingSlots.add('sinkConnection');
+    if (pending?.connections?.log !== undefined) pendingSlots.add('logConnection');
   }
   if (thisNode?.datasetIds === undefined) {
     if (pending?.datasets?.source !== undefined) pendingSlots.add('sourceDataset');
@@ -3959,6 +3960,7 @@ export function NodePanel({
   if (connectionId !== undefined) boundSlots.add('connection');
   if (thisNode?.connectionIds?.source !== undefined) boundSlots.add('sourceConnection');
   if (thisNode?.connectionIds?.sink !== undefined) boundSlots.add('sinkConnection');
+  if (thisNode?.connectionIds?.log !== undefined) boundSlots.add('logConnection');
   // #1600 C1q — an inline source binds the source end as a saved one does.
   if (thisNode?.datasetIds?.source !== undefined || thisNode?.inlineDatasets !== undefined) {
     boundSlots.add('sourceDataset');
@@ -3969,9 +3971,16 @@ export function NodePanel({
   if (datasetOptionalHere) boundSlots.add('sourceDataset');
   const refusalPaths =
     applyRefusal !== null && applyRefusal.message === error ? applyRefusal.paths : [];
+  // #1600 OR41 C6c-1a — the log connection is asked for only while the log is
+  // written to a folder (or one is bound), so otherwise it marks Settings
+  // neither complete nor incomplete.
+  const logConnectionAsked = editable['logTo'] === 'folder' || boundConnections?.log !== undefined;
+  const statusTabs = logConnectionAsked
+    ? typeTabs
+    : typeTabs.map((t) => ({ ...t, bindings: t.bindings.filter((b) => b !== 'logConnection') }));
   const statuses = tabStatuses({
     nodeId,
-    tabs: typeTabs,
+    tabs: statusTabs,
     issues: attributed.map((issue) => issue.raw),
     applyIssues: refusalPaths,
     pendingFields,
@@ -4089,6 +4098,18 @@ export function NodePanel({
             )}
           </Fragment>
         );
+      case 'logConnection': {
+        // #1600 OR41 C6c-1a — the session log's own connection (ADF's
+        // `logLocationSettings`), drawn before the Log folder it holds.
+        const logKinds = entry.logConnectionKinds;
+        return logKinds === undefined ? null : (
+          <Fragment key={slot}>
+            {connectionPicker('Log connection', boundConnections?.log, logKinds, 'log', (id) =>
+              store.getState().setNodeBindingEnd(nodeId, 'connections', 'log', id),
+            )}
+          </Fragment>
+        );
+      }
       case 'sinkConnection':
         return sinkConnectionKinds === undefined ? null : (
           <Fragment key={slot}>
@@ -4191,9 +4212,27 @@ export function NodePanel({
       ? t.key === (currentTab === 'general' ? landing : currentTab)
       : t.fields.length > 0 || t.bindings.length === 0;
     const holdsMapping = mappingField !== null && t.fields.some((f) => f === mappingField);
+    const shownFields = applicableFieldNames(
+      entry,
+      t.fields.map((f) => f.name),
+      fields ?? [],
+      editor.inputs,
+      editable,
+      sourceConnection?.kind,
+    );
+    // #1600 OR41 C6c-1a — the log connection sits before the Log folder field,
+    // drawn while the folder is. In JSON mode, or bound while the folder is not
+    // drawn (Write to changed back to Run log), it is drawn with the tab's other
+    // bindings instead, so it can always be seen and cleared.
+    const logInline = !editor.jsonMode && shownFields.includes('logFolder');
+    const topBindings = t.bindings.filter(
+      (slot) =>
+        slot !== 'logConnection' ||
+        (!logInline && (editor.jsonMode || boundConnections?.log !== undefined)),
+    );
     return (
       <>
-        {t.bindings.map((slot) => bindingControls(slot))}
+        {topBindings.map((slot) => bindingControls(slot))}
         {t.bindings.length > 0 && (
           <>
             {/* On every tab holding a binding: a pair is half-picked from either end. */}
@@ -4234,14 +4273,10 @@ export function NodePanel({
             picker={picker}
             choicesFor={choicesFor}
             emptyHint="No settings"
-            fieldNames={applicableFieldNames(
-              entry,
-              t.fields.map((f) => f.name),
-              fields ?? [],
-              editor.inputs,
-              editable,
-              sourceConnection?.kind,
-            )}
+            fieldNames={shownFields}
+            fieldBefore={(name) =>
+              logInline && name === 'logFolder' ? bindingControls('logConnection') : undefined
+            }
             optionsFor={(field) =>
               offeredFieldOptions(entry, field, sourceConnection?.kind, editor.inputs[field.name])
             }

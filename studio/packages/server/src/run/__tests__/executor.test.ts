@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
 import { join } from 'node:path';
@@ -5756,6 +5756,60 @@ describe('createExecutor — #1600 OR41 C1a: Copy · Files as-is', () => {
 
     expect(state.status).toBe('success');
     expect(await readFile(join(dst, 'in.txt'), 'utf8')).toBe('bytes as-is');
+  });
+
+  it('#1600 OR41 C6c-1a — resolves the log connection, and the copy writes its log there', async () => {
+    const src = await tempDir('exec-copy-files-src-');
+    const dst = await tempDir('exec-copy-files-dst-');
+    const logs = await tempDir('exec-copy-files-log-');
+    await writeFile(join(src, 'in.txt'), 'bytes');
+    const db = freshDb().db;
+    const sourceId = await seedConnection(db, 'fs', { roots: [src] }, null);
+    const sinkId = await seedConnection(db, 'fs', { roots: [dst], writable: true }, null);
+    const logId = await seedConnection(db, 'fs', { roots: [logs], writable: true }, null);
+    const pvId = seedVersion(db, [
+      filesNode(sourceId, sinkId, {
+        config: {
+          sourcePath: 'in.txt',
+          pathType: 'file',
+          logLevel: 'info',
+          logTo: 'folder',
+          logFolder: '.',
+        },
+        connectionIds: { source: sourceId, sink: sinkId, log: logId },
+      }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db), run);
+
+    expect(state.status).toBe('success');
+    const [file] = await readdir(logs);
+    expect(file).toMatch(/^session-log\..*\.csv$/);
+    expect(await readFile(join(logs, file!), 'utf8')).toContain('FileWrite,in.txt');
+  });
+
+  it('#1600 OR41 C6c-1a — refuses a log connection that does not exist, before dispatch, naming it', async () => {
+    const src = await tempDir('exec-copy-files-src-');
+    await writeFile(join(src, 'in.txt'), 'x');
+    const db = freshDb().db;
+    const sourceId = await seedConnection(db, 'fs', { roots: [src] }, null);
+    const sinkId = await seedConnection(db, 'fs', { roots: [src], writable: true }, null);
+    const pvId = seedVersion(db, [
+      filesNode(sourceId, sinkId, {
+        config: { sourcePath: 'in.txt', pathType: 'file', logTo: 'folder', logFolder: 'logs' },
+        connectionIds: { source: sourceId, sink: sinkId, log: 'conn_gone' },
+      }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db), run);
+
+    expect(state.status).toBe('failure');
+    const failure = failureOf(db, run.id);
+    expect(failure).toMatchObject({ error: expect.stringMatching(/^log connection: /) });
+    // The durable `side` names the pair's two ends only.
+    expect(failure).not.toHaveProperty('side');
   });
 
   it('refuses a sink connection that is not a file connection, before dispatch', async () => {

@@ -182,6 +182,57 @@ describe('importEnvelope: pipeline', () => {
     ).toContain('mixed');
   });
 
+  it('#1600 OR41 C6c-1a — a stripped LOG end drops alone; a ${} one survives', () => {
+    const { db } = freshDb();
+    const logs = createConnection(db, {
+      ownerId: 'owner-a',
+      name: 'Logs',
+      kind: 'fs',
+      config: { roots: ['/tmp'] },
+      secretRef: null,
+    });
+    const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Logged' });
+    const pair = { source: '${params.store}', sink: '${params.store}' };
+    createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [{ name: 'store', type: 'string', required: true }],
+      outputs: [],
+      nodes: [
+        {
+          id: 'literal',
+          type: 'copy_files',
+          config: { sourcePath: 'in', logTo: 'folder', logFolder: 'logs' },
+          connectionIds: { ...pair, log: logs.id },
+          position: { x: 0, y: 0 },
+        },
+        {
+          id: 'dynamic',
+          type: 'copy_files',
+          config: { sourcePath: 'in', logTo: 'folder', logFolder: 'logs' },
+          connectionIds: { ...pair, log: '${params.store}' },
+          position: { x: 1, y: 1 },
+        },
+      ],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+
+    const result = importEnvelope(db, 'owner-b', exportPipeline(db, pipeline.id, 'owner-a'));
+    if (result.kind !== 'pipeline') throw new Error('unreachable');
+    const nodes = result.versions[0]!.nodes;
+    // The pair is whole without its log end, so only the log end goes, and the
+    // node is flagged for a rebind (the copy refuses at dispatch until then).
+    expect(nodes.find((n) => n.id === 'literal')!.connectionIds).toEqual(pair);
+    expect(nodes.find((n) => n.id === 'literal')!.connectionIds).not.toHaveProperty('log');
+    expect(
+      result.attention.filter((a) => a.type === 'unresolvedConnectionRef').map((a) => a.nodeId),
+    ).toEqual(['literal']);
+    expect(nodes.find((n) => n.id === 'dynamic')!.connectionIds).toEqual({
+      ...pair,
+      log: '${params.store}',
+    });
+  });
+
   // #1144 — `datasetParams` rides WITH the dataset pair: bindings for a pair
   // the import dropped are refused by the write gate, and would roll the whole
   // import back if they survived on their own.
