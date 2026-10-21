@@ -8,6 +8,7 @@ import { nocaseFold } from '../datamove/schema-drift.js';
 import {
   sessionLogConfigFields,
   sessionLogConnectionFolderField,
+  sessionLogModeField,
   sessionLogIssues,
 } from './session-log.js';
 
@@ -546,6 +547,8 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
       logLevel: sessionLogConfigFields.logLevel,
       logTo: sessionLogConfigFields.logTo,
       logFolder: sessionLogConnectionFolderField,
+      // C6c-2 — Reliable or Best effort, for a folder log.
+      logMode: sessionLogModeField,
       // #1600 OR41 C6d-1 — ADF's `enableSkipIncompatibleRow`, Settings · Fault
       // tolerance. Literal like every boolean today (ⓕ on typed fields is OR38
       // #1573). Off writes exactly the statements a copy wrote before C6d.

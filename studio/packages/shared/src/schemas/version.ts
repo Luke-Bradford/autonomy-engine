@@ -631,7 +631,14 @@
 // folder on a log connection, and its `logPath` output, with a `formerOutputs`
 // snapshot. A pre-C6c-1b build strips the log end and the two fields and writes
 // no file, and never yields `logPath`.
-export const CATALOG_VERSION = 66;
+// BUMP 66→67 for #1600 OR41 C6c-2: Copy's session *Log mode* (`logMode`), in
+// both modes. Neither copy schema is strict, so a pre-C6c-2 build strips it and
+// FAILS (a rows Copy: rolls back) a copy whose folder log could not be written,
+// which Best effort finishes with a warning: an outcome, not only a log line.
+// Reliable is the default and keeps the old outcome, so a node saved before
+// C6c-2 behaves as it did; its log is now written after each file or batch
+// rather than once 64 KiB is held, more and smaller writes.
+export const CATALOG_VERSION = 67;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

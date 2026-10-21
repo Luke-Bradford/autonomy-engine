@@ -1030,6 +1030,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
           'logLevel',
           'logTo',
           'logFolder',
+          'logMode',
         ],
         // C6c-1b — the log connection, drawn beside the Log folder it serves.
         bindings: ['logConnection'],
@@ -1051,6 +1052,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
       // the folder for Folder.
       logTo: [{ field: 'logLevel', in: ['warning', 'info'] }],
       logFolder: [{ field: 'logTo', in: ['folder'] }],
+      // C6c-2 — the Log mode, for Folder.
+      logMode: [{ field: 'logTo', in: ['folder'] }],
     },
     idempotent: false,
     // #1190 (M10 slice 2) — `postgres` joins the SOURCE allowlist, because the
@@ -1238,6 +1241,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
           'logLevel',
           'logTo',
           'logFolder',
+          'logMode',
         ],
         // C6c-1a — the log connection, drawn beside the Log folder it serves.
         bindings: ['logConnection'],
@@ -1267,6 +1271,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
       // C6c-1a — Delete's rules: Write to while the log is on, the folder for Folder.
       logTo: [{ field: 'logLevel', in: ['warning', 'info'] }],
       logFolder: [{ field: 'logTo', in: ['folder'] }],
+      // C6c-2 — the Log mode, for Folder.
+      logMode: [{ field: 'logTo', in: ['folder'] }],
     },
     idempotent: false,
     connectionKinds: ['fs'],

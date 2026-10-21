@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import {
   appendFile,
   chmod,
@@ -1497,5 +1497,179 @@ describe('#1600 C6c-1a — session log to a folder', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  describe('#1600 C6c-2 — Log mode', () => {
+    const path = () => join(logs, 'runs', FILE);
+    const incomplete = (error: string) => ({
+      type: 'warned',
+      code: 'copy_session_log_incomplete',
+      reason: `the session log '${path()}' could not be written, so it is missing lines (Best effort): ${error}`,
+    });
+    /** The log file's lines (no timestamps) each time the copy flushed it. */
+    const flushes = () => {
+      const seen: string[][] = [];
+      const real = SessionLogWriter.prototype.flushIfFull;
+      const spy = vi
+        .spyOn(SessionLogWriter.prototype, 'flushIfFull')
+        .mockImplementation(async function (this: SessionLogWriter) {
+          await real.call(this);
+          seen.push(
+            readFileSync(path(), 'utf8')
+              .split('\r\n')
+              .slice(1)
+              .filter((l) => l !== '')
+              .map((l) => l.split(',')[2]!),
+          );
+        });
+      return { seen, spy };
+    };
+
+    /**
+     * The log opens for real, then every write to it fails, through the
+     * writer's own seam. `flushBytes` 1 writes after every file in either mode,
+     * so a Best effort write fails mid-copy too.
+     */
+    const failingWrites = () => {
+      const realOpen = SessionLogWriter.open.bind(SessionLogWriter);
+      return vi.spyOn(SessionLogWriter, 'open').mockImplementation(async (dir, name, opts) => {
+        const opened = await realOpen(dir, name, opts);
+        if (!opened.ok) return opened;
+        await opened.writer.close();
+        const fh = {
+          write: () => Promise.reject(new Error('disk full')),
+          close: () => Promise.resolve(),
+        };
+        const writer = SessionLogWriter.over(fh, opened.writer.path, { ...opts, flushBytes: 1 });
+        return { ok: true, writer };
+      });
+    };
+
+    it("Reliable writes each file's lines before the next file is copied", async () => {
+      await put('in/a.txt', 'a');
+      await put('in/b.txt', 'b');
+      const { seen, spy } = flushes();
+      try {
+        const events = await run(
+          { sourcePath: 'in', logLevel: 'info', ...toFolder },
+          { log: { root: logs } },
+        );
+        expect(last(events)).toMatchObject({ type: 'succeeded' });
+        expect(seen).toEqual([
+          ['FileRead', 'FileWrite'],
+          ['FileRead', 'FileWrite', 'FileRead', 'FileWrite'],
+        ]);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('Best effort holds the lines until 64 KiB, or the end', async () => {
+      await put('in/a.txt', 'a');
+      await put('in/b.txt', 'b');
+      const { seen, spy } = flushes();
+      try {
+        const events = await run(
+          { sourcePath: 'in', logLevel: 'info', logMode: 'bestEffort', ...toFolder },
+          { log: { root: logs } },
+        );
+        expect(last(events)).toMatchObject({ type: 'succeeded' });
+        expect(seen).toEqual([[], []]);
+        expect(await csv()).toHaveLength(5);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it.each([
+      ['Reliable stops before the next file', 'reliable', 'failed', ['a.txt'], ['in/b.txt']],
+      [
+        'Best effort keeps copying, and deleting',
+        'bestEffort',
+        'succeeded',
+        ['a.txt', 'b.txt'],
+        [],
+      ],
+    ])('%s once a write to the log fails', async (_name, logMode, outcome, copied, kept) => {
+      await put('in/a.txt', 'a');
+      await put('in/b.txt', 'b');
+      const spy = failingWrites();
+      try {
+        const events = await run(
+          { sourcePath: 'in', afterCopy: 'delete', logLevel: 'info', logMode, ...toFolder },
+          { log: { root: logs }, sourceWritable: true },
+        );
+        expect(last(events)).toMatchObject({ type: outcome });
+        if (logMode === 'reliable') {
+          expect(last(events)).toMatchObject({
+            error: 'the session log could not be written: disk full',
+          });
+          expect(events.filter((e) => e.type === 'warned')).toEqual([]);
+        } else {
+          expect(outputs(events)['logPath']).toBe(path());
+          expect(events).toContainEqual(incomplete('disk full'));
+        }
+        expect(await tree(dst)).toEqual(copied);
+        expect(await tree(src)).toEqual(kept);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("Best effort keeps a failed copy's own error, and does not warn", async () => {
+      const spy = failingWrites();
+      try {
+        const events = await run(
+          {
+            pathType: 'file',
+            sourcePath: 'in/gone.txt',
+            logLevel: 'info',
+            logMode: 'bestEffort',
+            ...toFolder,
+          },
+          { log: { root: logs } },
+        );
+        const end = last(events);
+        expect(end).toMatchObject({ type: 'failed' });
+        expect(end.type === 'failed' ? end.error : '').not.toMatch(/session log/);
+        expect(events.filter((e) => e.type === 'warned')).toEqual([]);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it.each([
+      ['a file was copied', 'in/a.txt'],
+      ['nothing was selected', 'in/a.md'],
+    ])('Best effort warns when the log cannot be closed, and %s', async (_when, file) => {
+      await put(file, 'a');
+      const spy = vi
+        .spyOn(SessionLogWriter.prototype, 'close')
+        .mockResolvedValueOnce({ ok: false, error: 'disk full' });
+      try {
+        const events = await run(
+          { sourcePath: 'in', wildcard: '*.txt', logMode: 'bestEffort', ...toFolder },
+          { log: { root: logs } },
+        );
+        expect(last(events)).toMatchObject({ type: 'succeeded' });
+        expect(outputs(events)['logPath']).toBe(path());
+        expect(events).toContainEqual(incomplete('disk full'));
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it.each(['reliable', 'bestEffort'])(
+      '%s still refuses the copy when the log cannot be opened',
+      async (logMode) => {
+        await put('in/a.txt', 'a');
+        const events = await run(
+          { sourcePath: 'in', logMode, logTo: 'folder', logFolder: 'missing' },
+          { log: { root: logs } },
+        );
+        expect(last(events)).toMatchObject({ type: 'failed', kind: 'permanent' });
+        expect(await tree(dst)).toEqual([]);
+      },
+    );
   });
 });

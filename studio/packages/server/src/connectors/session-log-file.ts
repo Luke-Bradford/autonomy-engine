@@ -16,13 +16,19 @@ import { constants as fsConstants } from 'node:fs';
 import { access, open, realpath, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { z } from 'zod';
-import { formatZodIssues, SESSION_LOG_COLUMNS, type SessionLogLine } from '@autonomy-studio/shared';
+import {
+  formatZodIssues,
+  SESSION_LOG_COLUMNS,
+  WARNING_CODES,
+  type SessionLogLine,
+  type SessionLogMode,
+} from '@autonomy-studio/shared';
 import { CSV_BOM, csvLine, toCsv, type CsvValue } from '../util/csv.js';
 import { O_NOFOLLOW, resolveWithinRootsOrMissing } from './confine.js';
 import { fsConnectionConfigSchema } from './fs-connection.js';
 import { direntType, lstatOrNull } from './fs-select.js';
 import { atomicReplace, closeQuietly } from './fs-write.js';
-import type { ActivityContext } from './types.js';
+import type { ActivityContext, ActivityEvent } from './types.js';
 
 type FsConfig = z.infer<typeof fsConnectionConfigSchema>;
 
@@ -180,6 +186,25 @@ const SESSION_LOG_FLUSH_BYTES = 64 * 1024;
 type WriterOptions = { timeoutMs?: number; flushBytes?: number };
 
 /**
+ * #1600 OR41 C6c-2 — the writer for a Copy's *Log mode*. Reliable writes at
+ * every flush point, after each file (Files as-is) or each batch read (rows),
+ * as ADF's reliable mode flushes once each file is copied. Best effort writes
+ * once 64 KiB is held, and at the end.
+ */
+export const sessionLogWriterOptions = (mode: SessionLogMode): WriterOptions =>
+  mode === 'reliable' ? { flushBytes: 0 } : {};
+
+/**
+ * C6c-2 — a Best effort log that could not be written to the end. The copy
+ * succeeds, and says the file at `path` is missing lines.
+ */
+export const sessionLogIncomplete = (path: string, error: string): ActivityEvent => ({
+  type: 'warned',
+  code: WARNING_CODES.COPY_SESSION_LOG_INCOMPLETE,
+  reason: `the session log '${path}' could not be written, so it is missing lines (Best effort): ${error}`,
+});
+
+/**
  * `work`, or an error naming `what` once `timeoutMs` passes. The loser is left
  * to settle: `open`, `write`, `sync`, `rename` and `close` take no signal, so a
  * bound on a hung mount can only be a race.
@@ -212,7 +237,8 @@ async function bounded<T>(work: Promise<T>, timeoutMs: number, what: string): Pr
  * buffered and written in order, one write at a time, once
  * `SESSION_LOG_FLUSH_BYTES` are held (`flushIfFull`, which the activity awaits
  * between items, so a slow mount holds the copy back rather than the buffer
- * growing) and at `close`.
+ * growing) and at `close`. C6c-2's Reliable sets `flushBytes` 0, so every
+ * `flushIfFull` writes (`sessionLogWriterOptions`).
  *
  * Each write has `SESSION_LOG_WRITE_TIMEOUT_MS`, as Delete's does, so a hung
  * mount cannot hold a cancelled attempt open. The first failure is kept: no

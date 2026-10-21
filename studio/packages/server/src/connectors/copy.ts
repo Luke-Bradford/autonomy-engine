@@ -31,7 +31,9 @@ import { refuseNullOnNonNullable } from './sink-columns.js';
 import {
   checkLogConnectionFolder,
   sessionLogFileName,
+  sessionLogIncomplete,
   SessionLogWriter,
+  sessionLogWriterOptions,
 } from './session-log-file.js';
 import type { SourceIo } from './source-io.js';
 import type { ActivityContext, ActivityEvent, ResolvedDataset } from './types.js';
@@ -207,13 +209,24 @@ const logWriteFailure = (error: string) =>
  * batch line and the sink's last statement, so no line is added after it
  * before COMMIT. The throw is in the loop body, so `for await` closes the
  * reader.
+ *
+ * C6c-2 — Reliable (`stopOnFailure`) flushes after every batch (`sessionLogWriterOptions`)
+ * and throws as above. Best effort neither throws nor drains: a failure only
+ * stops the writing, the copy commits, and the success warns. Draining would
+ * hold the write transaction open, up to the write bound, for an error it
+ * would not act on; `close` writes the rest after COMMIT.
  */
-async function* writingLog<T>(batches: AsyncIterable<T>, log: SessionLogWriter): AsyncGenerator<T> {
+async function* writingLog<T>(
+  batches: AsyncIterable<T>,
+  log: SessionLogWriter,
+  stopOnFailure: boolean,
+): AsyncGenerator<T> {
   for await (const batch of batches) {
     yield batch;
     await log.flushIfFull();
-    if (log.failure !== undefined) throw logWriteFailure(log.failure);
+    if (stopOnFailure && log.failure !== undefined) throw logWriteFailure(log.failure);
   }
+  if (!stopOnFailure) return;
   const failure = await log.drain();
   if (failure !== undefined) throw logWriteFailure(failure);
 }
@@ -443,7 +456,11 @@ async function* copyRows(
     try {
       const checked = await checkLogConnectionFolder(ctx.logConnection, parsed.data.logFolder);
       opened = checked.ok
-        ? await SessionLogWriter.open(checked.dir, sessionLogFileName(makeTmpSuffix(ctx)))
+        ? await SessionLogWriter.open(
+            checked.dir,
+            sessionLogFileName(makeTmpSuffix(ctx)),
+            sessionLogWriterOptions(parsed.data.logMode),
+          )
         : checked;
     } catch (err) {
       yield copyFailure(err);
@@ -463,6 +480,7 @@ async function* copyRows(
   // progress hint, which a log line would replace. C6c-1b — to a folder, every
   // line, handed to the file as it is kept.
   const folderLog = logFile;
+  const bestEffort = parsed.data.logMode === 'bestEffort';
   const log = new SessionLog(
     parsed.data.logLevel,
     undefined,
@@ -490,7 +508,9 @@ async function* copyRows(
     }
     if (failure !== undefined) log.add('Error', 'Copy', '', failure);
     const closed = await folderLog.close();
-    if (closed.ok) logPath = closed.path;
+    // C6c-2 — under Best effort the file is named whatever the close said: it
+    // holds the lines written before the error, and the success warns.
+    if (closed.ok || bestEffort) logPath = folderLog.path;
     return closed.ok ? undefined : closed.error;
   }
   /** A refusal once the log is open: the log ended with it, then the refusal. */
@@ -655,7 +675,7 @@ async function* copyRows(
   // sat inside that `try`.
   // C6c-1b — the folder log is written between the batches the reader gives.
   const logged = <T>(batches: AsyncIterable<T>): AsyncIterable<T> =>
-    folderLog === undefined ? batches : writingLog(batches, folderLog);
+    folderLog === undefined ? batches : writingLog(batches, folderLog, !bestEffort);
   const write = (async () =>
     io.writeRows({
       columns,
@@ -770,18 +790,23 @@ async function* copyRows(
       };
     }
     if (logError !== undefined && folderLog !== undefined) {
-      // The residual of C6c-1b's rule: everything was written before COMMIT, so
-      // only closing the file is left to fail, and the rows are committed. The
-      // counts are reported, then the failure (Files as-is's rule, C6c-1a).
-      for (const [name, value] of Object.entries(copyOutputs(counters, measured(), null))) {
-        yield { type: 'output', name, value };
+      if (bestEffort) {
+        // C6c-2 — Best effort: the rows are committed, and the file misses lines.
+        yield sessionLogIncomplete(folderLog.path, logError);
+      } else {
+        // The residual of C6c-1b's rule: everything was written before COMMIT,
+        // so only closing the file is left to fail, and the rows are committed.
+        // The counts are reported, then the failure (Files as-is's rule, C6c-1a).
+        for (const [name, value] of Object.entries(copyOutputs(counters, measured(), null))) {
+          yield { type: 'output', name, value };
+        }
+        const n = counters.rowsWritten;
+        yield failed(
+          'permanent',
+          `copied ${n} row${n === 1 ? '' : 's'}, but the session log '${folderLog.path}' could not be written: ${logError}`,
+        );
+        return;
       }
-      const n = counters.rowsWritten;
-      yield failed(
-        'permanent',
-        `copied ${n} row${n === 1 ? '' : 's'}, but the session log '${folderLog.path}' could not be written: ${logError}`,
-      );
-      return;
     }
     yield { type: 'succeeded', outputs: copyOutputs(counters, measured(), logPath) };
   } catch (err) {

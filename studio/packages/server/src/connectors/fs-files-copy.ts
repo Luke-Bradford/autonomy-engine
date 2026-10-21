@@ -47,7 +47,9 @@ import { runPool } from './run-pool.js';
 import {
   checkLogConnectionFolder,
   sessionLogFileName,
+  sessionLogIncomplete,
   SessionLogWriter,
+  sessionLogWriterOptions,
   writableFs,
 } from './session-log-file.js';
 import type { ActivityContext, ActivityEvent } from './types.js';
@@ -255,7 +257,11 @@ async function openFolderLog(
       };
     }
   }
-  return SessionLogWriter.open(checked.dir, sessionLogFileName(makeTmpSuffix(ctx)));
+  return SessionLogWriter.open(
+    checked.dir,
+    sessionLogFileName(makeTmpSuffix(ctx)),
+    sessionLogWriterOptions(cfg.logMode),
+  );
 }
 
 async function confined(roots: readonly string[], requested: string): Promise<string> {
@@ -983,11 +989,13 @@ export async function* runFilesCopy(
       ? { keepAtMost: SESSION_LOG_RUN_MAX_LINES }
       : { onLine: (line) => logFile.append(line) },
   );
+  const bestEffort = cfg.logMode === 'bestEffort';
   /**
    * The log's last act before a terminal: the run log's lines, or the folder
    * log closed and `logPath` set. The folder log's error if it could not be
    * written: a success then fails (Delete's rule, C9c), and a failure keeps
-   * its own error.
+   * its own error. C6c-2 — under Best effort a success warns instead, and
+   * `logPath` names the file, which holds the lines written before the error.
    */
   async function* endLog(): AsyncGenerator<ActivityEvent, string | undefined> {
     if (logFile === undefined) {
@@ -995,8 +1003,14 @@ export async function* runFilesCopy(
       return undefined;
     }
     const closed = await logFile.close();
-    if (closed.ok) logPath = closed.path;
+    if (closed.ok || bestEffort) logPath = logFile.path;
     return closed.ok ? undefined : closed.error;
+  }
+  /** C6c-2 — a success's log error: Best effort warns and goes on (true). */
+  function* logErrorWarned(logError: string): Generator<ActivityEvent, boolean> {
+    if (!bestEffort) return false;
+    yield sessionLogIncomplete(logFile!.path, logError);
+    return true;
   }
   // #1600 C6d-2 — the sources skipped as missing or forbidden: never written,
   // deleted, moved or counted again.
@@ -1107,7 +1121,7 @@ export async function* runFilesCopy(
     // skips made while selecting (C6d-2).
     if (targets.length === 0) {
       const logError = yield* endLog();
-      if (logError !== undefined) {
+      if (logError !== undefined && !(yield* logErrorWarned(logError))) {
         yield failed(
           'permanent',
           `nothing to copy, but the session log could not be written: ${logError}`,
@@ -1291,9 +1305,13 @@ export async function* runFilesCopy(
     // so a slow log mount holds the copy back rather than the buffer growing.
     // A log that has stopped being written stops the copy, before After copy
     // deletes or moves any more sources the author asked to have logged.
+    // C6c-2 — Reliable writes after every file, and only Reliable stops: Best
+    // effort keeps copying, and the success warns (`logErrorWarned`).
     const logWorking = () => {
       const failed = logFile?.failure;
-      if (failed !== undefined) refuse(`the session log could not be written: ${failed}`);
+      if (failed !== undefined && !bestEffort) {
+        refuse(`the session log could not be written: ${failed}`);
+      }
     };
     const failure = await runPool(targets, width, async (t) => {
       logWorking();
@@ -1306,7 +1324,7 @@ export async function* runFilesCopy(
     // are yielded once (a rows Copy needs a guard for that; this does not):
     // `close` reports a failure rather than throwing it.
     const logError = yield* endLog();
-    if (logError !== undefined) {
+    if (logError !== undefined && !(yield* logErrorWarned(logError))) {
       // The files are copied: the counts are reported, then the failure.
       for (const [name, value] of Object.entries(outputsOf(c, where, measured(), width, null)))
         yield { type: 'output', name, value };

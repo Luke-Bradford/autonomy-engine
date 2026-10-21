@@ -395,9 +395,14 @@ test.describe('#1600 C6 — Copy session log', () => {
       await pane
         .getByRole('combobox', { name: 'Session log' })
         .selectOption({ label: 'Everything' });
+      // C6c-2 — the Log mode is only drawn for a folder log.
+      const mode = pane.getByRole('combobox', { name: 'Log mode', exact: true });
+      await expect(mode).toHaveCount(0);
       await pane.getByRole('combobox', { name: 'Write to' }).selectOption({ label: 'Folder' });
       const folder = pane.getByRole('textbox', { name: 'Log folder', exact: true });
       await folder.fill('runs');
+      await expect(mode.locator('option:checked')).toHaveText('Reliable (default)');
+      await mode.selectOption({ label: 'Best effort' });
       await pane.getByRole('button', { name: 'Apply config' }).click();
       await pickConnection(page, 'Log connection', { id: logStore });
       await expect(logPicker).toHaveValue(/^e2e 1600 c6c logs/);
@@ -410,6 +415,16 @@ test.describe('#1600 C6 — Copy session log', () => {
       expect(folderBox, 'Log folder has a box').not.toBeNull();
       expect(pickerBox!.y + pickerBox!.height).toBeLessThanOrEqual(folderBox!.y);
       expect(folderBox!.y + folderBox!.height).toBeLessThanOrEqual(900);
+      // C6c-2 — the Log mode follows the folder. With every Settings field
+      // drawn, Files as-is's tab is taller than the docked pane at 1440x900, so
+      // the mode is reached by scrolling the pane, not the page.
+      const modeBox = await mode.boundingBox();
+      expect(modeBox, 'Log mode has a box').not.toBeNull();
+      expect(folderBox!.y + folderBox!.height).toBeLessThanOrEqual(modeBox!.y);
+      await mode.scrollIntoViewIfNeeded();
+      const shown = await mode.boundingBox();
+      expect(shown!.y + shown!.height).toBeLessThanOrEqual(900);
+      expect(await page.evaluate(() => document.scrollingElement!.scrollTop)).toBe(0);
 
       await page.getByRole('button', { name: 'Save version' }).click();
       await expect(page.locator('.notice')).toHaveText('Saved v2.');
@@ -423,6 +438,7 @@ test.describe('#1600 C6 — Copy session log', () => {
         logLevel: 'info',
         logTo: 'folder',
         logFolder: 'runs',
+        logMode: 'bestEffort',
       });
 
       const runId = await fireAndSettle(page, latest.id, 'e2e 1600 c6c');

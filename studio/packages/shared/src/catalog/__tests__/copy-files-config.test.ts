@@ -28,6 +28,7 @@ describe('copy_files config', () => {
       skipInconsistentFiles: false,
       logLevel: 'warning',
       logTo: 'run',
+      logMode: 'reliable',
       parallelCopies: 1,
     });
     expect(issues({})).toEqual([expect.stringMatching(/^sourcePath: /)]);
@@ -162,6 +163,7 @@ describe('copy_files appliesWhen (#1686)', () => {
         'skipInconsistentFiles',
         'logTo',
         'logFolder',
+        'logMode',
       ].sort(),
     );
   });
@@ -198,8 +200,29 @@ describe('copy_files session log (#1600 OR41 C6b)', () => {
       'logLevel',
       'logTo',
       'logFolder',
+      'logMode',
     ]);
     expect(tabs[2]!.bindings).toEqual(['logConnection']);
+  });
+});
+
+describe('copy_files session log mode (#1600 OR41 C6c-2)', () => {
+  it('is Reliable by default, and Best effort for a folder log', () => {
+    expect(copyFilesConfigSchema.parse({ sourcePath: 'in' }).logMode).toBe('reliable');
+    expect(
+      issues({ sourcePath: 'in', logTo: 'folder', logFolder: 'logs', logMode: 'bestEffort' }),
+    ).toEqual([]);
+  });
+
+  it.each([{}, { logLevel: 'off' }])('refuses Best effort without a folder log (%j)', (extra) => {
+    expect(issues({ sourcePath: 'in', ...extra, logMode: 'bestEffort' })).toEqual([
+      'logMode: only read when the session log is written to a folder',
+    ]);
+  });
+
+  it('is drawn for a folder log', () => {
+    const entry = getActivity(COPY_FILES_ACTIVITY_TYPE)!;
+    expect(entry.appliesWhen?.logMode).toEqual([{ field: 'logTo', in: ['folder'] }]);
   });
 });
 
