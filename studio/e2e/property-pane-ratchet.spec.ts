@@ -355,7 +355,8 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   'Copy data (files as-is)': 20,
   // +1 for C6e-2's Verify copied files, drawn under Preserve hierarchy (the
   // merge walk above does not draw it, and its skip waits for it to be on).
-  'Copy data (files from a folder)': 20,
+  // +1 for C6f-2's Degree of copy parallelism, not drawn under Merge either.
+  'Copy data (files from a folder)': 21,
   // +1 for C1q-c's Query timeout, a new field whose `?` says blank means no limit.
   // +1 for C6e-1's Verify after copy, measured at 19.
   'Copy data (inline query)': 19,

@@ -1118,8 +1118,9 @@ export async function* runFilesCopy(
             inconsistency = 'found';
             refuse(`Verify copied files failed for '${outcome.source.rel}': ${outcome.reason}`);
           }
-          // C6f-2 — a copy running beside one that failed never hides it.
-          if (inconsistency !== 'found') inconsistency = 'skipped';
+          // C6f-2 — copies at once cannot mix the two verdicts: Skip
+          // inconsistent files is one setting for the whole run.
+          inconsistency = 'skipped';
           c.filesSkipped += 1;
           log.add(
             'Warning',
