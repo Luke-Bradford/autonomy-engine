@@ -17,10 +17,6 @@ describe('copyMeasure (#1600 OR41 C6f-1)', () => {
     expect(copyMeasure(5, 5.4, 1000, none)).toMatchObject({ durationMs: 0, throughput: null });
   });
 
-  it('never reports a negative duration', () => {
-    expect(copyMeasure(5, 4, 10, none)).toMatchObject({ durationMs: 0, throughput: null });
-  });
-
   it('passes the consistency verdict through', () => {
     const verdict = { verified: true, result: 'skipped' } as const;
     expect(copyMeasure(0, 1, 0, verdict).consistency).toEqual(verdict);

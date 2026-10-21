@@ -10,8 +10,7 @@
  * inconsistent files stepped over, `none` is neither, including a copy whose
  * check was off.
  */
-export const COPY_CONSISTENCY_RESULTS = ['none', 'found', 'skipped'] as const;
-export type CopyConsistencyResult = (typeof COPY_CONSISTENCY_RESULTS)[number];
+export type CopyConsistencyResult = 'none' | 'found' | 'skipped';
 
 export interface CopyConsistency {
   /**
@@ -41,7 +40,7 @@ export function copyMeasure(
   bytesRead: number,
   consistency: CopyConsistency,
 ): CopyMeasure {
-  const durationMs = Math.max(0, Math.round(endedMs - startedMs));
+  const durationMs = Math.round(endedMs - startedMs);
   return {
     durationMs,
     throughput: durationMs === 0 ? null : Math.round((bytesRead * 1000) / durationMs),

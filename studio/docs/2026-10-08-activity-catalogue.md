@@ -407,16 +407,16 @@ Mapping   [Import schemas] [+ New mapping] [Clear] [Reset]                      
 - **Outputs, in the catalog's order:**
   - **Rows:** `rowsRead`, `rowsWritten`, `rowsSkipped`, `rowsFailed`, `bytesRead`, `truncated`, `durationMs`, `throughput`, `consistency`.
   - **Files as-is:** C1b's nine, then `durationMs`, `throughput`, `consistency`.
-  - Every one but `throughput` is required, and each is yielded on success and on a write failure's output events (`copyOutputs`, `outputsOf`; a Files as-is Copy that selected nothing too).
+  - Every one but `throughput` is required. Each is yielded on success, a Files as-is Copy that selected nothing included, and as output events on a failure once the copy has started (`copyOutputs`, `outputsOf`). A refusal before then yields none, as before.
 - **`rowsSkipped`** is ADF's name for the rows a copy skipped: coercion drops and the rows Skip incompatible rows let the sink reject. **`rowsFailed` stays** with the same number, so a node that reads it keeps working (§8, as Lookup kept `rowCount`). The run card, `COPY_ROWS_FAILED` and the progress tick's `rowsFailed` are unchanged.
 - **`durationMs`** is the copy's own time on a monotonic clock (`performance.now()`), from the adapter's start to its terminal, rounded. **`throughput`** is `bytesRead` per second over that rounded duration, and null for a copy that took under half a millisecond, so the two always agree (`copyMeasure`, `datamove/copy-measure.ts`).
 - **`consistency`** is `{verified, result}`:
   - `verified` says the check was on (ADF's `Verified` · `NotVerified`). It does not say the data was consistent; `result` does. ADF's `Unsupported` cannot arise, because save and dispatch refuse a check a copy cannot make (Upsert, a hierarchy other than Preserve).
-  - `result` is ADF's `InconsistentData`: `none`, `found` (the check failed the copy, so it appears only in the output events ahead of the failure) or `skipped` (Files as-is: Skip inconsistent files stepped over a file).
-- **Stored contracts:** a node saved before C6f-1 holds the five (rows) or nine (Files as-is) former outputs; `formerOutputs` re-seeds it on the editor's load, as C7a's Lookup does, and the next Save writes it.
+  - `result` is ADF's `InconsistentData`: `none`, `found` (the check failed the copy, so it appears only in the output events ahead of the failure) or `skipped` (Files as-is: Skip inconsistent files stepped over a file). `none` means nothing inconsistent was found, so a copy that failed for another reason before its check ran also says `none`.
+- **Stored contracts:** a node saved before C6f-1 holds the five (rows) or nine (Files as-is) former outputs, or C1a's seven for a Files as-is node saved before C1b, which had no snapshot until now. `formerOutputs` re-seeds each on the editor's load, as C7a's Lookup does, and the next Save writes it.
 - **Deliberate differences from ADF:**
   - `bytesRead`/`bytesWritten`, not `dataRead`/`dataWritten`; `rowsWritten`, not `rowsCopied`, which studio's runs list already totals.
-  - `durationMs` in milliseconds, not `copyDuration` in seconds, as Web's `durationMs`. `throughput` in bytes/s, not KBps, so it shares `bytesRead`'s unit.
+  - `durationMs` in milliseconds, not `copyDuration` in seconds, with Web's name and unit (Web reads the wall clock, Copy a monotonic one). `throughput` in bytes/s, not KBps, so it shares `bytesRead`'s unit.
   - `consistency` holds a boolean and a lower-case result rather than ADF's two strings.
 - **Not built here:**
   - **C6f-2:** parallelism, with ADF's `usedParallelCopies`.

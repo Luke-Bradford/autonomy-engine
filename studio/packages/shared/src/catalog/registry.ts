@@ -977,8 +977,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
      * and every one but `throughput` is REQUIRED. That is load-bearing rather
      * than incidental: F13b lowering seeds these into a node's `config.outputs`
      * at SAVE, and `validateOutputs` then fails the node for any the adapter
-     * omits. The adapter yields them all
-     * unconditionally on success, and on the WRITE-failure path emits them as
+     * omits. The adapter yields them all unconditionally on success, and on
+     * the WRITE-failure path emits them as
      * `output` events first, so a copy that dies mid-write still reports what it
      * had moved. Deliberately NOT claimed of the whole failure ladder: the
      * earlier `permanent` refusals (an unresolved dataset, a refused sink, an
@@ -1221,7 +1221,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
       out('dest', 'string'),
       ...copyMeasureOutputs(),
     ],
-    // The nine a node saved before C6f-1 declares (C1b's), as written then.
+    // The nine a node saved before C6f-1 declares (C1b's), and the seven one
+    // saved before C1b declares (C1a's), as written then.
     formerOutputs: [
       [
         out('filesRead', 'number'),
@@ -1233,6 +1234,15 @@ const ENTRIES: ActivityCatalogEntry[] = [
         out('bytesWritten', 'number'),
         out('source', 'string'),
         out('dest', 'string'),
+      ],
+      [
+        out('filesRead', 'number'),
+        out('filesWritten', 'number'),
+        out('filesSkipped', 'number'),
+        out('filesDeleted', 'number'),
+        out('filesMoved', 'number'),
+        out('bytesRead', 'number'),
+        out('bytesWritten', 'number'),
       ],
     ],
     configSchema: copyFilesConfigSchema,

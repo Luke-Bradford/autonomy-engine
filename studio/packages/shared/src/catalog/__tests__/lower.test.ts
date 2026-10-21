@@ -558,29 +558,40 @@ describe('refreshFormerOutputs (#1600 OR41 C7a)', () => {
   // #1600 OR41 C6f-1 — a Copy saved before its complete outputs, in either mode,
   // gains them: written out here, not read off `formerOutputs`, so a snapshot
   // that drifted from what was stored would fail.
+  const n = (name: string) => ({ name, type: 'number' });
+  const FILE_COUNTERS = [
+    n('filesRead'),
+    n('filesWritten'),
+    n('filesSkipped'),
+    n('filesDeleted'),
+    n('filesMoved'),
+    n('bytesRead'),
+    n('bytesWritten'),
+  ];
   it.each([
-    ['copy', ['rowsRead', 'rowsWritten', 'rowsFailed', 'bytesRead'], ['truncated']],
+    [
+      'copy',
+      'C6f-1',
+      [
+        n('rowsRead'),
+        n('rowsWritten'),
+        n('rowsFailed'),
+        n('bytesRead'),
+        { name: 'truncated', type: 'boolean' },
+      ],
+    ],
     [
       'copy_files',
-      ['filesRead', 'filesWritten', 'filesSkipped', 'filesDeleted', 'filesMoved', 'bytesRead'],
-      ['bytesWritten'],
+      'C6f-1',
+      [...FILE_COUNTERS, { name: 'source', type: 'string' }, { name: 'dest', type: 'string' }],
     ],
-  ])('re-seeds a %s saved before C6f-1', (type, numbers, rest) => {
-    const stored = [
-      ...numbers.map((name) => ({ name, type: 'number' })),
-      ...rest.map((name) => ({ name, type: name === 'truncated' ? 'boolean' : 'number' })),
-      ...(type === 'copy_files'
-        ? [
-            { name: 'source', type: 'string' },
-            { name: 'dest', type: 'string' },
-          ]
-        : []),
-    ];
+    ['copy_files', 'C1b', FILE_COUNTERS],
+  ])('re-seeds a %s saved before %s', (type, _, stored) => {
     const node = { id: 'c', type, config: { outputs: stored }, position: { x: 0, y: 0 } } as Node;
     const [out] = refreshFormerOutputs([node]);
     expect(out!.config['outputs']).toEqual(getActivity(type)!.outputs);
     expect((out!.config['outputs'] as { name: string }[]).map((o) => o.name)).toContain(
-      'durationMs',
+      'consistency',
     );
   });
 

@@ -482,9 +482,16 @@ describe('#1600 C6e-2 — Verify copied files', () => {
     it('never skips one file, which fails', async () => {
       before('read', 'in/b.txt', () => appendFile(join(src, 'in/b.txt'), 'more'));
       const one = { sourcePath: 'in/b.txt', pathType: 'file', validateDataConsistency: true };
-      expect(failure(await run(one)).error).toBe(
+      const events = await run(one);
+      expect(failure(events).error).toBe(
         `Verify copied files failed for 'b.txt': ${reason('it held 4 bytes when opened, and the copy read 8 bytes')}`,
       );
+      // C6f-1 — a single file reports what it found too.
+      expect(events).toContainEqual({
+        type: 'output',
+        name: 'consistency',
+        value: { verified: true, result: 'found' },
+      });
       // Asking for the skip there is refused at dispatch, before anything is read.
       const refused = failure(await run({ ...one, skipInconsistentFiles: true }));
       expect(refused.error).toMatch(/^invalid copy \(files\) config: .*one file fails instead/);
