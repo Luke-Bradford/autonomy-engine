@@ -204,11 +204,12 @@ function outputsOf(
   c: Counters,
   paths: CopyPaths | undefined,
   measure: CopyMeasure,
+  usedParallelCopies: number,
 ): Record<string, unknown> {
   // No row outputs: a files copy moves no rows, and a `rowsWritten` of 0 would
   // read as "wrote nothing" in the runs list's rows total. #1600 OR41 C6f-1 —
-  // the run's measures last, in the catalog entry's order.
-  return { ...c, ...paths, ...measure };
+  // the run's measures last, in the catalog entry's order (C6f-2's degree last).
+  return { ...c, ...paths, ...measure, usedParallelCopies };
 }
 
 async function confined(roots: readonly string[], requested: string): Promise<string> {
@@ -341,17 +342,36 @@ async function materialize(
   base: string,
   names: readonly string[],
   changed?: Set<string>,
+  made?: Map<string, Promise<void>>,
 ): Promise<string> {
   let cur = base;
   for (const name of names) {
     const next = join(cur, name);
-    try {
-      await mkdir(next);
-      // A new entry in `cur`: flushed before any source is removed.
-      changed?.add(cur);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    const parent = cur;
+    const create = async () => {
+      try {
+        await mkdir(next);
+        // A new entry in `parent`: flushed before any source is removed.
+        changed?.add(parent);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+        // #1600 OR41 C6f-2 — marked here too: the folder may be one another
+        // copy running at once has just made under a name that differs only
+        // in case (one folder on a case-insensitive disk), not yet durable.
+        // Once per folder per run (`made`), so it costs at most one more sync.
+        if (made !== undefined) changed?.add(parent);
+      }
+    };
+    // C6f-2 — copies running at once share one creation of a folder, so the
+    // one that would lose the `mkdir` race waits until the winner has marked
+    // its parent for the flush, rather than removing a source before it is.
+    // Only the creation is shared: every call still checks the folder below.
+    let creating = made?.get(next);
+    if (creating === undefined) {
+      creating = create();
+      made?.set(next, creating);
     }
+    await creating;
     const st = await lstat(next);
     if (st.isSymbolicLink() || !st.isDirectory()) {
       refuse(`'${next}' is not a folder the copy can write into`);
@@ -885,6 +905,8 @@ export async function* runFilesCopy(
   // #1600 OR41 C6f-1 — what Verify copied files found: a file that failed the
   // copy, or one Skip inconsistent files stepped over (ADF's InconsistentData).
   let inconsistency: CopyConsistencyResult = 'none';
+  // #1600 OR41 C6f-2 — how many copies ran at once: 1 until the write starts.
+  let width = 1;
   const measured = (): CopyMeasure =>
     copyMeasure(startedMs, performance.now(), c.bytesRead, {
       verified: cfg.validateDataConsistency,
@@ -1002,7 +1024,7 @@ export async function* runFilesCopy(
     // skips made while selecting (C6d-2).
     if (targets.length === 0) {
       yield* sessionLogRunEvents(log, { folderHint: false });
-      yield { type: 'succeeded', outputs: outputsOf(c, where, measured()) };
+      yield { type: 'succeeded', outputs: outputsOf(c, where, measured(), width) };
       return;
     }
 
@@ -1013,16 +1035,26 @@ export async function* runFilesCopy(
     // Folders whose entries changed since the last flush: synced before After
     // copy removes a source, so a power loss cannot lose the copy and the source.
     const changed = new Set<string>();
-    const flush = async () => {
-      for (const dir of changed) await syncDir(dir);
-      changed.clear();
-    };
-    const sinkBase = await materialize(sinkDir.base, sinkDir.missing, changed);
+    // #1600 OR41 C6f-2 — one flush at a time, each syncing what was marked
+    // before it began, so a caller's folders are durable when ITS flush
+    // resolves. A failed sync leaves the chain rejected: no later flush
+    // resolves, so no source is removed after it.
+    let flushed: Promise<void> = Promise.resolve();
+    const flush = (): Promise<void> =>
+      (flushed = flushed.then(async () => {
+        const dirs = [...changed];
+        changed.clear();
+        for (const dir of dirs) await syncDir(dir);
+      }));
+    const made = new Map<string, Promise<void>>();
+    const sinkBase = await materialize(sinkDir.base, sinkDir.missing, changed, made);
     const moveBase =
-      moveDir === undefined ? undefined : await materialize(moveDir.base, moveDir.missing, changed);
-    for (const t of targets) {
+      moveDir === undefined
+        ? undefined
+        : await materialize(moveDir.base, moveDir.missing, changed, made);
+    const copyTarget = async (t: Target): Promise<void> => {
       if (signal.aborted) throw new Error('file copy aborted');
-      const parent = await materialize(sinkBase, t.dirs, changed);
+      const parent = await materialize(sinkBase, t.dirs, changed, made);
       const finalPath = join(parent, t.name);
       const noClobber = cfg.ifExists !== 'overwrite';
       // A skipped target that already holds its one source's bytes counts as
@@ -1066,7 +1098,7 @@ export async function* runFilesCopy(
         return copied === true;
       };
       if (cfg.ifExists === 'skip' && (await lstatOrNull(finalPath)) !== null) {
-        if (!(await skip('already exists'))) continue;
+        if (!(await skip('already exists'))) return;
       } else {
         const outcome = await writeTarget(
           t,
@@ -1080,17 +1112,19 @@ export async function* runFilesCopy(
           openOrSkip,
           cfg.validateDataConsistency,
         );
-        if (outcome === 'skipped') continue;
+        if (outcome === 'skipped') return;
         if (typeof outcome === 'object') {
           // An abort during the check is the outcome, never a skip or a refusal.
           if (signal.aborted) throw new Error('file copy aborted');
           // C6e-2 — ADF's `skipErrorFile.dataInconsistency`. Only a source of
           // several files skips one: the schema refuses it on one file. A
-          // skipped file is never deleted or moved: `continue` passes After copy.
+          // skipped file is never deleted or moved: `return` passes After copy.
           if (!cfg.skipInconsistentFiles) {
             inconsistency = 'found';
             refuse(`Verify copied files failed for '${outcome.source.rel}': ${outcome.reason}`);
           }
+          // C6f-2 — copies at once cannot mix the two verdicts: Skip
+          // inconsistent files is one setting for the whole run.
           inconsistency = 'skipped';
           c.filesSkipped += 1;
           log.add(
@@ -1099,12 +1133,12 @@ export async function* runFilesCopy(
             outcome.source.rel,
             `skipped: ${outcome.reason}, and Skip inconsistent files is on`,
           );
-          continue;
+          return;
         }
         if (outcome === 'exists') {
           if (cfg.ifExists === 'fail')
             refuse(`'${finalPath}' appeared during the copy and If file exists is Fail`);
-          if (!(await skip('appeared during the copy'))) continue;
+          if (!(await skip('appeared during the copy'))) return;
         }
       }
       // After copy, only for a source whose bytes are at the target: a skipped
@@ -1123,7 +1157,7 @@ export async function* runFilesCopy(
           c.filesDeleted += 1;
         } else if (cfg.afterCopy === 'move' && moveBase !== undefined) {
           const segments = s.rel.split(sep);
-          const dir = await materialize(moveBase, segments.slice(0, -1), changed);
+          const dir = await materialize(moveBase, segments.slice(0, -1), changed, made);
           const dest = join(dir, segments[segments.length - 1]!);
           if (linked.has(s.abs)) {
             // Already linked there: only the original name is left to remove,
@@ -1142,17 +1176,40 @@ export async function* runFilesCopy(
           c.filesMoved += 1;
         }
       }
-    }
+    };
+    // #1600 OR41 C6f-2 — Degree of copy parallelism: workers sharing one cursor
+    // over the targets (Delete's pool). The first failure stops new work; the
+    // copies already under way finish and are counted, then it is rethrown.
+    // A merge is one target, so it is one copy. At 1 this is the loop it was.
+    width = Math.min(cfg.parallelCopies, targets.length);
+    let next = 0;
+    let failure: { readonly err: unknown } | undefined;
+    const worker = async () => {
+      while (failure === undefined && next < targets.length) {
+        const t = targets[next]!;
+        next += 1;
+        try {
+          await copyTarget(t);
+        } catch (err) {
+          failure ??= { err };
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: width }, worker));
+    // The loop does not test the signal: a target started after an abort
+    // throws it from its own check, so an abort is never a quiet end of work.
+    // At more than one copy, the failure kept is the first to happen.
+    if (failure !== undefined) throw failure.err;
     // Nothing that can throw sits between the lines and the success, so they
     // are yielded once (a rows Copy needs a guard for that; this does not).
     yield* sessionLogRunEvents(log, { folderHint: false });
-    yield { type: 'succeeded', outputs: outputsOf(c, where, measured()) };
+    yield { type: 'succeeded', outputs: outputsOf(c, where, measured(), width) };
   } catch (err) {
     // The lines logged so far, ahead of the counters, as a rows Copy's are.
     yield* sessionLogRunEvents(log, { folderHint: false });
     // A skip made while selecting is counted, so its line has its counter.
     if (started || c.filesSkipped > 0) {
-      for (const [name, value] of Object.entries(outputsOf(c, where, measured())))
+      for (const [name, value] of Object.entries(outputsOf(c, where, measured(), width)))
         yield { type: 'output', name, value };
     }
     // Whatever unwound the copy once it was aborted, the outcome is the abort.

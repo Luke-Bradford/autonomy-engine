@@ -131,6 +131,8 @@ describe('CSV -> SQLite, end to end', () => {
       durationMs: expect.any(Number),
       throughput: expect.toBeOneOf([null, expect.any(Number)]),
       consistency: { verified: false, result: 'none' },
+      // C6f-2 — one reader, one copy.
+      usedParallelCopies: 1,
     });
     // The rows actually landed, in the SINK store, typed the way the mapping
     // declared: `id` as an INTEGER, not the string the CSV carried.

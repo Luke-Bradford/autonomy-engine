@@ -146,6 +146,8 @@ describe('Copy · Files as-is — selection', () => {
       durationMs: expect.any(Number),
       throughput: throughputOf(out),
       consistency: { verified: false, result: 'none' },
+      // #1600 OR41 C6f-2 — Degree of copy parallelism defaults to 1.
+      usedParallelCopies: 1,
     });
     expect(Object.keys(out)).toEqual(declaredNames());
     expect(await tree(dst)).toEqual(['out/a.csv', 'out/sub/c.csv']);
@@ -1153,5 +1155,77 @@ describe('#1600 C6d-2 — Skip forbidden files', () => {
     await put('list.txt', 'a.txt\nnope.txt\n');
     const events = await run({ sourcePath: 'in', pathType: 'list', fileListPath: 'list.txt' });
     expect(failure(events).error).toContain("file list path 'nope.txt' does not exist");
+  });
+});
+
+describe('#1600 OR41 C6f-2 — Degree of copy parallelism', () => {
+  it('copies every file, and uses no more copies than there are files', async () => {
+    await put('in/a.txt', 'aa');
+    await put('in/b.txt', 'b');
+    const out = outputs(await run({ sourcePath: 'in', sinkFolder: 'out', parallelCopies: 8 }));
+    expect(out).toMatchObject({ filesRead: 2, filesWritten: 2, bytesWritten: 3 });
+    expect(out['usedParallelCopies']).toBe(2);
+    expect(await tree(dst)).toEqual(['out/a.txt', 'out/b.txt']);
+  });
+
+  it('uses the degree it is given when there are more files', async () => {
+    for (const n of [1, 2, 3, 4, 5]) await put(`in/f${n}.txt`, String(n));
+    const out = outputs(await run({ sourcePath: 'in', parallelCopies: 3 }));
+    expect(out).toMatchObject({ filesWritten: 5, usedParallelCopies: 3 });
+  });
+
+  it('reports one copy when nothing is selected', async () => {
+    await mkdir(join(src, 'in'), { recursive: true });
+    const out = outputs(await run({ sourcePath: 'in', parallelCopies: 4 }));
+    expect(out).toMatchObject({ filesWritten: 0, usedParallelCopies: 1 });
+  });
+
+  it('refuses more than one copy under Merge', async () => {
+    await put('in/a.txt', 'a');
+    const events = await run({
+      sourcePath: 'in',
+      copyBehavior: 'merge',
+      sinkFileName: 'all.txt',
+      parallelCopies: 2,
+    });
+    expect(failure(events)).toMatchObject({ kind: 'permanent' });
+    expect(failure(events).error).toContain('a merge writes one file');
+  });
+
+  it('moves files that share new folders, many at once, and every one lands', async () => {
+    const rels = ['a/b/1.txt', 'a/b/2.txt', 'a/c/3.txt', 'a/c/4.txt', 'a/5.txt', 'd/6.txt'];
+    for (const rel of rels) await put(`in/${rel}`, rel);
+    const events = await run(
+      {
+        sourcePath: 'in',
+        sinkFolder: 'out/deep',
+        afterCopy: 'move',
+        moveTo: 'done/x',
+        parallelCopies: 6,
+      },
+      { sourceWritable: true },
+    );
+    expect(outputs(events)).toMatchObject({
+      filesWritten: 6,
+      filesMoved: 6,
+      usedParallelCopies: 6,
+    });
+    expect(await tree(dst)).toEqual(rels.map((r) => `out/deep/${r}`).sort());
+    expect(await tree(src)).toEqual(rels.map((r) => `done/x/${r}`).sort());
+    for (const rel of rels) expect(await readFile(join(dst, 'out/deep', rel), 'utf8')).toBe(rel);
+  });
+
+  it('fails with what it copied when one of several files fails', async () => {
+    if (process.getuid?.() === 0) return;
+    await put('in/a.txt', 'a');
+    await chmod(await put('in/b.txt', 'b'), 0o000);
+    await put('in/c.txt', 'c');
+    const events = await run({ sourcePath: 'in', parallelCopies: 3 });
+    expect(failure(events)).toMatchObject({ kind: 'permanent' });
+    expect(failure(events).error).toContain('EACCES');
+    expect(events).toContainEqual({ type: 'output', name: 'usedParallelCopies', value: 3 });
+    // The copies already under way when b failed finish, and are counted.
+    const written = events.find((e) => e.type === 'output' && e.name === 'filesWritten');
+    expect(written).toMatchObject({ value: (await tree(dst)).length });
   });
 });

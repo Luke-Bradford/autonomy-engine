@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { copyFilesConfigSchema } from '../copy-files-config.js';
+import { COPY_MAX_PARALLEL_COPIES, copyFilesConfigSchema } from '../copy-files-config.js';
 import { getActivity } from '../registry.js';
 import { COPY_FILES_ACTIVITY_TYPE } from '../types.js';
+import { activityNodeErrors } from '../../engine/activity-config-check.js';
+import type { Node } from '../../schemas/pipeline.js';
 
 /** #1600 OR41 C1a — the Copy · Files as-is config and its catalog entry. */
 const issues = (input: unknown) =>
@@ -24,6 +26,7 @@ describe('copy_files config', () => {
       validateDataConsistency: false,
       skipInconsistentFiles: false,
       logLevel: 'warning',
+      parallelCopies: 1,
     });
     expect(issues({})).toEqual([expect.stringMatching(/^sourcePath: /)]);
   });
@@ -89,7 +92,8 @@ describe('copy_files config', () => {
     expect(entry.datasetKinds).toBeUndefined();
     // Files and bytes, never rows: a `rowsWritten` of 0 would count as "wrote
     // nothing" in the run's rows total. Plus `source` and `dest`, the retired
-    // Copy file / Move file outputs (#1600 C1b), and the run's measures (C6f-1).
+    // Copy file / Move file outputs (#1600 C1b), the run's measures (C6f-1) and
+    // how many copies ran at once (C6f-2).
     expect(entry.outputs.map((o) => o.name).sort()).toEqual(
       [
         'bytesRead',
@@ -104,6 +108,7 @@ describe('copy_files config', () => {
         'filesWritten',
         'source',
         'throughput',
+        'usedParallelCopies',
       ].sort(),
     );
   });
@@ -127,6 +132,7 @@ describe('copy_files appliesWhen (#1686)', () => {
     sinkFileName: 'all.csv',
     skipForbiddenFiles: true,
     validateDataConsistency: true,
+    parallelCopies: 4,
   };
   const combos = (['file', 'folder', 'list'] as const).flatMap((pathType) =>
     (['keep', 'delete', 'move'] as const).flatMap((afterCopy) =>
@@ -174,6 +180,7 @@ describe('copy_files session log (#1600 OR41 C6b)', () => {
     const tabs = getActivity(COPY_FILES_ACTIVITY_TYPE)!.tabs!;
     expect(tabs.map((t) => t.key)).toEqual(['source', 'sink', 'settings']);
     expect(tabs[2]!.fields).toEqual([
+      'parallelCopies',
       'skipMissingFiles',
       'skipForbiddenFiles',
       'validateDataConsistency',
@@ -258,5 +265,38 @@ describe('copy_files data consistency (#1600 OR41 C6e-2)', () => {
     expect(entry.appliesWhen?.['skipInconsistentFiles']).toEqual([
       { field: 'validateDataConsistency', in: ['true'] },
     ]);
+  });
+});
+
+describe('copy_files Degree of copy parallelism (#1600 OR41 C6f-2)', () => {
+  it('defaults to one at a time and takes 1 to COPY_MAX_PARALLEL_COPIES', () => {
+    expect(copyFilesConfigSchema.parse({ sourcePath: 'in' }).parallelCopies).toBe(1);
+    expect(issues({ sourcePath: 'in', parallelCopies: COPY_MAX_PARALLEL_COPIES })).toEqual([]);
+    expect(issues({ sourcePath: 'in', parallelCopies: 0 })).toHaveLength(1);
+    expect(issues({ sourcePath: 'in', parallelCopies: COPY_MAX_PARALLEL_COPIES + 1 })).toHaveLength(
+      1,
+    );
+    expect(issues({ sourcePath: 'in', parallelCopies: 2.5 })).toHaveLength(1);
+  });
+
+  it('refuses more than one under Merge, which writes one file', () => {
+    const merge = { sourcePath: 'in', copyBehavior: 'merge', sinkFileName: 'all.csv' };
+    expect(issues({ ...merge, parallelCopies: 2 })).toEqual([
+      'parallelCopies: a merge writes one file, so it copies one at a time; leave Degree of copy parallelism at 1',
+    ]);
+    expect(issues({ ...merge, parallelCopies: 1 })).toEqual([]);
+  });
+
+  it('takes dynamic content at save (UI STANDARD rule 4)', () => {
+    const node = {
+      id: 'c',
+      type: COPY_FILES_ACTIVITY_TYPE,
+      connectionIds: { source: 's', sink: 's' },
+      config: { sourcePath: 'in', parallelCopies: '${pipeline().parameters.n}' },
+    } as unknown as Node;
+    expect(activityNodeErrors(node)).toEqual([]);
+    // And the same check refuses a literal out of range, so it is not vacuous.
+    const literal = { ...node, config: { sourcePath: 'in', parallelCopies: 0 } } as Node;
+    expect(activityNodeErrors(literal)).toHaveLength(1);
   });
 });

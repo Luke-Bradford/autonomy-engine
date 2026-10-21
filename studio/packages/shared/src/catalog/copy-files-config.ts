@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { optionTitles, presented, singleLine } from '../schemas/field-presentation.js';
 import { instant, modifiedWindowIssue, wildcardIssue } from './file-selection.js';
+import { DELETE_MAX_CONCURRENT } from './delete-config.js';
 import { sessionLogConfigFields } from './session-log.js';
 
 /**
@@ -31,6 +32,13 @@ export type CopyFilesPathType = z.infer<typeof pathTypeSchema>;
 export type CopyFilesAfterCopy = z.infer<typeof afterCopySchema>;
 export type CopyFilesBehavior = z.infer<typeof copyBehaviorSchema>;
 export type CopyFilesIfExists = z.infer<typeof ifExistsSchema>;
+
+/**
+ * #1600 OR41 C6f-2 — the most files a Copy · Files as-is copies at once (ADF's
+ * `parallelCopies` takes any integer from 1). Delete's bound, one number for
+ * both: Node's file calls share a small thread pool, so more rarely helps.
+ */
+export const COPY_MAX_PARALLEL_COPIES = DELETE_MAX_CONCURRENT;
 
 const IN_ROOTS = "Absolute, or relative to the connection's first allowed folder.";
 
@@ -148,6 +156,13 @@ export const copyFilesConfigSchema = z
     // #1600 OR41 C6b — the Settings tab's Session log, a rows Copy's field (C6a).
     // Only the level: the run log is the one destination until C6c.
     logLevel: sessionLogConfigFields.logLevel,
+    // #1600 OR41 C6f-2 — ADF's `parallelCopies` between file stores: parallel by
+    // file. 1 when absent, not ADF's Auto, so a node saved before C6f-2 copies
+    // as it did, one file at a time and with its log lines in order.
+    parallelCopies: presented(z.number().int().min(1).max(COPY_MAX_PARALLEL_COPIES).default(1), {
+      title: 'Degree of copy parallelism',
+      description: `How many files are copied at once, 1 to ${COPY_MAX_PARALLEL_COPIES}. A merge writes one file, so it copies one at a time.`,
+    }),
   })
   .superRefine((cfg, ctx) => {
     // Every rule here refuses a config that would do something other than what
@@ -205,6 +220,13 @@ export const copyFilesConfigSchema = z
       issue(
         'skipInconsistentFiles',
         'skipping an inconsistent file needs a folder or a file list; one file fails instead',
+      );
+    }
+    // C6f-2 — ADF: a merge "can't take advantage of file-level parallelism".
+    if (cfg.copyBehavior === 'merge' && cfg.parallelCopies > 1) {
+      issue(
+        'parallelCopies',
+        'a merge writes one file, so it copies one at a time; leave Degree of copy parallelism at 1',
       );
     }
     if (cfg.copyBehavior === 'merge') {
