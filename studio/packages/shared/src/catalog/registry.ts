@@ -85,6 +85,17 @@ const optionalOut = (name: string, type: Output['type']): Output => ({
 });
 
 /**
+ * #1600 OR41 C6f-1 — the three outputs both Copy modes end on (`copyMeasure`):
+ * the run's duration, its read throughput (null for a copy too quick to divide
+ * by, so optional) and its consistency verdict.
+ */
+const copyMeasureOutputs = (): Output[] => [
+  out('durationMs', 'number'),
+  optionalOut('throughput', 'number'),
+  out('consistency', 'json'),
+];
+
+/**
  * #1396 — the hint on a `${}` duration field (`wait.seconds`,
  * `webhook.timeoutSeconds`). A bare `30` is refused at save, so the example is
  * the most useful thing the form can say; it is pinned valid by a test.
@@ -962,11 +973,12 @@ const ENTRIES: ActivityCatalogEntry[] = [
      * `sqlite.ts` and `fs.ts` each supply the store halves of `CopyIo`; both
      * refuse a non-`sqlite` sink at the ladder's `refuseSink` rung.
      *
-     * `outputs` mirrors `connectors/copy.ts`'s `copyOutputs` exactly — five, all
-     * REQUIRED. That is load-bearing rather than incidental: F13b lowering seeds
-     * these into a node's `config.outputs` at SAVE, and `validateOutputs` then
-     * fails the node for any the adapter omits. The adapter yields all five
-     * unconditionally on success, and on the WRITE-failure path emits them as
+     * `outputs` mirrors `connectors/copy.ts`'s `copyOutputs` exactly, in order,
+     * and every one but `throughput` is REQUIRED. That is load-bearing rather
+     * than incidental: F13b lowering seeds these into a node's `config.outputs`
+     * at SAVE, and `validateOutputs` then fails the node for any the adapter
+     * omits. The adapter yields them all unconditionally on success, and on
+     * the WRITE-failure path emits them as
      * `output` events first, so a copy that dies mid-write still reports what it
      * had moved. Deliberately NOT claimed of the whole failure ladder: the
      * earlier `permanent` refusals (an unresolved dataset, a refused sink, an
@@ -1079,12 +1091,27 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // there is nothing to copy INTO a workbook with, and offering the pairing
     // would only produce a dispatch that always refuses.
     datasetKinds: { source: ['table', 'query', 'delimited', 'excel'], sink: ['table'] },
+    // #1600 OR41 C6f-1 — `rowsSkipped` is ADF's name for `rowsFailed`, which
+    // stays (the same number) so a node that reads it keeps working (§8).
     outputs: [
       out('rowsRead', 'number'),
       out('rowsWritten', 'number'),
+      out('rowsSkipped', 'number'),
       out('rowsFailed', 'number'),
       out('bytesRead', 'number'),
       out('truncated', 'boolean'),
+      ...copyMeasureOutputs(),
+    ],
+    // The five a node saved before C6f-1 declares. Written out, not derived
+    // from `outputs`: it is a snapshot of an old default.
+    formerOutputs: [
+      [
+        out('rowsRead', 'number'),
+        out('rowsWritten', 'number'),
+        out('rowsFailed', 'number'),
+        out('bytesRead', 'number'),
+        out('truncated', 'boolean'),
+      ],
     ],
     configSchema: copyInputSchema,
     dispatchConfigSchema: copyDispatchInputSchema,
@@ -1107,8 +1134,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
      *
      * Outputs: the file and byte counters §4.1 lists, never the row outputs (a
      * `rowsWritten` of 0 would count as "wrote nothing" in the run's rows
-     * total, `rowsWrittenFromLog`). All required: the adapter yields every one
-     * on success, and the counters on a mid-copy failure too.
+     * total, `rowsWrittenFromLog`). All required but C6f-1's `throughput`: the
+     * adapter yields every one on success, and on a mid-copy failure too.
      *
      * #1600 C1b — plus `source` and `dest`, the canonical source path and the
      * file written (one file or a merge) or the sink folder. They are the
@@ -1192,6 +1219,31 @@ const ENTRIES: ActivityCatalogEntry[] = [
       out('bytesWritten', 'number'),
       out('source', 'string'),
       out('dest', 'string'),
+      ...copyMeasureOutputs(),
+    ],
+    // The nine a node saved before C6f-1 declares (C1b's), and the seven one
+    // saved before C1b declares (C1a's), as written then.
+    formerOutputs: [
+      [
+        out('filesRead', 'number'),
+        out('filesWritten', 'number'),
+        out('filesSkipped', 'number'),
+        out('filesDeleted', 'number'),
+        out('filesMoved', 'number'),
+        out('bytesRead', 'number'),
+        out('bytesWritten', 'number'),
+        out('source', 'string'),
+        out('dest', 'string'),
+      ],
+      [
+        out('filesRead', 'number'),
+        out('filesWritten', 'number'),
+        out('filesSkipped', 'number'),
+        out('filesDeleted', 'number'),
+        out('filesMoved', 'number'),
+        out('bytesRead', 'number'),
+        out('bytesWritten', 'number'),
+      ],
     ],
     configSchema: copyFilesConfigSchema,
     dispatchConfigSchema: copyFilesConfigSchema,

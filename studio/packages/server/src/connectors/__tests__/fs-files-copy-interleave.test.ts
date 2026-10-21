@@ -329,11 +329,19 @@ describe('#1600 C6e-2 — Verify copied files', () => {
   const reason = (detail: string) => `the source changed while it was copied: ${detail}`;
 
   it('copies files that do not change exactly as an unverified copy does', async () => {
+    // The measured duration and throughput differ run to run, and the
+    // consistency output is what tells the two apart (C6f-1).
+    const MEASURES = ['durationMs', 'throughput', 'consistency'];
+    const counts = (out: Record<string, unknown>) =>
+      Object.fromEntries(Object.entries(out).filter(([k]) => !MEASURES.includes(k)));
     const verified = outputs(await run(verify));
     await rm(join(dst, 'a.txt'));
     await writeFile(join(dst, 'b.txt'), 'old');
-    expect(outputs(await run({ sourcePath: 'in' }))).toEqual(verified);
+    const unverified = outputs(await run({ sourcePath: 'in' }));
+    expect(counts(unverified)).toEqual(counts(verified));
     expect(verified).toMatchObject({ filesWritten: 2, filesSkipped: 0, bytesWritten: 6 });
+    expect(verified['consistency']).toEqual({ verified: true, result: 'none' });
+    expect(unverified['consistency']).toEqual({ verified: false, result: 'none' });
   });
 
   it.each([
@@ -365,6 +373,12 @@ describe('#1600 C6e-2 — Verify copied files', () => {
     expect(failure(events)).toMatchObject({
       kind: 'permanent',
       error: `Verify copied files failed for 'b.txt': ${reason(detail)}`,
+    });
+    // C6f-1 — ADF's InconsistentData Found, ahead of the failure.
+    expect(events).toContainEqual({
+      type: 'output',
+      name: 'consistency',
+      value: { verified: true, result: 'found' },
     });
     // The target it would have replaced is kept, and no temp is left.
     expect(await readFile(join(dst, 'b.txt'), 'utf8')).toBe('old');
@@ -416,6 +430,7 @@ describe('#1600 C6e-2 — Verify copied files', () => {
         filesWritten: 1,
         filesSkipped: 1,
         bytesRead: 2,
+        consistency: { verified: true, result: 'skipped' },
       });
       expect(logLines(events)).toEqual([
         `Warning FileSkip b.txt skipped: ${reason('it held 4 bytes when opened, and the copy read 8 bytes')}, and Skip inconsistent files is on`,
@@ -467,9 +482,16 @@ describe('#1600 C6e-2 — Verify copied files', () => {
     it('never skips one file, which fails', async () => {
       before('read', 'in/b.txt', () => appendFile(join(src, 'in/b.txt'), 'more'));
       const one = { sourcePath: 'in/b.txt', pathType: 'file', validateDataConsistency: true };
-      expect(failure(await run(one)).error).toBe(
+      const events = await run(one);
+      expect(failure(events).error).toBe(
         `Verify copied files failed for 'b.txt': ${reason('it held 4 bytes when opened, and the copy read 8 bytes')}`,
       );
+      // C6f-1 — a single file reports what it found too.
+      expect(events).toContainEqual({
+        type: 'output',
+        name: 'consistency',
+        value: { verified: true, result: 'found' },
+      });
       // Asking for the skip there is refused at dispatch, before anything is read.
       const refused = failure(await run({ ...one, skipInconsistentFiles: true }));
       expect(refused.error).toMatch(/^invalid copy \(files\) config: .*one file fails instead/);

@@ -110,7 +110,7 @@ const outputsOf = (events: ActivityEvent[]): unknown => {
 };
 
 describe('CSV -> SQLite, end to end', () => {
-  it('copies a CSV into a sqlite table and reports the five outputs', async () => {
+  it('copies a CSV into a sqlite table and reports the declared outputs', async () => {
     const root = tempRoot('copy-delim-');
     const csvPath = seedCsv(root, 'id,name\n1,ada\n2,grace\n');
     const sinkPath = seedSink(root, 'dst.db');
@@ -121,11 +121,16 @@ describe('CSV -> SQLite, end to end', () => {
     expect(outputsOf(events)).toEqual({
       rowsRead: 2,
       rowsWritten: 2,
+      rowsSkipped: 0,
       rowsFailed: 0,
       // The RAW bytes the reader materialised — charged before coercion, so it
       // stays a fact about the source file rather than about the sink's types.
       bytesRead: expect.any(Number),
       truncated: false,
+      // #1600 OR41 C6f-1 — the run's measures.
+      durationMs: expect.any(Number),
+      throughput: expect.toBeOneOf([null, expect.any(Number)]),
+      consistency: { verified: false, result: 'none' },
     });
     // The rows actually landed, in the SINK store, typed the way the mapping
     // declared: `id` as an INTEGER, not the string the CSV carried.

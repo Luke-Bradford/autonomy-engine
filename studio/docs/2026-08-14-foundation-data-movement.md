@@ -919,6 +919,9 @@ durable is a summary:
 node.succeeded { outputs: { rowsRead, rowsWritten, rowsFailed, bytesRead, truncated } }
 ```
 
+(Extended by the activity catalogue §4.1, C6f-1: `rowsSkipped`, `durationMs`, `throughput` and
+`consistency`. The rows still never enter the log.)
+
 `file_copy` already proves the shape — `connectors/fs.ts:444` streams with a `signal.aborted` check
 per chunk (`:459`) and deliberately no byte cap, because a streamed copy is memory-bounded regardless
 of size.

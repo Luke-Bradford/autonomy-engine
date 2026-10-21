@@ -1,6 +1,7 @@
 import {
   checkSourceDrift,
   copyDispatchInputSchema,
+  copyMeasure,
   COPY_PROGRESS_OUTPUT,
   CopyMappingError,
   formatZodIssues,
@@ -14,6 +15,7 @@ import {
   type CoercedValue,
   type CoercionOptions,
   type CopyCounters,
+  type CopyMeasure,
   type CopyProgress,
   type CopyRowFailure,
   type CopyPumpMappingEntry,
@@ -148,21 +150,25 @@ export interface CopyIo extends SourceIo {
 }
 
 /**
- * §5's five declared outputs, built from the counters both halves feed.
+ * §5's declared outputs, built from the counters both halves feed and the
+ * run's measures (#1600 OR41 C6f-1).
  *
- * Exactly these five, and no more: they are what the catalog entry declares in
- * 4c, and an output a pipeline can read but the catalog does not declare is
- * unreferencable — `${nodes.x.output.foo}` has nothing to validate against.
- * `failuresByCode` and `firstFailure` are therefore NOT outputs; they reach the
- * operator as the advisory below.
+ * Exactly these, in the catalog entry's order, and no more: an output a
+ * pipeline can read but the catalog does not declare is unreferencable —
+ * `${nodes.x.output.foo}` has nothing to validate against. `failuresByCode`
+ * and `firstFailure` are therefore NOT outputs; they reach the operator as the
+ * advisory below. `rowsSkipped` is ADF's name for `rowsFailed`, which stays
+ * the same number so the nodes that read it keep working.
  */
-function copyOutputs(counters: CopyCounters): Record<string, unknown> {
+function copyOutputs(counters: CopyCounters, measure: CopyMeasure): Record<string, unknown> {
   return {
     rowsRead: counters.rowsRead,
     rowsWritten: counters.rowsWritten,
+    rowsSkipped: counters.rowsFailed,
     rowsFailed: counters.rowsFailed,
     bytesRead: counters.bytesRead,
     truncated: counters.truncated,
+    ...measure,
   };
 }
 
@@ -294,6 +300,8 @@ export async function* runCopyActivity(
   ctx: ActivityContext,
   io: CopyIo,
 ): AsyncGenerator<ActivityEvent> {
+  // #1600 OR41 C6f-1 — the copy's duration runs from here to its terminal.
+  const startedMs = performance.now();
   const source = ctx.datasets?.source;
   const sink = ctx.datasets?.sink;
   if (source === undefined || sink === undefined) {
@@ -441,6 +449,14 @@ export async function* runCopyActivity(
   // yields: a batch whose rows all failed yields nothing at all.
   const columns = mapping.map((row) => row.sink);
   const counters = newCopyCounters();
+  // #1600 OR41 C6f-1 — Verify after copy found a mismatch (ADF's
+  // InconsistentData Found). It fails the copy, so only the failure path says so.
+  let inconsistent = false;
+  const measured = (): CopyMeasure =>
+    copyMeasure(startedMs, performance.now(), counters.bytesRead, {
+      verified: parsed.data.validateDataConsistency,
+      result: inconsistent ? 'found' : 'none',
+    });
   // #1600 OR41 C6a — the session log, to the run log (catalogue §4.1, §5). Capped
   // as it is kept: a copy can skip every row it reads, and the run log shows
   // only the first `SESSION_LOG_RUN_MAX_LINES`. Its lines are yielded at the
@@ -536,7 +552,11 @@ export async function* runCopyActivity(
       // #1600 OR41 C6e-1 — by then the pump has drained, so the read and
       // skipped counts are final, and the sink's rejections are in them.
       verifyBeforeCommit: parsed.data.validateDataConsistency
-        ? (rowsWritten) => verifyAfterCopyFailure(counters, rowsWritten)
+        ? (rowsWritten) => {
+            const failure = verifyAfterCopyFailure(counters, rowsWritten);
+            if (failure !== null) inconsistent = true;
+            return failure;
+          }
         : null,
       onBatch: (rowsWritten) => {
         counters.rowsWritten = rowsWritten;
@@ -629,7 +649,7 @@ export async function* runCopyActivity(
         reason: discrepancy,
       };
     }
-    yield { type: 'succeeded', outputs: copyOutputs(counters) };
+    yield { type: 'succeeded', outputs: copyOutputs(counters, measured()) };
   } catch (err) {
     // §10: "a cancel must never leave a silent partial". `node.failed` carries no
     // outputs, so a failed or cancelled copy would otherwise report how far it
@@ -658,7 +678,7 @@ export async function* runCopyActivity(
     // No Error line: the failure is the node's error, which the Logs tab
     // already shows; Delete adds one only for the item it failed on.
     yield* logLines();
-    for (const [name, value] of Object.entries(copyOutputs(counters))) {
+    for (const [name, value] of Object.entries(copyOutputs(counters, measured()))) {
       yield { type: 'output', name, value };
     }
     if (counters.rowsFailed > 0) {

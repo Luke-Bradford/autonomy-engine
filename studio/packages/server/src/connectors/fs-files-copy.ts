@@ -13,11 +13,14 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import type { z } from 'zod';
 import {
   copyFilesConfigSchema,
+  copyMeasure,
   counted,
   formatZodIssues,
   SESSION_LOG_RUN_MAX_LINES,
   SessionLog,
+  type CopyConsistencyResult,
   type CopyFilesConfig,
+  type CopyMeasure,
 } from '@autonomy-studio/shared';
 import { failed, REMOVED_BY_SOMEONE_ELSE, sessionLogRunEvents } from './activity-events.js';
 import { O_NOFOLLOW, isMissingErrno, resolveWithinRoots } from './confine.js';
@@ -197,10 +200,15 @@ interface CopyPaths {
   dest: string;
 }
 
-function outputsOf(c: Counters, paths: CopyPaths | undefined): Record<string, unknown> {
+function outputsOf(
+  c: Counters,
+  paths: CopyPaths | undefined,
+  measure: CopyMeasure,
+): Record<string, unknown> {
   // No row outputs: a files copy moves no rows, and a `rowsWritten` of 0 would
-  // read as "wrote nothing" in the runs list's rows total.
-  return { ...c, ...paths };
+  // read as "wrote nothing" in the runs list's rows total. #1600 OR41 C6f-1 —
+  // the run's measures last, in the catalog entry's order.
+  return { ...c, ...paths, ...measure };
 }
 
 async function confined(roots: readonly string[], requested: string): Promise<string> {
@@ -828,6 +836,8 @@ export async function* runFilesCopy(
   ctx: ActivityContext,
   source: FsConfig,
 ): AsyncIterable<ActivityEvent> {
+  // #1600 OR41 C6f-1 — the copy's duration runs from here to its terminal.
+  const startedMs = performance.now();
   const input = copyFilesConfigSchema.safeParse(ctx.input);
   if (!input.success) {
     yield failed(
@@ -872,6 +882,14 @@ export async function* runFilesCopy(
 
   const signal = ctx.signal;
   const c: Counters = Object.fromEntries(COUNTERS.map((k) => [k, 0])) as Counters;
+  // #1600 OR41 C6f-1 — what Verify copied files found: a file that failed the
+  // copy, or one Skip inconsistent files stepped over (ADF's InconsistentData).
+  let inconsistency: CopyConsistencyResult = 'none';
+  const measured = (): CopyMeasure =>
+    copyMeasure(startedMs, performance.now(), c.bytesRead, {
+      verified: cfg.validateDataConsistency,
+      result: inconsistency,
+    });
   // Capped as it is kept, as a rows Copy's is (C6a): a folder can hold more
   // files than the run log shows lines.
   const log = new SessionLog(cfg.logLevel, undefined, { keepAtMost: SESSION_LOG_RUN_MAX_LINES });
@@ -984,7 +1002,7 @@ export async function* runFilesCopy(
     // skips made while selecting (C6d-2).
     if (targets.length === 0) {
       yield* sessionLogRunEvents(log, { folderHint: false });
-      yield { type: 'succeeded', outputs: outputsOf(c, where) };
+      yield { type: 'succeeded', outputs: outputsOf(c, where, measured()) };
       return;
     }
 
@@ -1070,8 +1088,10 @@ export async function* runFilesCopy(
           // several files skips one: the schema refuses it on one file. A
           // skipped file is never deleted or moved: `continue` passes After copy.
           if (!cfg.skipInconsistentFiles) {
+            inconsistency = 'found';
             refuse(`Verify copied files failed for '${outcome.source.rel}': ${outcome.reason}`);
           }
+          inconsistency = 'skipped';
           c.filesSkipped += 1;
           log.add(
             'Warning',
@@ -1126,13 +1146,13 @@ export async function* runFilesCopy(
     // Nothing that can throw sits between the lines and the success, so they
     // are yielded once (a rows Copy needs a guard for that; this does not).
     yield* sessionLogRunEvents(log, { folderHint: false });
-    yield { type: 'succeeded', outputs: outputsOf(c, where) };
+    yield { type: 'succeeded', outputs: outputsOf(c, where, measured()) };
   } catch (err) {
     // The lines logged so far, ahead of the counters, as a rows Copy's are.
     yield* sessionLogRunEvents(log, { folderHint: false });
     // A skip made while selecting is counted, so its line has its counter.
     if (started || c.filesSkipped > 0) {
-      for (const [name, value] of Object.entries(outputsOf(c, where)))
+      for (const [name, value] of Object.entries(outputsOf(c, where, measured())))
         yield { type: 'output', name, value };
     }
     // Whatever unwound the copy once it was aborted, the outcome is the abort.
