@@ -522,7 +522,11 @@ describe('#1600 OR41 C6f-2 — Degree of copy parallelism', () => {
         new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 300)),
       ]);
     });
-    const events = await run({ sourcePath: 'in', sinkFolder: `out${parallelCopies}`, parallelCopies });
+    const events = await run({
+      sourcePath: 'in',
+      sinkFolder: `out${parallelCopies}`,
+      parallelCopies,
+    });
     expect(outputs(events)).toMatchObject({ filesWritten: 2, usedParallelCopies: parallelCopies });
     return overlapped;
   }

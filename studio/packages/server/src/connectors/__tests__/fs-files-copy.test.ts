@@ -1196,10 +1196,20 @@ describe('#1600 OR41 C6f-2 — Degree of copy parallelism', () => {
     const rels = ['a/b/1.txt', 'a/b/2.txt', 'a/c/3.txt', 'a/c/4.txt', 'a/5.txt', 'd/6.txt'];
     for (const rel of rels) await put(`in/${rel}`, rel);
     const events = await run(
-      { sourcePath: 'in', sinkFolder: 'out/deep', afterCopy: 'move', moveTo: 'done/x', parallelCopies: 6 },
+      {
+        sourcePath: 'in',
+        sinkFolder: 'out/deep',
+        afterCopy: 'move',
+        moveTo: 'done/x',
+        parallelCopies: 6,
+      },
       { sourceWritable: true },
     );
-    expect(outputs(events)).toMatchObject({ filesWritten: 6, filesMoved: 6, usedParallelCopies: 6 });
+    expect(outputs(events)).toMatchObject({
+      filesWritten: 6,
+      filesMoved: 6,
+      usedParallelCopies: 6,
+    });
     expect(await tree(dst)).toEqual(rels.map((r) => `out/deep/${r}`).sort());
     expect(await tree(src)).toEqual(rels.map((r) => `done/x/${r}`).sort());
     for (const rel of rels) expect(await readFile(join(dst, 'out/deep', rel), 'utf8')).toBe(rel);
