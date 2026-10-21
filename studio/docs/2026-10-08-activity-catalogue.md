@@ -276,7 +276,7 @@ Mapping   [Import schemas] [+ New mapping] [Clear] [Reset]                      
   - **C6b:** files-as-is lines: `FileRead`, `FileWrite` and `FileSkip` (built, below).
   - **C6c:** *Write to* a folder, which needs a log connection binding of its own. A database-to-database copy has no file system connection, and ADF's `logLocationSettings` names a linked service. C6c also brings `logPath`, an appending writer and *Mode* Best effort · Reliable.
   - **C6d:** fault tolerance: **C6d-1** the rows the sink rejects (built, below); **C6d-2** a files-as-is Copy's *Skip missing files* and *Skip forbidden files* (built, below).
-  - **C6e:** consistency: **C6e-1** a rows Copy's *Verify after copy* (built, below); **C6e-2** Files as-is.
+  - **C6e:** consistency: **C6e-1** a rows Copy's *Verify after copy* (built, below); **C6e-2** Files as-is's *Verify copied files* and *Skip inconsistent files* (built, below).
   - **C6f:** parallelism and the complete outputs.
 
 **Built (C6b, 2026-10-20):** a files-as-is Copy's session log, to the run log, with ADF's file operations ([session log](https://learn.microsoft.com/azure/data-factory/copy-activity-log): `FileRead`, `FileWrite`, `FileSkip`).
@@ -354,8 +354,8 @@ Mapping   [Import schemas] [+ New mapping] [Clear] [Reset]                      
   - The message is the reason, not the underlying error.
   - A file is skipped only before it is read, at its open, listing or stat. ADF can skip one part-way ("skipped after read N bytes"); here an error mid-read fails the copy, which leaves no partial file to explain.
   - ADF lists File System among the stores for *fileMissing* but not *fileForbidden*. Studio's file connection offers both.
-  - *Skip missing files* and *Skip forbidden files* are one switch each, not ADF's `skipErrorFile` object. *Data inconsistency* waits for C6e-2, and *Invalid file name* applies only to ADLS Gen2 and S3, which studio does not have.
-- **Residual:** a preserve-hierarchy copy whose only file in a subfolder is skipped as it is opened leaves that subfolder empty in the sink, because the folders are made before the file is opened (#1777).
+  - *Skip missing files* and *Skip forbidden files* are one switch each, not ADF's `skipErrorFile` object. *Data inconsistency* is C6e-2's *Skip inconsistent files* (below), and *Invalid file name* applies only to ADLS Gen2 and S3, which studio does not have.
+- **Residual:** a preserve-hierarchy copy whose only file in a subfolder is skipped as it is opened leaves that subfolder empty in the sink, because the folders are made before the file is opened (#1777). A file C6e-2 skips as inconsistent does the same.
 - `CATALOG_VERSION` 59→60: a pre-C6d-2 build strips both keys and fails a copy this build finishes.
 
 **Built (C6e-1, 2026-10-20):** a rows Copy's *Verify after copy*, on the Settings tab between *Skip incompatible rows* (on the same row) and the Session log, the Settings table's order ([data consistency](https://learn.microsoft.com/azure/data-factory/copy-activity-data-consistency): `validateDataConsistency`, default false).
@@ -370,9 +370,38 @@ Mapping   [Import schemas] [+ New mapping] [Clear] [Reset]                      
   - Not with Upsert (above). ADF's page does not mention Upsert.
   - No session-log line. The failure is the node's error, as for every rows Copy failure (C6a).
 - **Not built here:**
-  - **C6e-2:** Files as-is: size and modified time per file, and *Skip inconsistent files* (ADF's `skipErrorFile.dataInconsistency`, only with preserve hierarchy).
+  - **C6e-2:** Files as-is (built, below).
   - **The `consistency` output** (`{verified, result}`, ADF's `dataConsistencyVerification`) moves to C6f's complete outputs, so Copy's output contract changes once, with its `formerOutputs` snapshot and the `rowsFailed` → `rowsSkipped` rename. A failed verification fails the node, so on a rows Copy the output would say only what the config already says.
 - `CATALOG_VERSION` 60→61: a pre-C6e build strips the key and commits a copy this build rolls back and fails.
+
+**Built (C6e-2, 2026-10-21):** a files-as-is Copy's *Verify copied files* and *Skip inconsistent files*, on the Settings tab after the C6d-2 skips and before the Session log ([data consistency](https://learn.microsoft.com/azure/data-factory/copy-activity-data-consistency): `validateDataConsistency` and `skipErrorFile.dataInconsistency`, both default false).
+- **Settings:** `validateDataConsistency`, the rows Copy's key, and `skipInconsistentFiles`, literal booleans (ⓕ on typed fields is OR38 #1573). The title is *Verify copied files*, not *Verify after copy*, because a title may not hold another of the same activity's, and this mode has *After copy* (`activity-labels.test.ts`).
+- **Where, as in ADF:**
+  - The check applies only with *Copy behaviour* Preserve hierarchy. Save refuses it with Flatten or Merge, and so does dispatch for a `${}` Copy behaviour. The dock draws it only under Preserve (`appliesWhen`).
+  - The skip applies only with the check, and only to a Folder or a File list. One file fails, as C6d-2's skips do. Save refuses it otherwise. The dock draws it once the check is on. View conditions are OR'd, so a verified one-file copy draws it too and save refuses it there.
+- **The check is per file, before the file lands.** Once a source's bytes are written into the temp, and before the temp is synced and renamed, `changedSince` compares the source with the stat taken when it was opened. It is After copy's own rule, so the two cannot disagree. The source fails the check when:
+  - it is removed, or another file takes its place;
+  - a different number of bytes was read than it held;
+  - its size changed;
+  - or its modified time changed.
+  
+  Then the written file's size is compared with the bytes read on the handle it was written through: ADF's file size check, which ADF runs between any stores.
+- **A failed check, with the skip off,** fails the copy `permanent` with `Verify copied files failed for '<file>': the source changed while it was copied: <reason>`, or `…: the file written holds K bytes, not the N bytes read`. An abort during the check is reported as the cancel, never as a failed check or a skip. The temp is removed, so nothing lands for that file. A target it would have overwritten keeps its old bytes, and the source is never deleted or moved. Files already copied stay copied: a files copy has no transaction to roll back, as before C6e. `permanent`, like After copy's `changedSince` refusal, because a retry would read a file that is still being changed.
+- **With the skip on,** the file is a *Warning* `FileSkip` line, `skipped: <reason>, and Skip inconsistent files is on`, and it counts in `filesSkipped`, not in `filesRead` or `bytesRead`. It is never written, deleted or moved, and the rest are copied.
+- **Off, a copy behaves exactly as before C6e-2:** a file that grows while it is read is landed with the bytes read.
+- **A source removed while it is read** is inconsistent, not missing: *Skip missing files* covers a file gone before it is opened (C6d-2), and once it is read there is no source left to verify the copy against.
+- **A file *If file exists* = Skip leaves in place** is not copied, so it is not verified.
+- **Deliberate differences from ADF:**
+  - No checksum. ADF checksums only Azure Blob and ADLS Gen2, and checks the file size between any stores. Studio checks the size and also the source's modified time, which a same-size rewrite changes.
+  - The check runs before the file lands, not once the job is done, so an inconsistent file is never left in the sink.
+  - A file is judged after it is read. A change made once the file is read and before its After copy is still caught there (`unchangedSince`), as before.
+  - ADF's `FileSkip` message says how far it read ("skipped after read N bytes"). Studio's says what changed.
+- **Residual:**
+  - A file system whose modified time is coarse (whole seconds) can miss a same-size rewrite made within one tick.
+  - A change made after the check and before the rename lands, a window of one fsync. After copy Delete or Move re-checks the source then, and Keep does not.
+  - #1777's empty subfolder, as for C6d-2's skips.
+- No new output: the `consistency` output stays with C6f's complete outputs, for both modes.
+- `CATALOG_VERSION` 61→62: a pre-C6e-2 build strips both keys and lands a file this build fails or skips.
 
 ### 4.2 Lookup
 Source: [Lookup](https://learn.microsoft.com/azure/data-factory/control-flow-lookup-activity).
@@ -849,7 +878,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
 | C3 | Copy: database sink. Truncate, upsert (keys), auto-create from mapping, pre-copy script, batch size. Split: **C3a** Write behaviour Truncate then insert and Upsert with Key columns (built); **C3b** Pre-copy script and Batch size (built); **C3c** *Auto-create from mapping* (built) | OR15 upsert/auto-create |
 | C4 | Copy: mapping redesign (x → y rows from imported schemas, map-by-name default, type conversion settings, ƒx whole mapping, additional columns) | depends on OR10 import |
 | C5 | Copy: incremental (watermark Automatic / Expression; files modified-since-last-success) | OR15 incremental |
-| C6 | Copy: settings. Fault tolerance, consistency check, parallelism, session log; complete outputs. Split: **C6a** the session log of a rows Copy, to the run log (built); **C6b** files-as-is lines (built); **C6c** Write to a folder on a log connection, `logPath`, Mode; **C6d-1** Skip incompatible rows, the rows the sink rejects (built); **C6d-2** Skip missing and forbidden files (built); **C6e-1** Verify after copy on a rows Copy, before COMMIT, not with Upsert (built); **C6e-2** Files as-is size and modified time, *Skip inconsistent files*; **C6f** parallelism and complete outputs, including `consistency` {verified, result} for both modes | — |
+| C6 | Copy: settings. Fault tolerance, consistency check, parallelism, session log; complete outputs. Split: **C6a** the session log of a rows Copy, to the run log (built); **C6b** files-as-is lines (built); **C6c** Write to a folder on a log connection, `logPath`, Mode; **C6d-1** Skip incompatible rows, the rows the sink rejects (built); **C6d-2** Skip missing and forbidden files (built); **C6e-1** Verify after copy on a rows Copy, before COMMIT, not with Upsert (built); **C6e-2** Files as-is *Verify copied files* (size and modified time, before the file lands) and *Skip inconsistent files* (built); **C6f** parallelism and complete outputs, including `consistency` {verified, result} for both modes | — |
 | C7 | Lookup: first-row-only, max rows, over-limit choice, whole-file text. Lower lookup and file_read. Split: **C7a** Settings (First row only, Max rows, When over the limit), `count`/`firstRow`, a stored node's former contract refreshed on load (built); **C7b** Read as Rows · Whole file as text (`file_read` as Lookup's second type), the title *Lookup* (built); **C7c** *When over the limit* and `bytes`/`truncated` for the text mode, limited by the connection's `maxBytes` rather than the 1 MiB byte cap (built); **C7d** the workspace Lookup max rows (1000 by default, up to ADF's 5000) and the Monitor Rows read column (built) | — |
 | C8 | Get metadata + wait-until. Lower file_list. Split: **C8a** the `get_metadata` type on a file system connection, the field list as tick boxes, child items with filter, entries and modified window (built); **C8b** the `file_list` lowering with the `entries` → `childItems` rewrite, List directory retired from the palette (built); **C8c-1** tables (SQLite, Postgres) with per-kind field options (built); **C8c-2** a delimited or Excel dataset source's structure and column count (built); **C8d-1** Wait until on a file system path (built); **C8d-2a** Wait until on a delimited or Excel dataset, with #1743 (built); **C8d-2b** Wait until on a table dataset (built); **C8e** Include subfolders (built) | OR17 #1408 |
 | C9 | Delete: wildcard, folders, dates, log. Lower file_delete. Split: **C9a** the `delete` type on a file system connection, with path type, wildcard, Include subfolders, modified window, Max concurrent deletes, Fail if nothing matched and Delete empty folders, on Get metadata's walk (built); **C9b** the `file_delete` lowering (Path type File, Fail if nothing matched on, `path` kept), Delete file retired from the palette (built); **C9c** the session log and `logPath` (a new output, so a `formerOutputs` snapshot and a version bump), shared with Copy's (built) | OR17 #1408 |

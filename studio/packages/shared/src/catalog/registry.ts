@@ -1146,8 +1146,18 @@ const ENTRIES: ActivityCatalogEntry[] = [
         fields: ['sinkFolder', 'sinkFileName', 'copyBehavior', 'ifExists'],
       },
       // #1600 OR41 C6b — a rows Copy's Settings tab (C6a). C6d-2's fault
-      // tolerance comes before the Session log, in ADF's order.
-      { key: 'settings', fields: ['skipMissingFiles', 'skipForbiddenFiles', 'logLevel'] },
+      // tolerance comes before the Session log, in ADF's order, then C6e-2's
+      // Verify copied files, then the skip it controls.
+      {
+        key: 'settings',
+        fields: [
+          'skipMissingFiles',
+          'skipForbiddenFiles',
+          'validateDataConsistency',
+          'skipInconsistentFiles',
+          'logLevel',
+        ],
+      },
     ],
     // #1686 — the same rules `copyFilesConfigSchema`'s superRefine enforces,
     // read by the dock to leave out what cannot apply.
@@ -1159,6 +1169,11 @@ const ENTRIES: ActivityCatalogEntry[] = [
       // C6d-2 — as in ADF, only a source of several files can skip one.
       skipMissingFiles: [{ field: 'pathType', in: ['folder', 'list'] }],
       skipForbiddenFiles: [{ field: 'pathType', in: ['folder', 'list'] }],
+      // C6e-2 — as in ADF, files are verified only under Preserve hierarchy.
+      // Conditions are OR'd, so a verified one-file copy draws the skip too,
+      // and save refuses it there.
+      validateDataConsistency: [{ field: 'copyBehavior', in: ['preserve'] }],
+      skipInconsistentFiles: [{ field: 'validateDataConsistency', in: ['true'] }],
       sinkFileName: [
         { field: 'pathType', in: ['file'] },
         { field: 'copyBehavior', in: ['merge'] },

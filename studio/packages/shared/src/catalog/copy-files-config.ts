@@ -126,6 +126,25 @@ export const copyFilesConfigSchema = z
       description:
         'Folder or file list only. Skips and logs a file or subfolder the connection is not permitted to read, instead of failing.',
     }),
+    // #1600 OR41 C6e-2 — ADF's `validateDataConsistency` for binary files
+    // (https://learn.microsoft.com/azure/data-factory/copy-activity-data-consistency),
+    // the rows Copy's key (C6e-1), and `skipErrorFile.dataInconsistency`. As in
+    // ADF, only with Preserve hierarchy, and the skip only with the check. Its
+    // title is not the rows Copy's *Verify after copy*, which would hold this
+    // mode's *After copy* (`activity-labels.test.ts`).
+    validateDataConsistency: presented(z.boolean().default(false), {
+      title: 'Verify copied files',
+      description:
+        'Checks that each file did not change while it was copied, and that the file ' +
+        'written is the size read. If not, the copy fails and that file is not written. ' +
+        'Preserve hierarchy only.',
+    }),
+    skipInconsistentFiles: presented(z.boolean().default(false), {
+      title: 'Skip inconsistent files',
+      description:
+        'Folder or file list, with Verify copied files. Skips and logs a file that changed ' +
+        'while it was copied, instead of failing.',
+    }),
     // #1600 OR41 C6b — the Settings tab's Session log, a rows Copy's field (C6a).
     // Only the level: the run log is the one destination until C6c.
     logLevel: sessionLogConfigFields.logLevel,
@@ -163,6 +182,29 @@ export const copyFilesConfigSchema = z
       issue(
         'skipForbiddenFiles',
         'skipping a forbidden file needs a folder or a file list; one file fails instead',
+      );
+    }
+    // C6e-2 — ADF verifies binary files only with Preserve hierarchy, and
+    // skips an inconsistent one only when it verifies.
+    if (
+      cfg.validateDataConsistency &&
+      (cfg.copyBehavior === 'flatten' || cfg.copyBehavior === 'merge')
+    ) {
+      issue(
+        'validateDataConsistency',
+        'verifying a files copy needs Copy behaviour Preserve hierarchy',
+      );
+    }
+    if (cfg.skipInconsistentFiles && !cfg.validateDataConsistency) {
+      issue(
+        'skipInconsistentFiles',
+        'skipping an inconsistent file needs Verify copied files, which finds it',
+      );
+    }
+    if (cfg.pathType === 'file' && cfg.skipInconsistentFiles) {
+      issue(
+        'skipInconsistentFiles',
+        'skipping an inconsistent file needs a folder or a file list; one file fails instead',
       );
     }
     if (cfg.copyBehavior === 'merge') {

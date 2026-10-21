@@ -530,6 +530,15 @@ function planTargets(
   return files.map((f) => named(cfg.copyBehavior === 'flatten' ? basename(f.rel) : f.rel, [f]));
 }
 
+/**
+ * #1600 C6e-2 — a verified file that changed while it was copied, or whose
+ * written file is not the size read. Nothing was landed for it.
+ */
+interface Inconsistent {
+  readonly source: SourceFile;
+  readonly reason: string;
+}
+
 async function writeTarget(
   target: Target,
   finalPath: string,
@@ -540,7 +549,8 @@ async function writeTarget(
   stamps: Map<string, ReadStamp>,
   log: SessionLog,
   openOrSkip: (s: SourceFile) => Promise<OpenedSource | undefined>,
-): Promise<'written' | 'exists' | 'skipped'> {
+  verify: boolean,
+): Promise<'written' | 'exists' | 'skipped' | Inconsistent> {
   let read = 0;
   // Each source's bytes, for its FileRead line.
   const reads: { rel: string; bytes: number }[] = [];
@@ -562,6 +572,8 @@ async function writeTarget(
   if (sources.length === 0) return 'skipped';
   // Set when every source was skipped mid-write: no file is landed then.
   let nothingRead = false;
+  // C6e-2 — set when Verify copied files finds a difference: nor is one landed.
+  let inconsistent: Inconsistent | undefined;
   const writeInto = async (dst: Awaited<ReturnType<typeof open>>) => {
     for (const s of sources) {
       const src = await openOrSkip(s);
@@ -570,7 +582,19 @@ async function writeTarget(
         const bytes = await streamInto(src.fh, dst, signal);
         read += bytes;
         reads.push({ rel: s.rel, bytes });
-        stamps.set(s.abs, stampOf(src.st, bytes));
+        const stamp = stampOf(src.st, bytes);
+        stamps.set(s.abs, stamp);
+        // The source is judged before the temp is renamed, so a file that
+        // changed while it was read never lands, and a target it would have
+        // replaced is kept. The same rule After copy applies (`changedSince`).
+        const changed = verify ? await changedSince(s, stamp) : undefined;
+        if (changed !== undefined) {
+          inconsistent = {
+            source: s,
+            reason: `the source changed while it was copied: ${changed}`,
+          };
+          throw new Error('the source changed while it was copied');
+        }
       } finally {
         await closeQuietly(src.fh);
       }
@@ -579,6 +603,18 @@ async function writeTarget(
       // Thrown so `atomicReplace` removes the temp rather than land an empty file.
       nothingRead = true;
       throw new Error('every source was skipped');
+    }
+    // ADF's size check of the file written, on the handle it was written through.
+    // A verified copy preserves the hierarchy, so its target has one source.
+    if (verify) {
+      const written = (await dst.stat({ bigint: true })).size;
+      if (written !== BigInt(read)) {
+        inconsistent = {
+          source: sources[0]!,
+          reason: `the file written holds ${counted(Number(written), 'byte')}, not the ${counted(read, 'byte')} read`,
+        };
+        throw new Error('the file written is not the size read');
+      }
     }
   };
   // The copy keeps its source's permission bits; a merge keeps the bits every
@@ -589,6 +625,7 @@ async function writeTarget(
     mode,
   });
   if (nothingRead) return 'skipped';
+  if (inconsistent !== undefined) return inconsistent;
   if (result === TARGET_EXISTS) return 'exists';
   if (result !== undefined) throw new EventFailure(result);
   c.filesRead += reads.length;
@@ -729,23 +766,38 @@ async function readFully(
 }
 
 /**
- * Refuse to delete or move a source that changed after it was read: another
- * inode now at the path, a different size or modified time, or fewer bytes
- * copied than it held. The copy fails and the file stays where it is.
+ * How a source changed since it was read, or `undefined` when it did not:
+ * another inode now at the path, a different size or modified time, or a
+ * different number of bytes read than it held when opened. One rule for After
+ * copy and for Verify copied files (#1600 C6e-2).
+ */
+async function changedSince(
+  s: SourceFile,
+  stamp: ReadStamp | undefined,
+): Promise<string | undefined> {
+  if (stamp === undefined) return 'it was not read';
+  const now = await lstatOrNull(s.abs);
+  if (now === null) return 'it was removed';
+  if (!now.isFile() || now.dev !== stamp.dev || now.ino !== stamp.ino) {
+    return 'another file took its place';
+  }
+  if (BigInt(stamp.read) !== stamp.size) {
+    return `it held ${counted(Number(stamp.size), 'byte')} when opened, and the copy read ${counted(stamp.read, 'byte')}`;
+  }
+  if (now.size !== stamp.size) {
+    return `its size went from ${counted(Number(stamp.size), 'byte')} to ${counted(Number(now.size), 'byte')}`;
+  }
+  if (now.mtimeNs !== stamp.mtimeNs) return 'its modified time changed';
+  return undefined;
+}
+
+/**
+ * Refuse to delete or move a source that changed after it was read
+ * (`changedSince`). The copy fails and the file stays where it is.
  * Exported for its unit test; nothing else calls it.
  */
 export async function unchangedSince(s: SourceFile, stamp: ReadStamp | undefined): Promise<void> {
-  const now = await lstatOrNull(s.abs);
-  if (
-    stamp === undefined ||
-    now === null ||
-    !now.isFile() ||
-    now.dev !== stamp.dev ||
-    now.ino !== stamp.ino ||
-    now.size !== stamp.size ||
-    now.mtimeNs !== stamp.mtimeNs ||
-    BigInt(stamp.read) !== stamp.size
-  ) {
+  if ((await changedSince(s, stamp)) !== undefined) {
     refuse(`source '${s.rel}' changed while it was copied, so it was left in place`);
   }
 }
@@ -1008,8 +1060,27 @@ export async function* runFilesCopy(
           stamps,
           log,
           openOrSkip,
+          cfg.validateDataConsistency,
         );
         if (outcome === 'skipped') continue;
+        if (typeof outcome === 'object') {
+          // An abort during the check is the outcome, never a skip or a refusal.
+          if (signal.aborted) throw new Error('file copy aborted');
+          // C6e-2 — ADF's `skipErrorFile.dataInconsistency`. Only a source of
+          // several files skips one: the schema refuses it on one file. A
+          // skipped file is never deleted or moved: `continue` passes After copy.
+          if (!cfg.skipInconsistentFiles) {
+            refuse(`Verify copied files failed for '${outcome.source.rel}': ${outcome.reason}`);
+          }
+          c.filesSkipped += 1;
+          log.add(
+            'Warning',
+            'FileSkip',
+            outcome.source.rel,
+            `skipped: ${outcome.reason}, and Skip inconsistent files is on`,
+          );
+          continue;
+        }
         if (outcome === 'exists') {
           if (cfg.ifExists === 'fail')
             refuse(`'${finalPath}' appeared during the copy and If file exists is Fail`);

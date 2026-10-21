@@ -21,6 +21,8 @@ describe('copy_files config', () => {
       ifExists: 'overwrite',
       skipMissingFiles: true,
       skipForbiddenFiles: false,
+      validateDataConsistency: false,
+      skipInconsistentFiles: false,
       logLevel: 'warning',
     });
     expect(issues({})).toEqual([expect.stringMatching(/^sourcePath: /)]);
@@ -110,7 +112,9 @@ describe('copy_files appliesWhen (#1686)', () => {
   // the dock leaves out, and one it needs is one the dock draws. Include
   // subfolders and Skip missing files are left out of the comparison: each
   // defaults to on, so the schema cannot tell it set from left (the
-  // superRefine's own note).
+  // superRefine's own note). #1600 C6e-2's Skip inconsistent files is too: its
+  // control is Verify copied files, not one of the three, and its one-file
+  // refusal is one an OR'd view rule cannot draw (the C6e-2 block below).
   const entry = getActivity(COPY_FILES_ACTIVITY_TYPE);
   const rules = entry?.appliesWhen ?? {};
   const held: Record<string, unknown> = {
@@ -119,6 +123,7 @@ describe('copy_files appliesWhen (#1686)', () => {
     moveTo: 'done',
     sinkFileName: 'all.csv',
     skipForbiddenFiles: true,
+    validateDataConsistency: true,
   };
   const combos = (['file', 'folder', 'list'] as const).flatMap((pathType) =>
     (['keep', 'delete', 'move'] as const).flatMap((afterCopy) =>
@@ -138,7 +143,7 @@ describe('copy_files appliesWhen (#1686)', () => {
 
   it('covers every conditional field', () => {
     expect(Object.keys(rules).sort()).toEqual(
-      [...Object.keys(held), 'recursive', 'skipMissingFiles'].sort(),
+      [...Object.keys(held), 'recursive', 'skipMissingFiles', 'skipInconsistentFiles'].sort(),
     );
   });
 
@@ -165,7 +170,13 @@ describe('copy_files session log (#1600 OR41 C6b)', () => {
   it('is drawn on the Settings tab, after Sink, as on a rows Copy', () => {
     const tabs = getActivity(COPY_FILES_ACTIVITY_TYPE)!.tabs!;
     expect(tabs.map((t) => t.key)).toEqual(['source', 'sink', 'settings']);
-    expect(tabs[2]!.fields).toEqual(['skipMissingFiles', 'skipForbiddenFiles', 'logLevel']);
+    expect(tabs[2]!.fields).toEqual([
+      'skipMissingFiles',
+      'skipForbiddenFiles',
+      'validateDataConsistency',
+      'skipInconsistentFiles',
+      'logLevel',
+    ]);
   });
 });
 
@@ -190,5 +201,59 @@ describe('copy_files fault tolerance (#1600 OR41 C6d-2)', () => {
       }),
     ).toEqual([]);
     expect(issues({ sourcePath: 'a.txt', pathType: 'file', skipMissingFiles: false })).toEqual([]);
+  });
+});
+
+describe('copy_files data consistency (#1600 OR41 C6e-2)', () => {
+  it('verifies only under Preserve hierarchy, as in ADF', () => {
+    expect(issues({ sourcePath: 'in', validateDataConsistency: true })).toEqual([]);
+    expect(
+      issues({ sourcePath: 'a.txt', pathType: 'file', validateDataConsistency: true }),
+    ).toEqual([]);
+    expect(
+      issues({ sourcePath: 'in', copyBehavior: 'flatten', validateDataConsistency: true }),
+    ).toEqual([
+      'validateDataConsistency: verifying a files copy needs Copy behaviour Preserve hierarchy',
+    ]);
+    expect(
+      issues({
+        sourcePath: 'in',
+        copyBehavior: 'merge',
+        sinkFileName: 'all.txt',
+        validateDataConsistency: true,
+      }),
+    ).toEqual([
+      'validateDataConsistency: verifying a files copy needs Copy behaviour Preserve hierarchy',
+    ]);
+    expect(issues({ sourcePath: 'in', copyBehavior: 'flatten' })).toEqual([]);
+  });
+
+  it('skips an inconsistent file only with the check, and never on one file', () => {
+    expect(
+      issues({ sourcePath: 'in', validateDataConsistency: true, skipInconsistentFiles: true }),
+    ).toEqual([]);
+    expect(issues({ sourcePath: 'in', skipInconsistentFiles: true })).toEqual([
+      'skipInconsistentFiles: skipping an inconsistent file needs Verify copied files, which finds it',
+    ]);
+    expect(
+      issues({
+        sourcePath: 'a.txt',
+        pathType: 'file',
+        validateDataConsistency: true,
+        skipInconsistentFiles: true,
+      }),
+    ).toEqual([
+      'skipInconsistentFiles: skipping an inconsistent file needs a folder or a file list; one file fails instead',
+    ]);
+  });
+
+  it('draws Verify under Preserve, and its skip once it is on', () => {
+    const entry = getActivity(COPY_FILES_ACTIVITY_TYPE)!;
+    expect(entry.appliesWhen?.['validateDataConsistency']).toEqual([
+      { field: 'copyBehavior', in: ['preserve'] },
+    ]);
+    expect(entry.appliesWhen?.['skipInconsistentFiles']).toEqual([
+      { field: 'validateDataConsistency', in: ['true'] },
+    ]);
   });
 });
