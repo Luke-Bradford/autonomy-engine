@@ -1614,10 +1614,17 @@ describe('copy activity — the session log, to a folder (#1600 OR41 C6c-1b)', (
       .filter((l) => l !== '')
       .map((l, i) => (i === 0 ? l : l.replace(/^[^,]+,/, '')));
   };
+  /** The one terminal: the executor folds the first it sees. */
+  const only = (events: ActivityEvent[]): ActivityEvent => {
+    const ends = events.filter((e) => e.type === 'succeeded' || e.type === 'failed');
+    expect(ends).toHaveLength(1);
+    expect(events.at(-1)).toBe(ends[0]);
+    return ends[0]!;
+  };
   const runLogLines = (events: ActivityEvent[]) =>
     events.filter((e) => e.type === 'output' && e.name === SESSION_LOG_OUTPUT);
   const outputsOf = (events: ActivityEvent[]): Record<string, unknown> => {
-    const end = terminal(events);
+    const end = events.at(-1)!;
     if (end.type === 'succeeded') return end.outputs;
     return Object.fromEntries(
       events.flatMap((e) => (e.type === 'output' ? [[e.name, e.value]] : [])),
@@ -1636,7 +1643,7 @@ describe('copy activity — the session log, to a folder (#1600 OR41 C6c-1b)', (
         }),
       ),
     );
-    expect(terminal(events).type).toBe('succeeded');
+    expect(only(events).type).toBe('succeeded');
     expect(runLogLines(events)).toEqual([]);
     const lines = await csv();
     expect(lines[0]).toBe('Timestamp,Level,Operation,Item,Message');
@@ -1679,7 +1686,7 @@ describe('copy activity — the session log, to a folder (#1600 OR41 C6c-1b)', (
         }),
       ),
     );
-    expect(terminal(events).type).toBe('succeeded');
+    expect(only(events).type).toBe('succeeded');
     expect(await csv()).toHaveLength(1);
     expect(outputsOf(events)['logPath']).toEqual(expect.any(String));
   });
@@ -1749,7 +1756,7 @@ describe('copy activity — the session log, to a folder (#1600 OR41 C6c-1b)', (
         }),
       ),
     );
-    const end = terminal(events);
+    const end = only(events);
     expect(end.type).toBe('failed');
     const lines = await csv();
     expect(lines).toHaveLength(2);
@@ -1778,7 +1785,7 @@ describe('copy activity — the session log, to a folder (#1600 OR41 C6c-1b)', (
         }),
       ),
     );
-    const end = terminal(events);
+    const end = only(events);
     expect(end.type).toBe('failed');
     // The message holds commas, so the cell is quoted.
     expect((await csv()).at(-1)).toBe(`Error,Copy,,"${end.type === 'failed' ? end.error : ''}"`);
@@ -1807,7 +1814,7 @@ describe('copy activity — the session log, to a folder (#1600 OR41 C6c-1b)', (
       events.push(event);
       if (event.type === 'output' && event.name === COPY_PROGRESS_OUTPUT) controller.abort();
     }
-    const end = terminal(events);
+    const end = only(events);
     expect(end).toMatchObject({ type: 'failed', kind: 'cancelled' });
     expect((await csv()).at(-1)).toMatch(/^Error,Copy,,/);
     expect(rowsOf(sinkPath)).toEqual([]);
@@ -1834,7 +1841,7 @@ describe('copy activity — the session log, to a folder (#1600 OR41 C6c-1b)', (
           }),
         ),
       );
-      expect(terminal(events)).toEqual({
+      expect(only(events)).toEqual({
         type: 'failed',
         kind: 'permanent',
         error: 'the session log could not be written: disk full',
@@ -1861,7 +1868,7 @@ describe('copy activity — the session log, to a folder (#1600 OR41 C6c-1b)', (
           }),
         ),
       );
-      expect(terminal(events)).toEqual({
+      expect(only(events)).toEqual({
         type: 'failed',
         kind: 'permanent',
         error: 'the session log could not be written: disk full',
@@ -1889,7 +1896,7 @@ describe('copy activity — the session log, to a folder (#1600 OR41 C6c-1b)', (
           }),
         ),
       );
-      const end = terminal(events);
+      const end = only(events);
       expect(end).toMatchObject({ type: 'failed', kind: 'permanent' });
       expect(end.type === 'failed' ? end.error : '').toMatch(
         /^copied 2 rows, but the session log '.+session-log\..+\.csv' could not be written: disk full$/,
@@ -1901,6 +1908,132 @@ describe('copy activity — the session log, to a folder (#1600 OR41 C6c-1b)', (
       expect(rowsOf(sinkPath)).toHaveLength(2);
     } finally {
       spy.mockRestore();
+    }
+  });
+
+  it('stops a copy whose batches are all skipped once the log can no longer be written', async () => {
+    // No row reaches the sink, so only the reader's batches can flush the log.
+    const root = tempRoot();
+    const sinkPath = seedSink(root, 'dst.db');
+    const spy = vi
+      .spyOn(SessionLogWriter.prototype, 'failure', 'get')
+      .mockReturnValueOnce(undefined)
+      .mockReturnValue('disk full');
+    try {
+      const events = await run(
+        withLog(
+          copyCtx({
+            root,
+            sourcePath: seedDb(root, 3, 'src.db'),
+            sinkPath,
+            input: dropping({ writeBatchSize: 1 }),
+          }),
+        ),
+      );
+      expect(only(events)).toEqual({
+        type: 'failed',
+        kind: 'permanent',
+        error: 'the session log could not be written: disk full',
+      });
+      // Stopped after the second batch, not read to the end.
+      expect(outputsOf(events)['rowsRead']).toBe(2);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('drains before COMMIT with every line in: none is added after the drain', async () => {
+    const root = tempRoot();
+    const sinkPath = join(root, 'dst.db');
+    const dst = new Database(sinkPath);
+    // Row 2's id breaks the key, so the sink rejects it in the last batch.
+    dst.exec('CREATE TABLE sink (id INTEGER PRIMARY KEY, flag INTEGER)');
+    dst.exec('INSERT INTO sink VALUES (2, 0)');
+    dst.close();
+    let appended = 0;
+    let atDrain = -1;
+    const append = SessionLogWriter.prototype.append;
+    const drain = SessionLogWriter.prototype.drain;
+    const appendSpy = vi.spyOn(SessionLogWriter.prototype, 'append').mockImplementation(function (
+      this: SessionLogWriter,
+      line,
+    ) {
+      appended += 1;
+      append.call(this, line);
+    });
+    const drainSpy = vi.spyOn(SessionLogWriter.prototype, 'drain').mockImplementation(function (
+      this: SessionLogWriter,
+    ) {
+      atDrain = appended;
+      return drain.call(this);
+    });
+    try {
+      const events = await run(
+        withLog(
+          copyCtx({
+            root,
+            sourcePath: seedDb(root, 2, 'src.db'),
+            sinkPath,
+            input: dropping({
+              logLevel: 'info',
+              skipIncompatibleRows: true,
+              mapping: [{ source: 'id', sink: 'id', type: 'integer' }],
+            }),
+          }),
+        ),
+      );
+      expect(only(events).type).toBe('succeeded');
+      const lines = await csv();
+      expect(lines.slice(1)).toEqual([
+        expect.stringMatching(/^Warning,TabularRowSkip,row 2,sink_rejected: /),
+        'Info,TabularRowBatch,rows 1-2,"read 2 rows, 1 skipped"',
+      ]);
+      expect(atDrain).toBe(2);
+      expect(appended).toBe(2);
+    } finally {
+      appendSpy.mockRestore();
+      drainSpy.mockRestore();
+    }
+  });
+
+  it('writes the log of an Upsert, which the Settings fields before it refuse', async () => {
+    const root = tempRoot();
+    const sinkPath = join(root, 'dst.db');
+    const dst = new Database(sinkPath);
+    dst.exec('CREATE TABLE sink (id INTEGER PRIMARY KEY, flag INTEGER)');
+    dst.close();
+    const events = await run(
+      withLog(
+        copyCtx({
+          root,
+          sourcePath: seedDb(root, 2, 'src.db'),
+          sinkPath,
+          input: dropping({ mode: 'upsert' }),
+        }),
+      ),
+    );
+    expect(only(events).type).toBe('succeeded');
+    expect((await csv()).slice(1)).toHaveLength(2);
+  });
+
+  it('closes the log of a consumer that stops early', async () => {
+    const root = tempRoot();
+    const close = vi.spyOn(SessionLogWriter.prototype, 'close');
+    try {
+      const ctx = withLog(
+        copyCtx({
+          root,
+          sourcePath: seedDb(root, 3, 'src.db'),
+          sinkPath: seedSink(root, 'dst.db'),
+          input: dropping({ writeBatchSize: 1 }),
+        }),
+      );
+      for await (const event of sqliteAdapter.runActivity(ctx, null)) {
+        if (event.type === 'output' && event.name === COPY_PROGRESS_OUTPUT) break;
+      }
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      close.mockRestore();
     }
   });
 });

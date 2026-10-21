@@ -192,17 +192,21 @@ const logWriteFailure = (error: string) =>
   new DatasetIoError('permanent', `the session log could not be written: ${error}`);
 
 /**
- * #1600 OR41 C6c-1b — the batches the sink writes, with the folder log written
- * as they go. The sink has taken a batch once it asks for the next one, so the
- * log is flushed then (once it holds 64 KiB), and awaited, so a slow mount
- * holds the copy back rather than the buffer growing past 64 KiB and one
- * batch's lines. After the last batch it is drained.
+ * #1600 OR41 C6c-1b — the READER's batches, with the folder log written as they
+ * go. The pump asks for the next one once it has handled the last (and the
+ * sink has taken what it yielded of it, so its rejected rows are logged too),
+ * so the log is flushed then (once it holds 64 KiB), and awaited, so a slow
+ * mount holds the copy back rather than the buffer growing past 64 KiB and one
+ * batch's lines. The reader's, not the pump's: a batch whose rows were all
+ * skipped never reaches the sink, and is the batch that logs the most. After
+ * the last batch it is drained.
  *
- * A failure is thrown from here, inside the sink's write transaction, so the
- * copy stops and ROLLS BACK: both sinks pass a `DatasetIoError` through as it
- * is. The drain comes after the pump's last batch line and each sink's last
- * statement, so no line is added after it before COMMIT. The throw is in the
- * loop body, so `for await` closes the pump and its reader.
+ * A failure is thrown from here, through the pump, inside the sink's write
+ * transaction, so the copy stops and ROLLS BACK: both sinks pass a
+ * `DatasetIoError` through as it is. The drain comes after the pump's last
+ * batch line and the sink's last statement, so no line is added after it
+ * before COMMIT. The throw is in the loop body, so `for await` closes the
+ * reader.
  */
 async function* writingLog<T>(batches: AsyncIterable<T>, log: SessionLogWriter): AsyncGenerator<T> {
   for await (const batch of batches) {
@@ -342,6 +346,22 @@ export async function* runCopyActivity(
   ctx: ActivityContext,
   io: CopyIo,
 ): AsyncGenerator<ActivityEvent> {
+  const held: { log?: SessionLogWriter } = {};
+  try {
+    yield* copyRows(ctx, io, held);
+  } finally {
+    // #1600 OR41 C6c-1b — every terminal closes the folder log; this covers a
+    // consumer that stops iterating early. `close` answers a second call with
+    // its first.
+    void held.log?.close();
+  }
+}
+
+async function* copyRows(
+  ctx: ActivityContext,
+  io: CopyIo,
+  held: { log?: SessionLogWriter },
+): AsyncGenerator<ActivityEvent> {
   // #1600 OR41 C6f-1 — the copy's duration runs from here to its terminal.
   const startedMs = performance.now();
   const source = ctx.datasets?.source;
@@ -433,6 +453,7 @@ export async function* runCopyActivity(
       return;
     }
     logFile = opened.writer;
+    held.log = logFile;
   }
   // #1600 OR41 C6a — the session log (catalogue §4.1, §5). To the run log, capped
   // as it is kept: a copy can skip every row it reads, and the run log shows
@@ -631,7 +652,7 @@ export async function* runCopyActivity(
   // An async IIFE rather than a bare call: a `writeRows` that throws
   // SYNCHRONOUSLY must still land in the catch below, as it did when the call
   // sat inside that `try`.
-  // C6c-1b — the folder log is written between the batches the sink takes.
+  // C6c-1b — the folder log is written between the batches the reader gives.
   const logged = <T>(batches: AsyncIterable<T>): AsyncIterable<T> =>
     folderLog === undefined ? batches : writingLog(batches, folderLog);
   const write = (async () =>
@@ -659,8 +680,8 @@ export async function* runCopyActivity(
       connection: sinkConnection,
       // #1600 OR41 C3b — Batch size. The pump passes batches through one for one,
       // so the reader's batch is the sink's; absent keeps the reader's default.
-      batches: logged(
-        pumpCopyRows(
+      batches: pumpCopyRows(
+        logged(
           io.readBatches({
             dataset: source,
             signal: ctx.signal,
@@ -668,42 +689,42 @@ export async function* runCopyActivity(
               ? {}
               : { batchRows: parsed.data.writeBatchSize }),
           }),
-          {
-            mapping: mapping as readonly CopyPumpMappingEntry[],
-            counters,
-            // §6.4 — the SOURCE's facts, never the sink's. A CSV declares how it
-            // spells NULL and how it writes a date; the store being written into
-            // has real types and a real NULL and declares neither. Derived at the
-            // describe rung above rather than inline here — see the note there for
-            // why the empty-mapping guard has to cover both.
-            coercion,
-            onRowFailure: logRowSkip,
-            onSinkBatch: (rowIndices) => {
-              sinkBatchRows = rowIndices;
-            },
-            onBatch: () => {
-              // "Read", never "written": the sink's tick is not committed truth.
-              // Called once the sink has taken the batch, so a batch the sink
-              // fails on gets its skip lines but no batch line.
-              const read = counters.rowsRead - batchFrom.rowsRead;
-              const skipped = counters.rowsFailed - batchFrom.rowsFailed;
-              if (read > 0) {
-                log.add(
-                  'Info',
-                  'TabularRowBatch',
-                  `rows ${batchFrom.rowsRead + 1}-${counters.rowsRead}`,
-                  `read ${read} row${read === 1 ? '' : 's'}, ${skipped} skipped`,
-                );
-              }
-              batchFrom = { rowsRead: counters.rowsRead, rowsFailed: counters.rowsFailed };
-              ticks.push({
-                rowsRead: counters.rowsRead,
-                rowsInFlight: counters.rowsWritten,
-                rowsFailed: counters.rowsFailed,
-              });
-            },
-          },
         ),
+        {
+          mapping: mapping as readonly CopyPumpMappingEntry[],
+          counters,
+          // §6.4 — the SOURCE's facts, never the sink's. A CSV declares how it
+          // spells NULL and how it writes a date; the store being written into
+          // has real types and a real NULL and declares neither. Derived at the
+          // describe rung above rather than inline here — see the note there for
+          // why the empty-mapping guard has to cover both.
+          coercion,
+          onRowFailure: logRowSkip,
+          onSinkBatch: (rowIndices) => {
+            sinkBatchRows = rowIndices;
+          },
+          onBatch: () => {
+            // "Read", never "written": the sink's tick is not committed truth.
+            // Called once the sink has taken the batch, so a batch the sink
+            // fails on gets its skip lines but no batch line.
+            const read = counters.rowsRead - batchFrom.rowsRead;
+            const skipped = counters.rowsFailed - batchFrom.rowsFailed;
+            if (read > 0) {
+              log.add(
+                'Info',
+                'TabularRowBatch',
+                `rows ${batchFrom.rowsRead + 1}-${counters.rowsRead}`,
+                `read ${read} row${read === 1 ? '' : 's'}, ${skipped} skipped`,
+              );
+            }
+            batchFrom = { rowsRead: counters.rowsRead, rowsFailed: counters.rowsFailed };
+            ticks.push({
+              rowsRead: counters.rowsRead,
+              rowsInFlight: counters.rowsWritten,
+              rowsFailed: counters.rowsFailed,
+            });
+          },
+        },
       ),
       signal: ctx.signal,
     }))()
@@ -747,7 +768,7 @@ export async function* runCopyActivity(
         reason: discrepancy,
       };
     }
-    if (logError !== undefined) {
+    if (logError !== undefined && folderLog !== undefined) {
       // The residual of C6c-1b's rule: everything was written before COMMIT, so
       // only closing the file is left to fail, and the rows are committed. The
       // counts are reported, then the failure (Files as-is's rule, C6c-1a).
@@ -757,7 +778,7 @@ export async function* runCopyActivity(
       const n = counters.rowsWritten;
       yield failed(
         'permanent',
-        `copied ${n} row${n === 1 ? '' : 's'}, but the session log '${folderLog!.path}' could not be written: ${logError}`,
+        `copied ${n} row${n === 1 ? '' : 's'}, but the session log '${folderLog.path}' could not be written: ${logError}`,
       );
       return;
     }

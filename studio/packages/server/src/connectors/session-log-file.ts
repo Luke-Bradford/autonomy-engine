@@ -200,9 +200,10 @@ async function bounded<T>(work: Promise<T>, timeoutMs: number, what: string): Pr
 }
 
 /**
- * #1600 OR41 C6c-1a — a session log written as it is kept, for Copy, whose log
- * can run to a line per skipped row (§4.1): one CSV file per attempt, in
- * `writeSessionLogFile`'s format, under the attempt's own name.
+ * #1600 OR41 C6c-1a — a session log written as it is kept, for Copy in either
+ * mode (a rows Copy since C6c-1b), whose log can run to a line per skipped row
+ * (§4.1): one CSV file per attempt, in `writeSessionLogFile`'s format, under
+ * the attempt's own name.
  *
  * Written to its FINAL name as it goes, not a temp renamed at the end: the
  * name is the attempt's own and created exclusively, so nothing is ever
