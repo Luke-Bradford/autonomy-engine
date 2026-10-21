@@ -380,7 +380,8 @@ describe('copy_files log connection at save (#1600 OR41 C6c-1a)', () => {
   });
 
   it('refuses a log connection on an activity that has none', () => {
-    const rows = node({}, 'l', 'copy');
+    // #1600 OR41 C6c-1b — a rows Copy has one now, so Lookup stands in.
+    const rows = node({}, 'l', 'lookup');
     expect(activityNodeErrors(rows).filter((e) => e.includes('connectionIds.log'))).toEqual([
       "node 'c': connectionIds.log: this activity has no log connection",
     ]);

@@ -1,4 +1,5 @@
 import {
+  COPY_ACTIVITY_TYPE,
   COPY_FILES_ACTIVITY_TYPE,
   DELETE_ACTIVITY_TYPE,
   StrictNodeSchema,
@@ -185,10 +186,11 @@ export function writeAccessWarnings(
             `node '${n.id}': the connection '${c.name}' does not allow writes, which a delete needs`,
           ];
     }
-    if (n.type !== COPY_FILES_ACTIVITY_TYPE) return [];
+    if (n.type !== COPY_FILES_ACTIVITY_TYPE && n.type !== COPY_ACTIVITY_TYPE) return [];
     // #1600 OR41 C6c-1a — a folder log is written through its own connection,
     // and the run refuses one that is missing or read-only before it copies. A
-    // `${}` Write to is not judged here: only the run knows it.
+    // `${}` Write to is not judged here: only the run knows it. C6c-1b — a rows
+    // Copy's too; its fs source is only read and its sink is a database.
     const toFolder = n.config['logLevel'] !== 'off' && n.config['logTo'] === 'folder';
     const logEnd = n.connectionIds?.log;
     const log = toFolder ? readOnly(logEnd) : undefined;
@@ -201,6 +203,7 @@ export function writeAccessWarnings(
           : [
               `node '${n.id}': the log connection '${log.name}' does not allow writes, which a folder log needs`,
             ];
+    if (n.type === COPY_ACTIVITY_TYPE) return logWarnings;
     const sink = readOnly(n.connectionIds?.sink);
     const removes = n.config['afterCopy'] === 'delete' || n.config['afterCopy'] === 'move';
     const source = removes ? readOnly(n.connectionIds?.source) : undefined;

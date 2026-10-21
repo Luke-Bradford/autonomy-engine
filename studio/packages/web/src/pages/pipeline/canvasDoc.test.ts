@@ -441,6 +441,24 @@ describe('writeAccessWarnings (#1600 OR41 C1b)', () => {
     ).toEqual([]);
   });
 
+  it('#1600 OR41 C6c-1b — names a rows Copy folder log the same way, and nothing else of it', () => {
+    const rows = (id: string, log?: string, config: Record<string, unknown> = {}): Node => ({
+      ...node(id, { logTo: 'folder', logFolder: 'l', ...config }),
+      type: 'copy',
+      // A read-only fs source is no fault of a rows Copy's: it only reads it.
+      connectionIds: { source: 'ro', sink: 'db', ...(log !== undefined && { log }) },
+    });
+    expect(
+      writeAccessWarnings(
+        [rows('a'), rows('b', 'ro'), rows('c', 'rw'), rows('d', undefined, { logTo: 'run' })],
+        connections,
+      ),
+    ).toEqual([
+      "node 'a': the session log is written to a folder, and no log connection is bound",
+      "node 'b': the log connection 'Conn ro' does not allow writes, which a folder log needs",
+    ]);
+  });
+
   it('names a copy whose sink does not allow writes, absent or false', () => {
     expect(
       writeAccessWarnings(

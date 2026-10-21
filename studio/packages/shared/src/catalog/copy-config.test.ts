@@ -11,6 +11,8 @@ import {
   copyVerifyConsistencyIssue,
 } from './copy-config.js';
 import { formatZodIssues } from '../schemas/zod-issues.js';
+import { getActivity } from './registry.js';
+import { COPY_ACTIVITY_TYPE } from './types.js';
 
 /**
  * #996 M5 slice 1 (#1122) — the `copy` mapping declaration (§6.1).
@@ -530,5 +532,57 @@ describe('Verify after copy (C6e-1)', () => {
         validateDataConsistency: true,
       }).success,
     ).toBe(false);
+  });
+});
+
+describe('session log to a folder (C6c-1b)', () => {
+  const id = { source: 'a', sink: 'id', type: 'integer' as const };
+  const issues = (extra: Record<string, unknown>) => {
+    const r = copyInputSchema.safeParse({ mapping: [id], ...extra });
+    return r.success ? [] : r.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`);
+  };
+
+  it('writes to the run log by default, and to a folder on the log connection', () => {
+    const cfg = copyInputSchema.parse({ mapping: [id] });
+    expect(cfg.logTo).toBe('run');
+    expect(cfg.logFolder).toBeUndefined();
+    expect(issues({ logTo: 'folder', logFolder: 'logs' })).toEqual([]);
+    // Dispatch checks the same rules, for a `${}` resolved there.
+    expect(copyDispatchInputSchema.safeParse({ mapping: [id], logTo: 'folder' }).success).toBe(
+      false,
+    );
+  });
+
+  it.each([
+    [{ logTo: 'folder' }, 'logFolder: needed to write the session log to a folder'],
+    [{ logFolder: 'logs' }, 'logFolder: only read when the session log is written to a folder'],
+    [
+      { logLevel: 'off', logTo: 'folder', logFolder: 'logs' },
+      'logLevel: the session log is off, but it is set to write to a folder',
+    ],
+  ])('refuses %j', (extra, message) => {
+    expect(issues(extra)).toEqual([message]);
+  });
+
+  it('is allowed with Upsert, unlike the Settings fields before it', () => {
+    expect(issues({ mode: 'upsert', logTo: 'folder', logFolder: 'logs' })).toEqual([]);
+  });
+
+  it('draws Write to and the folder (and its connection) on Settings, as Files as-is does', () => {
+    const entry = getActivity(COPY_ACTIVITY_TYPE)!;
+    expect(entry.appliesWhen?.logTo).toEqual([{ field: 'logLevel', in: ['warning', 'info'] }]);
+    expect(entry.appliesWhen?.logFolder).toEqual([{ field: 'logTo', in: ['folder'] }]);
+    expect(entry.logConnectionKinds).toEqual(['fs']);
+    const settings = entry.tabs!.find((t) => t.key === 'settings')!;
+    expect(settings.fields.slice(-3)).toEqual(['logLevel', 'logTo', 'logFolder']);
+    expect(settings.bindings).toEqual(['logConnection']);
+  });
+
+  it('declares logPath last, and keeps the outputs a node saved before C6c-1b declares', () => {
+    const entry = getActivity(COPY_ACTIVITY_TYPE)!;
+    const names = entry.outputs.map((o) => o.name);
+    expect(names.at(-1)).toBe('logPath');
+    expect(entry.outputs.at(-1)?.optional).toBe(true);
+    expect(entry.formerOutputs![0]!).toEqual(entry.outputs.slice(0, -1));
   });
 });
