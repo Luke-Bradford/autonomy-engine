@@ -53,10 +53,19 @@ function toDbNode(node: NodeExport): Node {
   // (the node is flagged in `strippedConnectionRefs`). Keeping a half pair would
   // be unsavable, and manufacturing an id for the missing end is the fail-open
   // this codebase refuses. A fully-`${}` pair survives intact.
+  // #1600 OR41 C6c-1a — a nulled LOG end drops alone: the pair is whole
+  // without it, and the copy refuses at dispatch until it is rebound.
   const withConn =
     connectionIds === undefined || connectionIds.source === null || connectionIds.sink === null
       ? base
-      : { ...base, connectionIds: { source: connectionIds.source, sink: connectionIds.sink } };
+      : {
+          ...base,
+          connectionIds: {
+            source: connectionIds.source,
+            sink: connectionIds.sink,
+            ...(typeof connectionIds.log === 'string' && { log: connectionIds.log }),
+          },
+        };
   // M3 (#1117) — the dataset pair's inverse, on the identical drop-whole rule and
   // applied to the RESULT rather than inside the connection branch: the two
   // fields are orthogonal (a copy binds both), so returning early on one would

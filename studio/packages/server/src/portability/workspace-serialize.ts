@@ -89,6 +89,8 @@ export interface UnserializableRefDetail {
     | 'connection'
     | 'connectionSource'
     | 'connectionSink'
+    // #1600 OR41 C6c-1a — the session log's connection, a pair's optional third end.
+    | 'connectionLog'
     // M3 (#1117) — a NODE's ref to the dataset it reads from / writes to. Two
     // separate arms, never one `dataset`, for the same reason the connection
     // pair has two: "node X references a dataset that no longer exists" is not
@@ -131,7 +133,9 @@ export function describeUnserializable(detail: UnserializableRefDetail): string 
         ? `source connection "${detail.danglingId}"`
         : detail.ref === 'connectionSink'
           ? `sink connection "${detail.danglingId}"`
-          : detail.ref === 'datasetSource'
+          : detail.ref === 'connectionLog'
+            ? `log connection "${detail.danglingId}"`
+            : detail.ref === 'datasetSource'
             ? `source dataset "${detail.danglingId}"`
             : detail.ref === 'datasetSink'
               ? `sink dataset "${detail.danglingId}"`
@@ -348,6 +352,7 @@ export function compareStoredVersion(
     connection: new Set<string>(),
     source: new Set<string>(),
     sink: new Set<string>(),
+    log: new Set<string>(),
     datasetSource: new Set<string>(),
     datasetSink: new Set<string>(),
     call: new Set<string>(),
@@ -360,6 +365,7 @@ export function compareStoredVersion(
     // real hand-edit to that end behind the other end's undecidability.
     if (isUndecidableRef(node.connectionIds?.source, connRidByDbId)) masks.source.add(node.id);
     if (isUndecidableRef(node.connectionIds?.sink, connRidByDbId)) masks.sink.add(node.id);
+    if (isUndecidableRef(node.connectionIds?.log, connRidByDbId)) masks.log.add(node.id);
     // M3 (#1117) — the dataset ends, judged per end against the DATASET map for
     // the identical reason: over-masking a decidable end would hide a real
     // hand-edit to it behind the other end's undecidability.
@@ -375,6 +381,7 @@ export function compareStoredVersion(
     masks.connection.size +
     masks.source.size +
     masks.sink.size +
+    masks.log.size +
     masks.datasetSource.size +
     masks.datasetSink.size +
     masks.call.size;
@@ -412,6 +419,8 @@ interface NodeRefMasks {
   connection: Set<string>;
   source: Set<string>;
   sink: Set<string>;
+  /** #1600 OR41 C6c-1a — the connection pair's optional log end. */
+  log: Set<string>;
   /** M3 (#1117) — the dataset pair's ends. Separate from `source`/`sink` (the
    * CONNECTION pair's) because a node binds both and each is decidable on its
    * own: a copy whose source connection is dangling may still have a perfectly
@@ -443,11 +452,14 @@ function maskNode(node: NodeExport, masks: NodeRefMasks): NodeExport {
   const maskEnd = (value: string | null, mask: Set<string>): string | null =>
     mask.has(node.id) ? UNDECIDABLE_REF : value;
   if (masked.connectionIds !== undefined) {
+    const { log } = masked.connectionIds;
     masked = {
       ...masked,
       connectionIds: {
         source: maskEnd(masked.connectionIds.source, masks.source),
         sink: maskEnd(masked.connectionIds.sink, masks.sink),
+        // #1600 OR41 C6c-1a — an absent log end stays absent.
+        ...(log === undefined ? {} : { log: maskEnd(log, masks.log) }),
       },
     };
   }
@@ -580,6 +592,10 @@ function exportNode(
     exported.connectionIds = {
       source: toRid(connectionIds.source, conn, 'connectionSource'),
       sink: toRid(connectionIds.sink, conn, 'connectionSink'),
+      // #1600 OR41 C6c-1a — an absent log end is omitted, never `null`.
+      ...(connectionIds.log === undefined
+        ? {}
+        : { log: toRid(connectionIds.log, conn, 'connectionLog') }),
     };
   }
   // M3 (#1117) — the dataset pair, remapped through the DATASET map. Each end

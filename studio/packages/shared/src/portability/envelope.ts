@@ -45,6 +45,15 @@ export const NodeExportSchema = NodeSchema.omit({
     .object({
       source: z.string().min(1).nullable(),
       sink: z.string().min(1).nullable(),
+      /**
+       * #1600 OR41 C6c-1a — the session log's connection, on the dataset sink's
+       * rule (M12, below): ABSENT means the node binds none, and is omitted
+       * rather than exported as `null`, which would change the committed bytes
+       * of every Copy; `null` means export stripped a literal. A stripped log
+       * end drops ALONE on import (the pair is whole without it); a stripped
+       * source or sink drops the pair, log included.
+       */
+      log: z.string().min(1).nullable().optional(),
     })
     .optional(),
   /**

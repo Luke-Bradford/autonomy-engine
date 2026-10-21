@@ -255,6 +255,42 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     expect(node.connectionIds!.sink).not.toBe(sink.id);
   });
 
+  it('#1600 OR41 C6c-1a — remaps the LOG end to its TARGET db id, and names it when it dangles', () => {
+    const src = freshDb().db;
+    const { pipe, incoming } = pairedSnapshot(src);
+    const logs = createConnection(src, {
+      ownerId: 'local',
+      name: 'Logs',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const node = incoming.pipelines[0]!.data.versions[0]!.nodes[0]!;
+    // A Copy · Files as-is writing its log to a folder, so the log end is used.
+    const logged = (snap: ReturnType<typeof snapshot>, log: string) => {
+      const n = snap.pipelines[0]!.data.versions[0]!.nodes[0]!;
+      n.type = 'copy_files';
+      n.config = { sourcePath: 'in', logTo: 'folder', logFolder: 'logs' };
+      n.connectionIds!.log = log;
+      return snap;
+    };
+    const withLog = logged(snapshot(src), logs.resourceId);
+    expect(node.connectionIds).not.toHaveProperty('log');
+
+    const tgt = freshDb().db;
+    expect(applyWorkspace(tgt, 'local', withLog, 'sha1', 'main').refused).toBe(false);
+    const tgtLogs = getConnectionByResourceId(tgt, 'local', logs.resourceId)!;
+    const tgtPipe = getPipelineByResourceId(tgt, 'local', pipe.resourceId)!;
+    const applied = getLatestPipelineVersion(tgt, tgtPipe.id)!.nodes[0]!;
+    expect(applied.connectionIds!.log).toBe(tgtLogs.id);
+    expect(applied.connectionIds!.log).not.toBe(logs.resourceId);
+
+    const dangling = logged(snapshot(src), 'rid_not_here');
+    expect(() => applyWorkspace(freshDb().db, 'local', dangling, 'sha1', 'main')).toThrow(
+      /log connection "rid_not_here"/,
+    );
+  });
+
   it('M1 (#1104) — a dangling END refuses the apply, and the message names WHICH end', () => {
     const src = freshDb().db;
     const { incoming } = pairedSnapshot(src);

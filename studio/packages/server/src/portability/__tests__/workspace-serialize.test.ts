@@ -193,6 +193,45 @@ describe('serializeWorkspace', () => {
     // Neither DB id reaches the branch.
     expect(JSON.stringify(env)).not.toContain(source.id);
     expect(JSON.stringify(env)).not.toContain(sink.id);
+    // #1600 OR41 C6c-1a — no log end: the key is OMITTED, not exported as null.
+    expect(env.data.versions[0].nodes[0].connectionIds).not.toHaveProperty('log');
+  });
+
+  it('#1600 OR41 C6c-1a — remaps the LOG end to its resourceId, and names it when it dangles', () => {
+    const { db } = freshDb();
+    const store = createConnection(db, {
+      ownerId: 'local',
+      name: 'Store',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const logs = createConnection(db, {
+      ownerId: 'local',
+      name: 'Logs',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const node = (log: string) => ({
+      id: 'n1',
+      type: 'copy_files',
+      config: { sourcePath: 'in', logTo: 'folder', logFolder: 'logs' },
+      connectionIds: { source: store.id, sink: store.id, log },
+      position: { x: 0, y: 0 },
+    });
+    createPipelineVersion(db, { ...baseVersion(pipeline.id), nodes: [node(logs.id)] });
+    const env = envelopeAt(serializeWorkspace(db, 'local'), 'pipelines/p.json');
+    expect(env.data.versions[0].nodes[0].connectionIds).toEqual({
+      source: store.resourceId,
+      sink: store.resourceId,
+      log: logs.resourceId,
+    });
+    expect(JSON.stringify(env)).not.toContain(logs.id);
+
+    createPipelineVersion(db, { ...baseVersion(pipeline.id), nodes: [node('conn_gone')] });
+    expect(() => serializeWorkspace(db, 'local')).toThrow(/log connection "conn_gone"/);
   });
 
   it('M1 (#1104) — a dangling END refuses the serialize, and the message names WHICH end', () => {
