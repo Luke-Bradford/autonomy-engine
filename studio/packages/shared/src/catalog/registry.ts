@@ -476,7 +476,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
                   description:
                     'A literal or ${...}. Array and Object take JSON text or a whole-value ${...}. Null takes none, and an empty String is "".',
                 }),
-              }),
+              })
+              // Strict, so the dock draws it as a table (`deriveElementFields`).
+              .strict(),
             )
             .optional(),
           {

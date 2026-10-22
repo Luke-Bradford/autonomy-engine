@@ -58,18 +58,15 @@ test.describe('#1600 C12b — Pipeline return value', () => {
     await pane.getByRole('textbox', { name: 'Return keys row 2 value', exact: true }).fill('done');
 
     // At 1440x900 the table's rows are on screen, and the tab does not scroll sideways.
-    const measured = await pane.evaluate((root) => {
-      const row = root.querySelector('[aria-label="Return keys row 2 key"]')!.getBoundingClientRect();
-      const panel = root.querySelector('[role="tabpanel"]:not([hidden])')!;
-      return {
-        rowBottom: row.bottom,
-        rowRight: row.right,
-        sideways: panel.scrollWidth - panel.clientWidth,
-      };
-    });
-    expect(measured.rowBottom).toBeLessThanOrEqual(900);
-    expect(measured.rowRight).toBeLessThanOrEqual(1440);
-    expect(measured.sideways).toBeLessThanOrEqual(0);
+    const row = await pane
+      .getByRole('textbox', { name: 'Return keys row 2 key', exact: true })
+      .boundingBox();
+    const sideways = await pane
+      .getByRole('tabpanel')
+      .evaluate((panel) => panel.scrollWidth - panel.clientWidth);
+    expect(row!.y + row!.height).toBeLessThanOrEqual(900);
+    expect(row!.x + row!.width).toBeLessThanOrEqual(1440);
+    expect(sideways).toBeLessThanOrEqual(0);
 
     await pane.getByRole('button', { name: 'Apply config', exact: true }).click();
     await expect(page.locator(`.react-flow__node[data-id="${added}"]`)).toContainText(
