@@ -122,6 +122,16 @@ describe('a Pipeline return value node succeeds with the typed map as its output
   });
 });
 
+describe('a stored row the save rules would refuse', () => {
+  it('a Null row reads no content, whatever a hand-written doc holds there', () => {
+    const { state, finish } = driveRun(eng([ret('r', [{ key: 'k', type: 'null', content: 5 }])]), {
+      resolve: simpleResolve(),
+    });
+    expect(finish?.outcome).toBe('success');
+    expect(state.outputs['r']).toEqual({ pipelineReturnValue: { k: null } });
+  });
+});
+
 describe('a value that cannot be RETURNED fails the node permanently', () => {
   it.each([
     ['a whole-value of the wrong type', { key: 'k', type: 'string', content: '${params.x}' }],
@@ -265,9 +275,23 @@ describe('save rules', () => {
   it.each<[string, Row[] | unknown, string]>([
     ['no rows', [], 'node.r.returnValues: add at least one return value'],
     ['no table', undefined, 'node.r.returnValues: add at least one return value'],
-    ['an empty key', [{ key: '', type: 'string' }], 'node.r.returnValues[0].key'],
-    ['a dotted key', [{ key: 'a.b', type: 'string' }], 'node.r.returnValues[0].key'],
-    ['__proto__', [{ key: '__proto__', type: 'string' }], 'node.r.returnValues[0].key'],
+    ['an empty key', [{ key: '', type: 'string' }], 'node.r.returnValues[0].key: must be letters'],
+    ['a dotted key', [{ key: 'a.b', type: 'string' }], "(got 'a.b')"],
+    [
+      '__proto__',
+      [{ key: '__proto__', type: 'string' }],
+      'node.r.returnValues[0].key: cannot be __proto__',
+    ],
+    [
+      'a mis-keyed row',
+      [{ key: 'k', type: 'string', value: 'hi' }],
+      'node.r.returnValues[0].value: not a return value field',
+    ],
+    [
+      'a non-finite literal',
+      [{ key: 'k', type: 'array', content: '[1e999]' }],
+      'node.r.returnValues[0].content: ',
+    ],
     ['a ${} key', [{ key: '${params.x}', type: 'string' }], 'node.r.returnValues[0].key'],
     [
       'a duplicate key',
@@ -278,16 +302,20 @@ describe('save rules', () => {
       "node.r.returnValues[1].key: 'k' is already returned",
     ],
     ['an unknown type', [{ key: 'k', type: 'int', content: '1' }], 'node.r.returnValues[0].type'],
-    ['a number with no value', [{ key: 'k', type: 'number' }], 'node.r.returnValues[0].content'],
     [
-      'a value on Null',
+      'a number with no content',
+      [{ key: 'k', type: 'number' }],
+      'node.r.returnValues[0].content: a number needs content',
+    ],
+    [
+      'content on Null',
       [{ key: 'k', type: 'null', content: 'x' }],
-      'node.r.returnValues[0].content',
+      'node.r.returnValues[0].content: a Null return value takes no content',
     ],
     [
       'a non-text value',
       [{ key: 'k', type: 'number', content: 5 }],
-      'node.r.returnValues[0].content',
+      'node.r.returnValues[0].content: must be text',
     ],
     [
       'a bad number literal',

@@ -89,6 +89,7 @@ import {
   arity,
   assignableTo,
   checkArgTypes,
+  isPlainObject,
   listFunctions,
   matchesSig,
   sigOfDeclared,
@@ -1332,16 +1333,9 @@ export function coerceVariableValue(
   }
 }
 
-function articled(type: VariableDef['type'] | ReturnValueType): string {
+function articled(type: string): string {
   return `${type === 'array' || type === 'object' ? 'an' : 'a'} ${type}`;
 }
-
-/**
- * #1600 OR41 C12b — a return value key: an identifier, so the calling pipeline's
- * `${nodes.<call>.output.pipelineReturnValue.<key>}` reads it as one segment.
- * `__proto__` matches and is refused by name (`validateReturnValueConfig`).
- */
-const RETURN_VALUE_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /**
  * #1600 OR41 C12b — one *Pipeline return value* row's value, resolved in `mode`,
@@ -1365,8 +1359,7 @@ export function coerceReturnValue(
   if (type !== 'array' && type !== 'object') {
     return coerceVariableValue({ name: key, type }, mode, resolved, 'return value');
   }
-  const isKind = (v: unknown) =>
-    type === 'array' ? Array.isArray(v) : typeof v === 'object' && v !== null && !Array.isArray(v);
+  const isKind = (v: unknown) => (type === 'array' ? Array.isArray(v) : isPlainObject(v));
   if (mode === 'whole') {
     return isKind(resolved)
       ? { ok: true, value: resolved }
@@ -1406,6 +1399,8 @@ export function coerceReturnValue(
  * the per-item outputs are dropped at the end of each item, so the caller would
  * get nothing.
  */
+const RETURN_VALUE_ROW_KEYS = new Set(['key', 'type', 'content']);
+
 function validateReturnValueConfig(node: Node, foreachOwned: boolean, errors: string[]): void {
   const at = `node.${node.id}`;
   if (node.config['variable'] !== undefined) {
@@ -1433,8 +1428,12 @@ function validateReturnValueConfig(node: Node, foreachOwned: boolean, errors: st
       continue;
     }
     const { key, type, content } = row as Record<string, unknown>;
+    // A mis-keyed row (`value` for `content`) would otherwise return "" quietly.
+    for (const extra of Object.keys(row).filter((k) => !RETURN_VALUE_ROW_KEYS.has(k))) {
+      errors.push(`${here}.${extra}: not a return value field — use key, type and content`);
+    }
     let keyOk = false;
-    if (typeof key !== 'string' || !RETURN_VALUE_KEY.test(key)) {
+    if (typeof key !== 'string' || !isAddressableOutputName(key)) {
       errors.push(
         `${here}.key: must be letters, digits and _, not starting with a digit` +
           (typeof key === 'string' ? ` (got '${key}')` : ''),
@@ -1476,7 +1475,13 @@ function validateReturnValueConfig(node: Node, foreachOwned: boolean, errors: st
       mode,
       mode === 'literal' ? variableLiteralText(content) : '',
     );
-    if (!verdict.ok) errors.push(`${here}.content: ${verdict.error}`);
+    if (!verdict.ok) {
+      errors.push(`${here}.content: ${verdict.error}`);
+      continue;
+    }
+    // The run checks the whole map's replay safety; a literal decides it here (`[1e999]`).
+    const [unsafe] = jsonReplaySafetyErrors(`return value '${key as string}'`, verdict.value);
+    if (unsafe !== undefined) errors.push(`${here}.content: ${unsafe}`);
   }
 }
 
@@ -1505,7 +1510,7 @@ function scanReturnValueTypes(node: Node, scope: ScanScope, errors: string[]): v
     if (wrong) {
       errors.push(
         `node.${node.id}.returnValues[${i}].content: return value '${String(key)}' is ` +
-          `${articled(known)}, but this expression is ${articled(typed.type as VariableDef['type'])}`,
+          `${articled(known)}, but this expression is ${articled(typed.type)}`,
       );
     }
   }
@@ -3206,7 +3211,12 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
     if (node.type === FAIL_ACTIVITY_TYPE) validateFailConfig(node, errors);
     // #844 V5 — a `set_variable`/`append_variable`'s variable + value (save-time half).
     if (isVariableWriterType(node.type)) {
-      validateVariableWriteConfig(node, variables, foreachOwned(node.id, containers), errors);
+      validateVariableWriteConfig(
+        node,
+        variables,
+        isReturnValueNode(node) && foreachOwned(node.id, containers),
+        errors,
+      );
     }
     // #4 A8 — a `filter`'s `items`+`predicate` presence + whole-value shape.
     if (node.type === FILTER_ACTIVITY_TYPE) validateFilterConfig(node, errors);
@@ -6682,6 +6692,22 @@ export interface ContainerMembership {
 }
 
 /**
+ * #1600 C12b — whether `id` sits inside a `foreach`, at any depth (a stage in a
+ * loop body included), by the owners `containerMembership` resolves. Bounded by
+ * the container count, so a cyclic membership (refused elsewhere) cannot spin.
+ */
+function foreachOwned(id: string, containers: Container[]): boolean {
+  const { owner } = containerMembership(containers);
+  const kindOf = new Map(containers.map((c) => [c.id, c.kind]));
+  let at = owner.get(id);
+  for (let hops = 0; at !== undefined && hops <= containers.length; hops += 1) {
+    if (kindOf.get(at) === 'foreach') return true;
+    at = owner.get(at);
+  }
+  return false;
+}
+
+/**
  * Resolve which container OWNS each child, FIRST-declared-wins, and collect the
  * later claims that resolution overrode.
  *
@@ -6699,22 +6725,6 @@ export interface ContainerMembership {
  * author wrote so edge classification stays honest (the reason the reducer reads
  * membership from raw, not `#487`-filtered, children).
  */
-/**
- * #1600 C12b — whether `id` sits inside a `foreach`, at any depth (a stage in a
- * loop body included), by the owners `containerMembership` resolves. Bounded by
- * the container count, so a cyclic membership (refused elsewhere) cannot spin.
- */
-function foreachOwned(id: string, containers: Container[]): boolean {
-  const { owner } = containerMembership(containers);
-  const kindOf = new Map(containers.map((c) => [c.id, c.kind]));
-  let at = owner.get(id);
-  for (let hops = 0; at !== undefined && hops <= containers.length; hops += 1) {
-    if (kindOf.get(at) === 'foreach') return true;
-    at = owner.get(at);
-  }
-  return false;
-}
-
 export function containerMembership(containers: Container[]): ContainerMembership {
   const owner = new Map<string, string>();
   const duplicates: ContainerChildDuplicate[] = [];

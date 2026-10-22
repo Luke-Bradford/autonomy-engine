@@ -654,7 +654,13 @@ export function createEngine(doc: EngineDoc): Engine {
       if (typeof key !== 'string' || key === '' || type === undefined) {
         throw new SubstituteError(`'${node.type}' node has a malformed return value`);
       }
-      const raw = r['content'] ?? (type === 'string' || type === 'null' ? '' : undefined);
+      // Null reads no content at all (the save rules refuse one), and a String
+      // with none is "".
+      if (type === 'null') {
+        defineVariable(map, key, null);
+        continue;
+      }
+      const raw = r['content'] ?? (type === 'string' ? '' : undefined);
       if (typeof raw !== 'string') {
         throw new SubstituteError(`return value '${key}' must be text`);
       }
@@ -662,10 +668,12 @@ export function createEngine(doc: EngineDoc): Engine {
       if (mode === null) {
         throw new SubstituteError(`unterminated \${...} in return value '${key}'`);
       }
-      const resolved =
-        type === 'null'
-          ? null
-          : substitute(raw, buildCtx(scopedEvalState(state, sid)), 0, foreachItemOf(state, sid));
+      const resolved = substitute(
+        raw,
+        buildCtx(scopedEvalState(state, sid)),
+        0,
+        foreachItemOf(state, sid),
+      );
       const typed = coerceReturnValue(key, type, mode, resolved);
       if (!typed.ok) return fail(FAILURE_CODES.VARIABLE_TYPE_MISMATCH, typed.error);
       defineVariable(map, key, typed.value);

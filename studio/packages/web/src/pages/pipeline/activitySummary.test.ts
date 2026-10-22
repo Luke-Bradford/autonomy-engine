@@ -200,7 +200,7 @@ describe('activitySummary', () => {
       );
     expect(
       ret([
-        { key: 'total', type: 'number', value: '1' },
+        { key: 'total', type: 'number', content: '1' },
         { key: 'label', type: 'null' },
       ]),
     ).toBe('return total, label');

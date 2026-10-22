@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { DatasetColumn } from '../schemas/dataset.js';
 import { checkSinkCoverage } from './copy-automap.js';
 import { checkSourceDrift } from './schema-drift.js';
+import { isPlainObject } from '../engine/functions.js';
 
 /**
  * #996 M9 (#1185) — does a pinned copy mapping still AGREE with a dataset's
@@ -42,10 +43,6 @@ export interface ProjectedMapping {
    * evidence they were there.
    */
   readonly unnamed: number;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**

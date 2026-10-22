@@ -12,6 +12,7 @@ import {
 import { TriggerPublicSchema } from '../schemas/trigger.js';
 import { formatZodIssues } from '../schemas/zod-issues.js';
 import { RESOURCE_KINDS } from './paths.js';
+import { isPlainObject } from '../engine/functions.js';
 
 /**
  * A pipeline node as it appears in an EXPORT: `connectionId` is always
@@ -493,10 +494,6 @@ function parseJson(raw: string): unknown {
   } catch {
     throw new ImportError('Malformed import: invalid JSON');
   }
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**
