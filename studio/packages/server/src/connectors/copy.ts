@@ -37,6 +37,7 @@ import {
   sessionLogWriterOptions,
 } from './session-log-file.js';
 import type { IncrementalPlan, PartitionPlan, SourceIo } from './source-io.js';
+import { storeWatermark } from './copy-watermark-store.js';
 import type { ActivityContext, ActivityEvent, ResolvedDataset } from './types.js';
 
 /** The resolved SINK connection, as `ActivityContext` declares it. */
@@ -205,28 +206,6 @@ interface CopyWatermarkOutput {
   readonly column: string;
   readonly old: SqlParameterValue;
   readonly new: SqlParameterValue;
-}
-
-/**
- * #1600 OR41 C5a — store Automatic's new watermark once the sink has committed:
- * `null` when stored (or when there is nothing to store), else why it was not.
- * The rows are committed either way, so a failure says the next run copies them
- * again rather than letting the node succeed with a watermark left behind.
- * C5b — a Files as-is copy's too, once every file is written (`what`).
- */
-export function storeWatermark(
-  ctx: ActivityContext,
-  next: SqlParameterValue,
-  what: 'rows were committed' | 'files were copied',
-): string | null {
-  if (next === null || ctx.copyWatermark === undefined) return null;
-  try {
-    ctx.copyWatermark.commit(next);
-    return null;
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
-    return `the ${what}, but the watermark could not be stored, so the next run copies them again: ${reason}`;
-  }
 }
 
 /** #1600 OR41 C5a — Load Incremental on a source that is not a database. */

@@ -1775,9 +1775,11 @@ describe('#1600 OR41 C5b — Load Incremental (Modified since last successful ru
     const one = lease(null);
     // The real clock: a.txt was written less than the margin ago.
     const events = await run(INC, { copyWatermark: one.copyWatermark });
-    expect(outputs(events)).toMatchObject({ filesWritten: 0 });
-    const stored = Date.parse(String(one.stored[0]));
-    expect(Date.now() - stored).toBeGreaterThanOrEqual(COPY_FILES_SETTLE_MS - 50);
+    // Nothing selected, so nothing stored: the next run's window starts here too.
+    expect(outputs(events)).toMatchObject({ filesWritten: 0, watermark: { old: null, new: null } });
+    expect(one.stored).toEqual([]);
+    const later = await settled(INC, { copyWatermark: lease(null).copyWatermark });
+    expect(outputs(later.events)).toMatchObject({ filesWritten: 1 });
   });
 
   it('stores nothing when a file fails, so the next run selects the same window again', async () => {
@@ -1796,12 +1798,21 @@ describe('#1600 OR41 C5b — Load Incremental (Modified since last successful ru
     expect(reported).toEqual([]);
   });
 
-  it('advances over an empty window, and never moves back', async () => {
+  it('keeps the stored time over an empty window, and never moves back', async () => {
     await mkdir(join(src, 'in'));
     const one = lease(null);
     const empty = await settled(INC, { copyWatermark: one.copyWatermark });
-    expect(outputs(empty.events)).toMatchObject({ filesWritten: 0 });
-    expect(one.stored).toEqual([empty.cutoff]);
+    expect(outputs(empty.events)).toMatchObject({
+      filesWritten: 0,
+      watermark: { old: null, new: null },
+    });
+    expect(one.stored).toEqual([]);
+    const two0 = lease(empty.cutoff);
+    const again = await settled(INC, { copyWatermark: two0.copyWatermark });
+    expect(outputs(again.events)).toMatchObject({
+      watermark: { old: empty.cutoff, new: empty.cutoff },
+    });
+    expect(two0.stored).toEqual([]);
 
     await put('in/a.txt', 'a');
     const ahead = '2999-01-01T00:00:00.000Z';

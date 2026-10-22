@@ -83,9 +83,9 @@ export function copyLoadLiteralIssue(
 /**
  * #1600 OR41 C5b — a Files as-is copy's Load Incremental, *Modified since last
  * successful run*. Studio sets the modified window itself, so the explicit
- * Modified between (Load Full's) is refused beside it, and so is a Merge: its
- * one file would hold only the files changed since the last run, losing (under
- * Overwrite) or never adding (under Skip) the earlier ones. Read from the raw
+ * Modified between (Load Full's) is refused beside it, and so are a Merge (its
+ * one file would hold only the files changed since the last run, losing under
+ * Overwrite or never adding under Skip the earlier ones) and a Flatten (below). Read from the raw
  * config too, at save, where a `${}` Load would otherwise wait for dispatch.
  */
 export function copyFilesIncrementalIssues(
@@ -105,11 +105,16 @@ export function copyFilesIncrementalIssues(
       });
     }
   }
-  if (config['copyBehavior'] === 'merge') {
+  // Flatten names each file by its name alone, and a later run sees only its
+  // own files: `b/x.csv` would overwrite the `a/x.csv` an earlier run wrote,
+  // a clash Load Full refuses because it sees both.
+  if (config['copyBehavior'] === 'merge' || config['copyBehavior'] === 'flatten') {
     issues.push({
       field: 'copyBehavior',
       message:
-        'a merge under Load Incremental would hold only the files changed since the last run; set Load to Full, or Preserve hierarchy or Flatten',
+        config['copyBehavior'] === 'merge'
+          ? 'a merge under Load Incremental would hold only the files changed since the last run; set Copy behaviour to Preserve hierarchy, or Load to Full'
+          : 'flattening under Load Incremental could overwrite a file an earlier run copied from another folder under the same name; set Copy behaviour to Preserve hierarchy, or Load to Full',
     });
   }
   return issues;
@@ -156,11 +161,8 @@ export const copyFilesConfigSchema = z
       title: 'Load',
       description:
         'Incremental copies only the files created, changed or moved in since the last ' +
-        'successful run (the first run copies every file), using the time studio stored ' +
-        'then. A file whose times are set into the past, or one in a subfolder Skip ' +
-        'forbidden files skipped, is never copied; a file changed during a run is copied ' +
-        'again. Each source and sink folder keeps its own time, so a sink folder that ' +
-        'changes on every run copies every file each time.',
+        'successful run; the first run copies every file. Each source and sink folder ' +
+        'keeps its own time, so a sink folder that changes on every run copies every file.',
       options: optionTitles(copyLoadSchema, { full: 'Full', incremental: 'Incremental' }),
     }),
     modifiedStart: instant(

@@ -98,6 +98,20 @@ describe('Copy · Files as-is Load Incremental at save (C5b)', () => {
     }
   });
 
+  it('refuses the field rules at save: Merge, Flatten and Modified between under Incremental', () => {
+    for (const config of [
+      { copyBehavior: 'merge', sinkFileName: 'all.bin' },
+      { copyBehavior: 'flatten' },
+      { modifiedStart: '2026-10-01T00:00:00Z' },
+    ]) {
+      const errs = validate([files({ load: 'incremental', ...config })]);
+      expect(
+        errs.some((e) => e.includes('Incremental')),
+        JSON.stringify(config),
+      ).toBe(true);
+    }
+  });
+
   it('refuses an expression in Load', () => {
     const errs = validate([files({ load: '${pipeline().parameters.l}' })]);
     expect(errs).toContain(

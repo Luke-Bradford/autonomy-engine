@@ -44,7 +44,7 @@ import {
   streamInto,
 } from './fs-write.js';
 import { runPool } from './run-pool.js';
-import { storeWatermark } from './copy.js';
+import { storeWatermark } from './copy-watermark-store.js';
 import {
   checkLogConnectionFolder,
   sessionLogFileName,
@@ -82,6 +82,9 @@ interface IncrementalWindow {
   readonly contains: (st: BigIntStats) => boolean;
 }
 
+/** A file's time in milliseconds, from a `bigint` stat's nanoseconds. */
+const msOf = (ns: bigint): number => Number(ns) / 1e6;
+
 function incrementalWindow(
   stored: unknown,
 ): { ok: true; window: IncrementalWindow } | { ok: false; error: string } {
@@ -98,15 +101,16 @@ function incrementalWindow(
   if (old !== null && oldMs >= cutoffMs) {
     return { ok: true, window: { old, next: old, contains: () => false } };
   }
+  // Modified between's own window, read against the later of the two times.
+  const next = new Date(cutoffMs).toISOString();
+  const between = modifiedWindow(old ?? undefined, next);
+  if (!between.ok) return between;
   return {
     ok: true,
     window: {
       old,
-      next: new Date(cutoffMs).toISOString(),
-      contains: (st) => {
-        const t = Math.max(Number(st.mtimeNs), Number(st.ctimeNs)) / 1e6;
-        return (old === null || t >= oldMs) && t < cutoffMs;
-      },
+      next,
+      contains: (st) => between.contains(Math.max(msOf(st.mtimeNs), msOf(st.ctimeNs))),
     },
   };
 }
@@ -1029,17 +1033,18 @@ export async function* runFilesCopy(
     }
     incremental = planned.window;
   }
-  const selects =
-    incremental?.contains ?? ((st: BigIntStats) => window.contains(Number(st.mtimeNs) / 1e6));
+  const selects = incremental?.contains ?? ((st: BigIntStats) => window.contains(msOf(st.mtimeNs)));
   // C5b — `{old, new}` once every selected file is written and the time stored
-  // (or its store failed, which the failure says): never for a window not finished.
+  // (or its store failed, which the failure says): never for a window not
+  // finished. A window that selected nothing keeps the stored time, as a rows
+  // Copy with nothing above its watermark does (C5a): the next run's window
+  // starts where this one did, so nothing is lost and nothing is stored.
   let watermark: { old: string | null; new: string | null } | undefined;
-  const finishWindow = (): string | null => {
+  const finishWindow = (selected: boolean): string | null => {
     if (incremental === undefined) return null;
-    watermark = { old: incremental.old, new: incremental.next };
-    return incremental.next === incremental.old
-      ? null
-      : storeWatermark(ctx, incremental.next, 'files were copied');
+    const next = selected ? incremental.next : incremental.old;
+    watermark = { old: incremental.old, new: next };
+    return next === incremental.old ? null : storeWatermark(ctx, next, 'files were copied');
   };
 
   const signal = ctx.signal;
@@ -1205,9 +1210,8 @@ export async function* runFilesCopy(
     // Nothing selected: a success that creates no folders. Its lines are the
     // skips made while selecting (C6d-2).
     if (targets.length === 0) {
-      // C5b — an empty window is finished too: the next run starts at its cutoff.
-      const storeError = finishWindow();
-      if (storeError !== null) throw new Refusal(storeError);
+      // C5b — an empty window keeps the stored time.
+      finishWindow(false);
       const logError = yield* endLog();
       if (logError !== undefined && !(yield* logErrorWarned(logError))) {
         yield failed(
@@ -1414,7 +1418,7 @@ export async function* runFilesCopy(
     // C5b — stored the moment every file is written, before the log closes, as
     // a rows Copy's is as its sink commits: a log that then fails to close does
     // not leave the time behind, and the next run would copy these files again.
-    const storeError = finishWindow();
+    const storeError = finishWindow(true);
     if (storeError !== null) throw new Refusal(storeError);
     // Nothing that can throw sits between the lines and the success, so they
     // are yielded once (a rows Copy needs a guard for that; this does not):

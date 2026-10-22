@@ -443,6 +443,7 @@ describe('copy_files Load Incremental (C5b)', () => {
     [{ modifiedStart: '2026-10-01T00:00:00Z' }, 'modifiedStart'],
     [{ modifiedEnd: '2026-10-01T00:00:00Z' }, 'modifiedEnd'],
     [{ copyBehavior: 'merge', sinkFileName: 'all.bin' }, 'copyBehavior'],
+    [{ copyBehavior: 'flatten' }, 'copyBehavior'],
   ])('refuses %j under Incremental', (config, field) => {
     const found = issues({ sourcePath: 'in', load: 'incremental', ...config });
     expect(found).toEqual([expect.stringMatching(new RegExp(`^${field}: .*Incremental`))]);
