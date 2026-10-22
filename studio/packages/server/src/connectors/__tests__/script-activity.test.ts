@@ -1,7 +1,14 @@
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
-import { LOOKUP_ROW_CAP, SCRIPT_ACTIVITY_TYPE, WARNING_CODES } from '@autonomy-studio/shared';
+import {
+  LOOKUP_ROW_CAP,
+  SCRIPT_ACTIVITY_TYPE,
+  WARNING_CODES,
+  scriptDispatchConfigSchema,
+} from '@autonomy-studio/shared';
+import { LOOKUP_BYTE_CAP } from '../../limits.js';
+import { executeSqliteScript } from '../script.js';
 import { sqliteAdapter } from '../sqlite.js';
 import { cleanupTempRoots, seedDb, tempRoot, writableConfig } from './sqlite-fixtures.js';
 import type { ActivityContext, ActivityEvent } from '../types.js';
@@ -255,7 +262,7 @@ describe('Script on SQLite (C10a)', () => {
     expect(failureOf(events)).toMatchObject({
       kind: 'permanent',
       error: expect.stringMatching(
-        /^Script block 2 failed: UNIQUE constraint failed: k\.id — 1 earlier block\(s\) had already changed the store/,
+        /^Script block 2 failed: UNIQUE constraint failed: k\.id — 1 block\(s\) had already changed the store/,
       ),
     });
     expect(count(path)).toBe(0);
@@ -274,6 +281,82 @@ describe('Script on SQLite (C10a)', () => {
     expect(events).toContainEqual(
       expect.objectContaining({ type: 'warned', code: WARNING_CODES.SCRIPT_RESULT_TRUNCATED }),
     );
+  });
+
+  it('keeps rows up to the byte cap across the script, then only counts them, so what is kept is a prefix', async () => {
+    const { root, path } = store(0);
+    const db = new Database(path);
+    db.exec('create table w (v text)');
+    const insert = db.prepare('insert into w values (?)');
+    // 300 KiB, 300 KiB, 300 KiB, 600 KiB, then a small one: the fourth spends
+    // the cap, and the fifth would still fit but must not be kept.
+    for (const size of [300, 300, 300, 600, 1]) insert.run('x'.repeat(size * 1024));
+    db.close();
+    const events = await run(
+      scriptCtx({ roots: [root], path }, [
+        { type: 'query', sql: 'select v from w order by rowid' },
+        { type: 'query', sql: 'select 1 as n' },
+      ]),
+    );
+    const outputs = outputsOf(events);
+    const sets = outputs['resultSets'] as { rowCount: number; rows: { v?: string }[] }[];
+    expect(sets.map((set) => set.rowCount)).toEqual([5, 1]);
+    expect(sets[0]!.rows.map((r) => r.v!.length)).toEqual([300 * 1024, 300 * 1024, 300 * 1024]);
+    expect(sets[1]!.rows).toEqual([]);
+    expect(outputs['truncated']).toBe(true);
+    expect(events).toContainEqual({
+      type: 'warned',
+      code: WARNING_CODES.SCRIPT_RESULT_TRUNCATED,
+      reason: `the result sets reached the ${LOOKUP_BYTE_CAP}-byte cap a script may keep, so later rows were counted and not kept`,
+    });
+  });
+
+  it('Run as one transaction does not repeat a rollback SQLite already did', async () => {
+    const { root, path } = store(2);
+    const db = new Database(path);
+    db.exec('create table k (id integer primary key); insert into k values (1)');
+    db.close();
+    const events = await run(
+      scriptCtx(
+        writableConfig(root, path),
+        [
+          { type: 'nonQuery', sql: 'delete from t' },
+          { type: 'nonQuery', sql: 'insert or rollback into k values (1)' },
+        ],
+        { runAsOneTransaction: true },
+      ),
+    );
+    expect(failureOf(events)).toMatchObject({
+      kind: 'permanent',
+      error: 'Script block 2 failed: UNIQUE constraint failed: k.id',
+    });
+    expect(count(path)).toBe(2);
+  });
+
+  it('a cancel between blocks stays cancelled and names the block already applied', async () => {
+    const { path } = store(2);
+    const db = new Database(path);
+    const controller = new AbortController();
+    try {
+      const config = scriptDispatchConfigSchema.parse({
+        blocks: [
+          { type: 'nonQuery', sql: 'delete from t' },
+          { type: 'nonQuery', sql: 'delete from t' },
+        ],
+      });
+      // The first block runs before the first yield, so the cancel lands between them.
+      const running = executeSqliteScript(db, config, false, controller.signal);
+      controller.abort();
+      await expect(running).rejects.toMatchObject({
+        kind: 'cancelled',
+        message: expect.stringMatching(
+          /^script aborted — 1 block\(s\) had already changed the store/,
+        ),
+      });
+    } finally {
+      db.close();
+    }
+    expect(count(path)).toBe(0);
   });
 
   it('Capture result sets Off keeps no rows but still counts them', async () => {

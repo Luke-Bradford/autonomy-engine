@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { literalText, optionTitles, presented } from '../schemas/field-presentation.js';
 import { SqlParameterValueSchema } from './dataset-config.js';
+import { LOOKUP_ROW_CAP } from './lookup-config.js';
 
 /**
  * #1600 OR41 C10a — a Script block's Type (activity catalogue §4.5, after ADF's
@@ -12,6 +13,14 @@ import { SqlParameterValueSchema } from './dataset-config.js';
 export const SCRIPT_BLOCK_TYPES = ['query', 'nonQuery'] as const;
 export const scriptBlockTypeSchema = z.enum(SCRIPT_BLOCK_TYPES);
 export type ScriptBlockType = z.infer<typeof scriptBlockTypeSchema>;
+/** The Type of a block that changes the store, which needs a writable connection. */
+export const SCRIPT_NON_QUERY_BLOCK = 'nonQuery' satisfies ScriptBlockType;
+
+/**
+ * The rows one result set keeps under *First 1000 rows*. Lookup's default row
+ * bound, for Lookup's reason: result sets are outputs, and outputs are durable.
+ */
+export const SCRIPT_RESULT_ROW_CAP = LOOKUP_ROW_CAP;
 
 /**
  * #1600 OR41 C10a — *Capture result sets* (§4.5 Logging): how many of a Query
@@ -81,7 +90,7 @@ const scriptInputShape = <B extends z.ZodType>(bindValue: B) =>
           "How many of each Query block's rows its result set keeps, up to 1 MiB across the script. Every row is still counted in rowCount.",
         options: optionTitles(scriptCaptureSchema, {
           off: 'Off',
-          firstRows: 'First 1000 rows',
+          firstRows: `First ${SCRIPT_RESULT_ROW_CAP} rows`,
         }),
       }),
       blocks: presented(
@@ -101,12 +110,12 @@ const scriptInputShape = <B extends z.ZodType>(bindValue: B) =>
                 sql: presented(literalText(z.string().min(1)), {
                   title: 'SQL',
                   description:
-                    'One statement. Literal: write :name for each value and give it in Parameters.',
+                    'One statement. Write :name for each value and give it in Parameters; the SQL itself is never evaluated.',
                 }),
                 parameters: presented(z.record(z.string().min(1), bindValue).optional(), {
                   title: 'Parameters',
                   description:
-                    'A value for each :name in the SQL, keyed without the colon, as a JSON object. A value may be ${...}.',
+                    'A value for each :name in the SQL, keyed without the colon. A value may be ${...}.',
                 }),
               })
               // Strict, so the dock draws the blocks as a table (`deriveElementFields`).

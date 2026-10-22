@@ -295,6 +295,13 @@ export function normaliseValue(value: unknown): SqliteValue {
   return value as SqliteValue;
 }
 
+/** A row with every column through {@link normaliseValue}. */
+export function normaliseRow(row: Record<string, unknown>): SqliteRow {
+  const normalised: SqliteRow = {};
+  for (const key of Object.keys(row)) normalised[key] = normaliseValue(row[key]);
+  return normalised;
+}
+
 /**
  * The one READ-ONLY open every sqlite read uses: the path confined to the
  * connection's roots, the file required to exist (a missing store is a store

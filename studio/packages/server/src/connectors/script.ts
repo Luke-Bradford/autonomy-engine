@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 import type { z } from 'zod';
 import {
-  LOOKUP_ROW_CAP,
+  SCRIPT_RESULT_ROW_CAP,
   WARNING_CODES,
   formatZodIssues,
   scriptDispatchConfigSchema,
@@ -22,7 +22,7 @@ import {
 import { yieldToEventLoop } from './scheduling.js';
 import { attachedDatabases, openSqliteWriter } from './sqlite-sink.js';
 import {
-  normaliseValue,
+  normaliseRow,
   openSqliteReadOnly,
   storeFailure,
   type sqliteConnectionConfigSchema,
@@ -110,14 +110,21 @@ function asStatement(block: ScriptBlock): PreCopyScript {
 }
 
 /**
- * The result sets a script keeps: at most `LOOKUP_ROW_CAP` rows each, and
+ * The result sets a script keeps: at most `SCRIPT_RESULT_ROW_CAP` rows each, and
  * `LOOKUP_BYTE_CAP` across them all, measured as the row will be serialised.
  * Off keeps none and truncates nothing.
+ *
+ * Each cap LATCHES, so what is kept is always a prefix: a set that reached its
+ * rows keeps none after them, and once the bytes are spent no later row of any
+ * set is kept, however small. Past a cap a row is only counted, never read
+ * into a value (`add` takes it lazily), so a value that cannot be kept cannot
+ * fail the script either.
  */
 class ResultCapture {
   readonly sets: ResultSet[] = [];
   private bytes = 0;
   private cause: 'rows' | 'bytes' | null = null;
+  private bytesSpent = false;
 
   constructor(private readonly mode: ScriptCapture) {}
 
@@ -127,28 +134,34 @@ class ResultCapture {
     return set;
   }
 
-  add(set: ResultSet, raw: Record<string, unknown>): void {
+  add(set: ResultSet, read: () => Record<string, unknown>): void {
     set.rowCount += 1;
-    if (this.mode === 'off') return;
-    if (set.rows.length >= LOOKUP_ROW_CAP) {
+    if (this.mode === 'off' || this.bytesSpent) return;
+    if (set.rows.length >= SCRIPT_RESULT_ROW_CAP) {
       this.cause ??= 'rows';
       return;
     }
+    const raw = read();
     const remaining = LOOKUP_BYTE_CAP - this.bytes;
     // Lookup's two checks, in its order: the estimate refuses a row that cannot
     // fit before `logSafeRow` copies it, and the exact size decides the rest.
     if (estimateRowLowerBound(raw, undefined, remaining) > remaining) {
-      this.cause = 'bytes';
+      this.spend();
       return;
     }
     const row = logSafeRow(raw, set.rowCount - 1, undefined);
     const size = Buffer.byteLength(JSON.stringify(row), 'utf8');
     if (size > remaining) {
-      this.cause = 'bytes';
+      this.spend();
       return;
     }
     set.rows.push(row);
     this.bytes += size;
+  }
+
+  private spend(): void {
+    this.bytesSpent = true;
+    this.cause = 'bytes';
   }
 
   get truncated(): boolean {
@@ -158,8 +171,8 @@ class ResultCapture {
   /** The prose for a truncation, naming the bound, never a row value. */
   reason(): string {
     return this.cause === 'rows'
-      ? `a result set kept its first ${LOOKUP_ROW_CAP} rows; rowCount counts them all`
-      : `the result sets reached the ${LOOKUP_BYTE_CAP}-byte cap a script may keep; rowCount counts every row`;
+      ? `a result set kept its first ${SCRIPT_RESULT_ROW_CAP} rows; rowCount counts them all`
+      : `the result sets reached the ${LOOKUP_BYTE_CAP}-byte cap a script may keep, so later rows were counted and not kept`;
   }
 }
 
@@ -199,9 +212,10 @@ function prepareBlock(
 
 /**
  * Run every block on the open store, in order. Throws a `DatasetIoError` whose
- * kind and message are the node's outcome.
+ * kind and message are the node's outcome. Exported for its test, which drives
+ * a cancel between two blocks.
  */
-async function executeSqliteScript(
+export async function executeSqliteScript(
   db: Database.Database,
   config: ScriptDispatchConfig,
   readOnly: boolean,
@@ -241,6 +255,10 @@ async function executeSqliteScript(
 
       const statement = prepareBlock(db, block, i);
       const parameters = usedSqliteParameters(asStatement(block));
+      // Counted once it starts, not once it ends: a Query block that writes
+      // (`INSERT … RETURNING`) has written by its first row, so a failure later
+      // in its rows still leaves the write applied.
+      const writes = !inTransaction && !statement.readonly;
       try {
         if (block.type === 'query') {
           const set = capture.begin();
@@ -256,9 +274,7 @@ async function executeSqliteScript(
                 break;
               }
               const row = next.value as Record<string, unknown>;
-              const normalised: Record<string, unknown> = {};
-              for (const key of Object.keys(row)) normalised[key] = normaliseValue(row[key]);
-              capture.add(set, normalised);
+              capture.add(set, () => normaliseRow(row));
             }
             if (done) break;
             await yieldToEventLoop();
@@ -270,10 +286,12 @@ async function executeSqliteScript(
           recordsAffected += Number(info.changes);
         }
       } catch (err) {
+        if (writes && block.type === 'query') committedWrites += 1;
         if (err instanceof DatasetIoError || err instanceof LookupValueError) throw err;
         throw storeFailure(err, `${blockName(i)} failed`);
       }
 
+      if (writes) committedWrites += 1;
       const attached = attachedDatabases(db);
       if (attached.length > 0) {
         throw new DatasetIoError(
@@ -281,7 +299,6 @@ async function executeSqliteScript(
           `${blockName(i)} attached a database (${attached.join(', ')}), which a Script never may`,
         );
       }
-      if (!inTransaction && !statement.readonly) committedWrites += 1;
     }
 
     if (inTransaction) {
@@ -301,7 +318,10 @@ async function executeSqliteScript(
       err instanceof DatasetIoError || err instanceof LookupValueError
         ? err
         : storeFailure(err, 'the script failed');
-    if (inTransaction) {
+    // SQLite may have ended the transaction itself (`INSERT OR ROLLBACK`, a
+    // `RAISE(ROLLBACK)`, an I/O error), and a rollback then throws: the store is
+    // already rolled back, which is what this would have done.
+    if (inTransaction && db.inTransaction) {
       try {
         db.exec('rollback');
       } catch {
@@ -319,7 +339,7 @@ async function executeSqliteScript(
           : 'permanent';
       failure = new DatasetIoError(
         kind,
-        `${failure.message} — ${committedWrites} earlier block(s) had already changed the store and stay applied, so this is not retried. Turn on Run as one transaction to make the script all or nothing`,
+        `${failure.message} — ${committedWrites} block(s) had already changed the store and stay applied, so this is not retried. Turn on Run as one transaction to make the script all or nothing`,
       );
     }
     throw failure;

@@ -22,7 +22,7 @@ import { COPY_BATCH_ROWS, SQLITE_BUSY_TIMEOUT_MS } from '../limits.js';
 import {
   confineStorePath,
   findSqliteRelation,
-  normaliseValue,
+  normaliseRow,
   notASqliteKind,
   openSqliteReadOnly,
   parseTableTarget,
@@ -488,10 +488,7 @@ export async function* readSqliteDatasetBatches(
             done = true;
             break;
           }
-          const row = next.value as Record<string, unknown>;
-          const normalised: SqliteRow = {};
-          for (const key of Object.keys(row)) normalised[key] = normaliseValue(row[key]);
-          batch.push(normalised);
+          batch.push(normaliseRow(next.value as Record<string, unknown>));
         }
       } catch (err) {
         throw storeFailure(err, 'the dataset statement failed mid-scan');

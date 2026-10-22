@@ -3,6 +3,7 @@ import {
   COPY_FILES_ACTIVITY_TYPE,
   DELETE_ACTIVITY_TYPE,
   SCRIPT_ACTIVITY_TYPE,
+  SCRIPT_NON_QUERY_BLOCK,
   StrictNodeSchema,
   isInactive,
   validatePipelineDoc,
@@ -163,12 +164,13 @@ export function descriptionIssues(nodes: Node[]): string[] {
  * (`runFilesCopy`), so the author hears it here first. Above all for a stored
  * Copy file or Move file, which opens as this type (`lowerRetiredTypes`), or a
  * stored Delete file, which opens as Delete (C9b), while its connection never
- * needed the permission. C10a — a Script with a Non-query block on a sqlite
- * connection that does not allow writes. C6c — and either Copy mode whose session log goes to a
+ * needed the permission. C6c — and either Copy mode whose session log goes to a
  * folder with no log connection, or one that does not allow writes. A warning,
  * not an issue: the
  * connection is a separate, mutable row, and the run checks it at dispatch. A
  * `${}` or unknown connection id is skipped, as only the run knows it.
+ * C10a — and a Script with a Non-query block on a sqlite connection that does
+ * not allow writes.
  */
 export function writeAccessWarnings(
   nodes: Node[],
@@ -196,7 +198,10 @@ export function writeAccessWarnings(
       const c = n.connectionId === undefined ? undefined : byId.get(n.connectionId);
       const blocks: unknown[] = Array.isArray(n.config['blocks']) ? n.config['blocks'] : [];
       const writes = blocks.some(
-        (b) => typeof b === 'object' && b !== null && (b as { type?: unknown }).type === 'nonQuery',
+        (b) =>
+          typeof b === 'object' &&
+          b !== null &&
+          (b as { type?: unknown }).type === SCRIPT_NON_QUERY_BLOCK,
       );
       return writes && c?.kind === 'sqlite' && c.config['writable'] !== true
         ? [
