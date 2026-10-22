@@ -54,6 +54,7 @@ import {
   writableFs,
 } from './session-log-file.js';
 import type { ActivityContext, ActivityEvent } from './types.js';
+import { FS_STREAM_CHUNK_BYTES } from '../limits.js';
 
 /**
  * #1600 OR41 C5b — how far behind the clock Load Incremental's cutoff is taken.
@@ -114,7 +115,6 @@ function incrementalWindow(
     },
   };
 }
-import { FS_STREAM_CHUNK_BYTES } from '../limits.js';
 
 /**
  * #1600 OR41 C1a — Copy · Files as-is (activity catalogue §4.1): copy files
