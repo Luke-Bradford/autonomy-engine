@@ -59,6 +59,12 @@ test.describe('#1600 C12b — Pipeline return value', () => {
       .getByRole('textbox', { name: 'Return keys row 2 content', exact: true })
       .fill('done');
 
+    // Content takes dynamic content (ƒx); Key is literal, so it has none.
+    const cellPicker = (cell: string) =>
+      pane.getByRole('button', { name: `Insert reference into Return keys row 1 ${cell}` });
+    await expect(cellPicker('content')).toHaveCount(1);
+    await expect(cellPicker('key')).toHaveCount(0);
+
     // At 1440x900 the table's rows are on screen, and the tab does not scroll sideways.
     const row = await pane
       .getByRole('textbox', { name: 'Return keys row 2 key', exact: true })
