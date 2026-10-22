@@ -104,6 +104,15 @@ export function activitySummary(
       // #1600 C12a — a Set variable's Operation; an unknown one summarises nothing.
       const op = variableWriteOp(node);
       if (op === undefined) return null;
+      // #1600 C12b — a Pipeline return value lists the keys it returns.
+      if (op === 'return') {
+        const rows: unknown[] = Array.isArray(c.returnValues) ? c.returnValues : [];
+        const keys = rows.flatMap((r) => {
+          const key = typeof r === 'object' && r !== null ? text((r as { key?: unknown }).key) : undefined;
+          return key === undefined ? [] : [key];
+        });
+        return keys.length === 0 ? null : `return ${keys.join(', ')}`;
+      }
       return assignment(c.variable, op === 'set' ? '=' : '+=', c.value);
     }
     case FILTER_ACTIVITY_TYPE: {
