@@ -135,6 +135,8 @@ test.describe('#1600 C6e-1 — Copy Verify after copy', () => {
         'usedParallelCopies',
         // C6c-1b.
         'logPath',
+        // C5a, declared for every new copy; yielded under Load Incremental only.
+        'watermark',
       ]);
 
       const runId = await fireAndSettle(page, latest.id, 'e2e 1600 c6e');
