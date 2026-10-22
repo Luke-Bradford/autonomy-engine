@@ -667,7 +667,11 @@
 // Bump 26's precedent: a pre-C10b build refuses a Script bound to a postgres
 // connection at the catalog's `connectionKinds` check, so it is refused at
 // import rather than half-loaded.
-export const CATALOG_VERSION = 73;
+// BUMP 73→74 for #1600 OR41 C10b-2a: a Script block's `parameterDirections`
+// (Out and In-out parameters, filling `outputParameters`). The block is strict,
+// so a pre-C10b-2a build refuses the new key at import rather than
+// half-loading the script.
+export const CATALOG_VERSION = 74;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

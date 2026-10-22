@@ -5,14 +5,14 @@ import {
   WARNING_CODES,
   formatZodIssues,
   scriptDispatchConfigSchema,
+  scriptOutputParameterNames,
   type ScriptCapture,
   type ScriptDispatchConfig,
 } from '@autonomy-studio/shared';
 import { failed } from './activity-events.js';
 import { DatasetIoError } from './dataset-io-error.js';
 import { LOOKUP_BYTE_CAP } from '../limits.js';
-import { estimateRowLowerBound } from './lookup-bounds.js';
-import { LookupValueError, logSafeRow } from './lookup.js';
+import { LookupValueError, keepRowWithin } from './lookup.js';
 import {
   authoredStatementRefusal,
   usedSqliteParameters,
@@ -184,20 +184,12 @@ export class ResultCapture {
       this.cause ??= 'rows';
       return;
     }
-    const raw = read();
-    const remaining = LOOKUP_BYTE_CAP - this.bytes;
-    // Lookup's two checks, in its order: the estimate refuses a row that cannot
-    // fit before `logSafeRow` copies it, and the exact size decides the rest.
-    if (estimateRowLowerBound(raw, undefined, remaining) > remaining) {
+    const kept = keepRowWithin(read(), set.rowCount - 1, undefined, LOOKUP_BYTE_CAP - this.bytes);
+    if (kept === null) {
       this.spend();
       return;
     }
-    const row = logSafeRow(raw, set.rowCount - 1, undefined);
-    const size = Buffer.byteLength(JSON.stringify(row), 'utf8');
-    if (size > remaining) {
-      this.spend();
-      return;
-    }
+    const { row, size } = kept;
     set.rows.push(row);
     this.bytes += size;
   }
@@ -423,6 +415,15 @@ export async function* runSqliteScript(
   // Every block is checked before the store is opened, so nothing runs when a
   // later block is refused.
   for (const [i, block] of config.blocks.entries()) {
+    // C10b-2a — an Out value is read back from a procedure's row.
+    const output = scriptOutputParameterNames(block)[0];
+    if (output !== undefined) {
+      yield failed(
+        'permanent',
+        `${blockName(i)} gives '${output}' an Out or In-out direction, which SQLite has no stored procedures to fill; Out and In-out parameters run on a postgres connection`,
+      );
+      return;
+    }
     const refusal = authoredStatementRefusal(
       asStatement(block),
       'sqlite',
@@ -493,10 +494,14 @@ export async function* runSqliteScript(
   yield* scriptSucceeded(result.capture, result.recordsAffected);
 }
 
+/** The `outputParameters` output: each Out and In-out value by name (C10b-2a). */
+export type OutputParameters = Record<string, unknown>;
+
 /** A finished script's events, on either store: the truncation warning, then its outputs. */
 export function* scriptSucceeded(
   capture: ResultCapture,
   recordsAffected: number,
+  outputParameters: OutputParameters = {},
 ): Generator<ActivityEvent> {
   if (capture.truncated) {
     yield { type: 'warned', code: WARNING_CODES.SCRIPT_RESULT_TRUNCATED, reason: capture.reason() };
@@ -507,8 +512,8 @@ export function* scriptSucceeded(
       resultSetCount: capture.sets.length,
       resultSets: capture.sets,
       recordsAffected,
-      // C10b-2 fills it from PostgreSQL's Out parameters; SQLite has none.
-      outputParameters: {},
+      // PostgreSQL's Out and In-out parameters (C10b-2a); SQLite has none.
+      outputParameters,
       truncated: capture.truncated,
     },
   };

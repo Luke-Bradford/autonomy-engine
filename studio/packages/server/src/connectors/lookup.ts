@@ -77,7 +77,7 @@ export class LookupValueError extends Error {
   constructor(
     readonly column: string,
     readonly rowIndex: number,
-    detail: string,
+    readonly detail: string,
   ) {
     super(`row ${rowIndex}, column '${column}': ${detail}`);
     this.name = 'LookupValueError';
@@ -272,6 +272,41 @@ export function logSafeRow(
 }
 
 /**
+ * #1794 — one row kept within `remaining` bytes, or `null` when it cannot fit:
+ * the check Lookup's rows, Script's result sets and Script's Out parameters
+ * share. Returns the log-safe row and its size as serialised.
+ *
+ * #1224 — two checks, the first the reason the second is safe to make.
+ * `logSafeRow` base64s a BLOB and `JSON.stringify` renders the whole row, so
+ * measuring only after them made peak memory a function of the largest single
+ * ROW rather than of the cap: a 500 MB sqlite BLOB was copied twice on its way
+ * to being thrown away. `estimateRowLowerBound` charges the two kinds that
+ * arrive unbounded from their own size fields, so a row that cannot fit is
+ * refused without being touched. It is a LOWER bound, so it can only ever
+ * refuse early; a row it admits is still measured exactly.
+ *
+ * Measured on the row AS SERIALISED, keys, punctuation and nulls included,
+ * because that is the string drizzle will hand the insert. See
+ * `LOOKUP_BYTE_CAP` for why the pump's value-only `byteSizeOf` does not bound
+ * what this is here to bound. `Buffer.byteLength`, not `shared`'s
+ * `utf8ByteLength`: that one is not on the package's public surface, and the
+ * barrel says why: the evaluator's helpers "would make engine-internal
+ * machinery part of `@autonomy-studio/shared`'s API by accident". Node's is
+ * exact UTF-8 and this file only ever runs on the server.
+ */
+export function keepRowWithin(
+  raw: Record<string, unknown>,
+  rowIndex: number,
+  nullValue: string | undefined,
+  remaining: number,
+): { row: Record<string, unknown>; size: number } | null {
+  if (estimateRowLowerBound(raw, nullValue, remaining) > remaining) return null;
+  const row = logSafeRow(raw, rowIndex, nullValue);
+  const size = Buffer.byteLength(JSON.stringify(row), 'utf8');
+  return size > remaining ? null : { row, size };
+}
+
+/**
  * §5's declared outputs, exactly the six the catalog entry declares. `count` is
  * ADF's name for `rowCount`, which stays for the nodes that read it (catalogue
  * §8). `firstRow` is `null` when no row was materialised; `truncated` says
@@ -459,36 +494,12 @@ export async function* runLookupActivity(
           cause = 'rows';
           break outer;
         }
-        // #1224 — the FIRST of the two checks, and the reason the second one is
-        // safe to make. `logSafeRow` below base64s a BLOB and `JSON.stringify`
-        // renders the whole row, so measuring only after them made peak memory a
-        // function of the largest single ROW rather than of the cap: a 500 MB
-        // sqlite BLOB was copied twice on its way to being thrown away.
-        // `estimateRowLowerBound` charges the two kinds that arrive unbounded
-        // from their own size fields, so a row that cannot fit is refused
-        // without being touched. It is a LOWER bound, so it can only ever refuse
-        // early — a row it admits is still measured exactly below.
-        const remaining = LOOKUP_BYTE_CAP - bytes;
-        if (estimateRowLowerBound(raw, coercion.nullValue, remaining) > remaining) {
+        const kept = keepRowWithin(raw, rows.length, coercion.nullValue, LOOKUP_BYTE_CAP - bytes);
+        if (kept === null) {
           cause = rows.length === 0 ? 'first-row' : 'bytes';
           break outer;
         }
-        const row = logSafeRow(raw, rows.length, coercion.nullValue);
-        // Measured on the row AS SERIALISED — keys, punctuation and nulls
-        // included — because that is the string drizzle will hand the insert.
-        // See `LOOKUP_BYTE_CAP` for why the pump's value-only `byteSizeOf` does
-        // not bound what this is here to bound.
-        // `Buffer.byteLength`, not `shared`'s `utf8ByteLength`: that one is not
-        // on the package's public surface, and the barrel says why — the
-        // evaluator's helpers "would make engine-internal machinery part of
-        // `@autonomy-studio/shared`'s API by accident". Widening it for a
-        // server-only measurement would be the accident. Node's is exact UTF-8
-        // and this file only ever runs on the server.
-        const size = Buffer.byteLength(JSON.stringify(row), 'utf8');
-        if (bytes + size > LOOKUP_BYTE_CAP) {
-          cause = rows.length === 0 ? 'first-row' : 'bytes';
-          break outer;
-        }
+        const { row, size } = kept;
         rows.push(row);
         bytes += size;
         // Its one row is all First row only asked for; reading on would only
