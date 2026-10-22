@@ -442,6 +442,22 @@ describe('writeAccessWarnings (#1600 OR41 C1b)', () => {
     ]);
   });
 
+  it('#1600 OR41 C10b-1 — names a Script with a Non-query block on a postgres connection that does not allow writes', () => {
+    const script = (id: string, connectionId: string): Node => ({
+      ...node(id, { blocks: [{ type: 'nonQuery', sql: 'delete from t' }] }),
+      type: 'script',
+      connectionId,
+    });
+    expect(
+      writeAccessWarnings(
+        [script('a', 'pg'), script('b', 'pgrw')],
+        [conn('pg', undefined, 'postgres'), conn('pgrw', true, 'postgres')],
+      ),
+    ).toEqual([
+      "node 'a': the connection 'Conn pg' does not allow writes, which a Non-query block needs",
+    ]);
+  });
+
   it('#1600 OR41 C6c-1a — names a folder log with no log connection, or one that does not allow writes', () => {
     const logged = (id: string, log?: string) =>
       copy(id, { source: 'rw', sink: 'rw', ...(log !== undefined && { log }) }, 'keep', {

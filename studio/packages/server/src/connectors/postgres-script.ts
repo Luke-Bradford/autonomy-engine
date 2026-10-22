@@ -100,7 +100,7 @@ export type PostgresStatementStream = (
  * clear that timer. So the flag is turned off after pg sets it. The live test
  * pins it: a streamed result holds no rows.
  */
-class StreamedQuery extends pg.Query {
+export class StreamedQuery extends pg.Query {
   handleRowDescription(msg: unknown): void {
     (pg.Query.prototype as unknown as { handleRowDescription(m: unknown): void })
       .handleRowDescription.call(this, msg);
