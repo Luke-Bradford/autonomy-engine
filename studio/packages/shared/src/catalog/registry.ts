@@ -1615,8 +1615,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
       out('resultSets', 'json'),
       // The rows the Non-query blocks changed, summed.
       out('recordsAffected', 'number'),
-      // Always `{}` so far: SQLite has no output parameters, and PostgreSQL's
-      // Out parameters are C10b-2. Declared now so they change no contract.
+      // Each Out and In-out value by name, read from the row a PostgreSQL
+      // block returns (C10b-2a). Always `{}` on SQLite, which has none.
       out('outputParameters', 'json'),
       out('truncated', 'boolean'),
     ],

@@ -22,7 +22,12 @@ import type { ActivityContext, ActivityEvent } from '../types.js';
 
 afterEach(cleanupTempRoots);
 
-type Block = { type: 'query' | 'nonQuery'; sql: string; parameters?: Record<string, unknown> };
+type Block = {
+  type: 'query' | 'nonQuery';
+  sql: string;
+  parameters?: Record<string, unknown>;
+  parameterDirections?: Record<string, string>;
+};
 
 function scriptCtx(
   connectionConfig: Record<string, unknown>,
@@ -183,6 +188,47 @@ describe('Script on SQLite (C10a)', () => {
     expect(failureOf(events).error).toBe(
       "Script block 1 binds 'id' with no value in its Parameters",
     );
+  });
+
+  it('refuses an Out or In-out parameter, which SQLite has no procedure to fill (C10b-2a)', async () => {
+    const { root, path } = store(2);
+    for (const direction of ['out', 'inOut']) {
+      const events = await run(
+        scriptCtx(writableConfig(root, path), [
+          { type: 'nonQuery', sql: 'delete from t' },
+          {
+            type: 'query',
+            sql: 'select :n as n',
+            parameters: { n: 1 },
+            parameterDirections: { n: direction },
+          },
+        ]),
+      );
+      expect(failureOf(events)).toMatchObject({
+        kind: 'permanent',
+        error:
+          "Script block 2 gives 'n' an Out or In-out direction, which SQLite has no stored procedures to fill; Out and In-out parameters run on a postgres connection",
+      });
+    }
+    expect(count(path)).toBe(2);
+  });
+
+  it('runs an In direction on SQLite as a plain bind value (C10b-2a)', async () => {
+    const { root, path } = store(1);
+    const events = await run(
+      scriptCtx(writableConfig(root, path), [
+        {
+          type: 'query',
+          sql: 'select :n as n',
+          parameters: { n: 3 },
+          parameterDirections: { n: 'in' },
+        },
+      ]),
+    );
+    expect(outputsOf(events)).toMatchObject({
+      resultSets: [{ rowCount: 1, rows: [{ n: 3 }] }],
+      outputParameters: {},
+    });
   });
 
   it('refuses a Query whose statement returns no rows', async () => {

@@ -157,7 +157,8 @@ test.describe('#1600 C10a — Script on SQLite', () => {
  * server, so the run itself is proved against a live one in
  * `postgres-script.test.ts` (CI's service container); here the authoring path:
  * the picker offers a postgres connection, the Problems list names one that
- * does not allow writes, and the node saves bound to it.
+ * does not allow writes, and the node saves bound to it. C10b-2a — an Out
+ * parameter's direction is authored on the Script tab and saved with the block.
  */
 test.describe('#1600 C10b-1 — Script on PostgreSQL', () => {
   test('binds a postgres connection, warns that a Non-query block needs writes, and saves', async ({
@@ -175,7 +176,11 @@ test.describe('#1600 C10b-1 — Script on PostgreSQL', () => {
         {
           id: 'script1',
           type: 'script',
-          config: { blocks: [{ type: 'nonQuery', sql: 'DELETE FROM staging.orders' }] },
+          config: {
+            blocks: [
+              { type: 'nonQuery', sql: 'CALL etl.tally(:n, :total)', parameters: { n: '1' } },
+            ],
+          },
           position: { x: 0, y: 0 },
         },
       ],
@@ -190,6 +195,13 @@ test.describe('#1600 C10b-1 — Script on PostgreSQL', () => {
     await expect(option).not.toContainText("can't use this kind");
     await page.keyboard.press('Escape');
     await pickConnection(page, 'Connection', { id: pg });
+
+    // C10b-2a — Out is authored beside Parameters, in the block's own row.
+    await pane.getByRole('tab', { name: 'Script', exact: true }).click();
+    await pane
+      .getByLabel('Script blocks row 1 parameter directions — JSON', { exact: true })
+      .fill('{"total": "out"}');
+    await pane.getByRole('button', { name: 'Apply config' }).click();
 
     // A Non-query block on a connection that does not allow writes is a warning,
     // not a refusal: the run refuses it, and Save still keeps the work.
@@ -207,10 +219,19 @@ test.describe('#1600 C10b-1 — Script on PostgreSQL', () => {
       await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`)
     ).json()) as { version: number; catalogVersion: number; nodes: Record<string, unknown>[] }[];
     const latest = versions.sort((a, b) => b.version - a.version)[0]!;
-    expect(latest.catalogVersion).toBe(73);
+    expect(latest.catalogVersion).toBe(74);
     expect(latest.nodes.find((n) => n['id'] === 'script1')).toMatchObject({
       type: 'script',
       connectionId: pg,
+      config: {
+        blocks: [
+          {
+            sql: 'CALL etl.tally(:n, :total)',
+            parameters: { n: '1' },
+            parameterDirections: { total: 'out' },
+          },
+        ],
+      },
     });
 
     await expectQuiet(page, problems);

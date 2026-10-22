@@ -7,6 +7,7 @@ import {
   WARNING_CODES,
   scriptDispatchConfigSchema,
 } from '@autonomy-studio/shared';
+import { LOOKUP_BYTE_CAP } from '../../limits.js';
 import { LookupValueError } from '../lookup.js';
 import { createPostgresAdapter } from '../postgres.js';
 import {
@@ -28,7 +29,12 @@ import type { ActivityContext, ActivityEvent } from '../types.js';
  * refusals are proved.
  */
 
-type Block = { type: 'query' | 'nonQuery'; sql: string; parameters?: Record<string, unknown> };
+type Block = {
+  type: 'query' | 'nonQuery';
+  sql: string;
+  parameters?: Record<string, unknown>;
+  parameterDirections?: Record<string, string>;
+};
 
 const SECRET = 's3cr3t-pw';
 
@@ -175,6 +181,7 @@ describe('Script on PostgreSQL, the blocks checked before any session (C10b-1)',
       {
         statement: { sql: 'select * from t where a = $1 and b = $1', values: [1] },
         mayCommitPartway: false,
+        outputNames: [],
       },
     ]);
     expect(
@@ -591,6 +598,214 @@ describe('Script on PostgreSQL, the run (C10b-1)', () => {
   });
 });
 
+describe('Out and In-out parameters (C10b-2a)', () => {
+  const call = (over: Partial<Block> = {}): Block => ({
+    type: 'nonQuery',
+    sql: 'call p(:a, :b, :total)',
+    parameters: { a: 1, b: 2 },
+    parameterDirections: { b: 'inOut', total: 'out' },
+    ...over,
+  });
+  const CALL_SQL = 'call p($1, $2, $3)';
+
+  it('binds NULL for an Out parameter, ignoring any value given, and sends an In-out value', () => {
+    const prepared = preparePostgresBlocks(
+      scriptDispatchConfigSchema.parse({
+        blocks: [call({ parameters: { a: 1, b: 2, total: 99 } })],
+      }),
+    );
+    expect(prepared).toMatchObject([{ statement: { sql: CALL_SQL, values: [1, 2, null] } }]);
+  });
+
+  it('needs no value for an Out parameter', () => {
+    const prepared = preparePostgresBlocks(scriptDispatchConfigSchema.parse({ blocks: [call()] }));
+    expect(prepared).toMatchObject([{ statement: { values: [1, 2, null] } }]);
+  });
+
+  it('still needs a value for an In-out parameter', () => {
+    const prepared = preparePostgresBlocks(
+      scriptDispatchConfigSchema.parse({ blocks: [call({ parameters: { a: 1 } })] }),
+    );
+    expect(prepared).toBe("Script block 1 binds 'b' with no value in its Parameters");
+  });
+
+  it('refuses a direction for a name the SQL does not bind, before any session', async () => {
+    const { events, opened } = await runFake(
+      scriptCtx([call({ parameterDirections: { b: 'inOut', total: 'out', ghost: 'out' } })]),
+    );
+    expect(failureOf(events)).toEqual({
+      type: 'failed',
+      kind: 'permanent',
+      error: "Script block 1 gives 'ghost' a direction, but its SQL never binds :ghost",
+    });
+    expect(opened).toBe(0);
+  });
+
+  it('reads each Out and In-out value from the returned row by column name', async () => {
+    const { events } = await runFake(scriptCtx([call()]), {
+      [CALL_SQL]: { rows: [{ total: 7, b: 4 }], command: 'CALL' },
+    });
+    expect(outputsOf(events)).toMatchObject({
+      resultSetCount: 0,
+      outputParameters: { b: 4, total: 7 },
+    });
+  });
+
+  it('keeps the row as a result set too when the block is a Query', async () => {
+    const { events } = await runFake(scriptCtx([call({ type: 'query' })]), {
+      [CALL_SQL]: { rows: [{ total: 7, b: 4 }], command: 'CALL' },
+    });
+    expect(outputsOf(events)).toMatchObject({
+      resultSets: [{ rowCount: 1, rows: [{ total: 7, b: 4 }] }],
+      outputParameters: { b: 4, total: 7 },
+    });
+  });
+
+  it('lets a later block overwrite a parameter of the same name, as ADF does', async () => {
+    const second: Block = {
+      type: 'nonQuery',
+      sql: 'call q(:total)',
+      parameterDirections: { total: 'out' },
+    };
+    const { events } = await runFake(scriptCtx([call(), second]), {
+      [CALL_SQL]: { rows: [{ total: 7, b: 4 }], command: 'CALL' },
+      'call q($1)': { rows: [{ total: 8 }], command: 'CALL' },
+    });
+    expect(outputsOf(events)['outputParameters']).toEqual({ b: 4, total: 8 });
+  });
+
+  it('reads an Out parameter named constructor from the row, never from Object.prototype', async () => {
+    const block: Block = {
+      type: 'nonQuery',
+      sql: 'call q(:constructor)',
+      parameterDirections: { constructor: 'out' },
+    };
+    const { events } = await runFake(scriptCtx([block]), {
+      'call q($1)': { rows: [{ x: 1 }], command: 'CALL' },
+    });
+    expect(failureOf(events).error).toMatch(
+      /^Script block 1 returned no column 'constructor' for its Out parameter/,
+    );
+  });
+
+  it('fails a block that returns no row to read its Out parameters from, and counts it applied', async () => {
+    const { events } = await runFake(
+      scriptCtx([{ type: 'nonQuery', sql: 'delete from t' }, call()]),
+      { 'delete from t': { command: 'DELETE', rowCount: 2 }, [CALL_SQL]: { command: 'CALL' } },
+    );
+    const failure = failureOf(events);
+    expect(failure.kind).toBe('permanent');
+    expect(failure.error).toMatch(
+      /^Script block 2 has Out or In-out parameters, but its statement returned no row to read them from/,
+    );
+    expect(failure.error).toMatch(/2 block\(s\) had already run outside a transaction/);
+  });
+
+  it('fails a block that returns more than one row for its Out parameters', async () => {
+    const { events } = await runFake(scriptCtx([call()]), {
+      [CALL_SQL]: {
+        rows: [
+          { total: 1, b: 1 },
+          { total: 2, b: 2 },
+        ],
+      },
+    });
+    expect(failureOf(events).error).toMatch(
+      /^Script block 1 has Out or In-out parameters, but its statement returned 2 rows; they are read from one/,
+    );
+  });
+
+  it('names the columns when the row has none of an Out parameter’s name', async () => {
+    const { events } = await runFake(scriptCtx([call()]), {
+      [CALL_SQL]: { rows: [{ b: 4, sum: 7 }], command: 'CALL' },
+    });
+    expect(failureOf(events).error).toMatch(
+      /^Script block 1 returned no column 'total' for its Out parameter; name the parameter after the procedure's \(the row has b, sum; postgres lower-cases an unquoted name\)/,
+    );
+  });
+
+  it('fails Out parameters past the byte cap rather than keep part of them', async () => {
+    const big = 'x'.repeat(LOOKUP_BYTE_CAP);
+    const { events } = await runFake(scriptCtx([call()]), {
+      [CALL_SQL]: { rows: [{ total: big, b: 1 }], command: 'CALL' },
+    });
+    expect(failureOf(events).error).toMatch(
+      new RegExp(
+        `^Script block 1's Out parameters would pass the ${String(LOOKUP_BYTE_CAP)}-byte cap`,
+      ),
+    );
+  });
+
+  describe('one byte allowance across the script', () => {
+    // Each fits alone (multi-byte, so only the exact measure sees its size);
+    // two of them do not.
+    const half = '€'.repeat(Math.floor(LOOKUP_BYTE_CAP / 3 / 2) + 100);
+    const block = (sql: string, name: string): Block => ({
+      type: 'nonQuery',
+      sql: `${sql}(:${name})`,
+      parameterDirections: { [name]: 'out' },
+    });
+
+    it('counts every block’s values against it', async () => {
+      const { events } = await runFake(scriptCtx([block('call p', 'x'), block('call q', 'y')]), {
+        'call p($1)': { rows: [{ x: half }], command: 'CALL' },
+        'call q($1)': { rows: [{ y: half }], command: 'CALL' },
+      });
+      expect(failureOf(events).error).toMatch(/^Script block 2's Out parameters would pass/);
+    });
+
+    it('gives back the bytes of a value a later block replaces', async () => {
+      const { events } = await runFake(scriptCtx([block('call p', 'x'), block('call q', 'x')]), {
+        'call p($1)': { rows: [{ x: half }], command: 'CALL' },
+        'call q($1)': { rows: [{ x: `${half}!` }], command: 'CALL' },
+      });
+      expect(outputsOf(events)['outputParameters']).toEqual({ x: `${half}!` });
+    });
+  });
+
+  it('reads them in a read-only script, with Capture result sets Off', async () => {
+    const { events, queries } = await runFake(
+      scriptCtx([call({ type: 'query' })], { captureResultSets: 'off' }),
+      { [CALL_SQL]: { rows: [{ total: 7, b: 4 }], command: 'CALL' } },
+    );
+    expect(outputsOf(events)).toMatchObject({
+      resultSets: [{ rowCount: 1, rows: [] }],
+      outputParameters: { b: 4, total: 7 },
+    });
+    expect(queries).toEqual([
+      expect.stringMatching(/^SET SESSION /),
+      'BEGIN READ ONLY',
+      CALL_SQL,
+      'ROLLBACK',
+    ]);
+  });
+
+  it('rolls the script back on a failure to read them inside one transaction', async () => {
+    const { events, queries } = await runFake(
+      scriptCtx([{ type: 'nonQuery', sql: 'delete from t' }, call()], {
+        runAsOneTransaction: true,
+      }),
+      { 'delete from t': { command: 'DELETE', rowCount: 2 }, [CALL_SQL]: { command: 'CALL' } },
+    );
+    const failure = failureOf(events);
+    expect(failure.kind).toBe('permanent');
+    expect(failure.error).not.toMatch(/already run outside a transaction/);
+    expect(queries).toEqual([
+      expect.stringMatching(/^SET SESSION /),
+      'BEGIN',
+      'delete from t',
+      CALL_SQL,
+      'ROLLBACK',
+    ]);
+  });
+
+  it('lists at most 20 of the row’s columns when a name has none', async () => {
+    const row = Object.fromEntries(Array.from({ length: 25 }, (_, i) => [`c${String(i)}`, i]));
+    const { events } = await runFake(scriptCtx([call()]), { [CALL_SQL]: { rows: [row] } });
+    expect(failureOf(events).error).toMatch(/\(the row has c0, c1, .*, c19 and 5 more;/);
+  });
+});
+
 const LIVE_HOST = process.env.STUDIO_TEST_POSTGRES_HOST;
 
 describe.skipIf(LIVE_HOST === undefined)('Script on a live postgres (C10b-1)', () => {
@@ -790,5 +1005,37 @@ describe.skipIf(LIVE_HOST === undefined)('Script on a live postgres (C10b-1)', (
     expect(outputsOf(events)['resultSets']).toEqual([
       { rowCount: 1, rows: [{ big: '9007199254740993', ts: '2026-07-15T13:45:00.000Z' }] },
     ]);
+  });
+
+  it('fills outputParameters from a procedure’s INOUT and OUT parameters (C10b-2a)', async () => {
+    await reset();
+    await admin((c) =>
+      c.query(
+        `create procedure ${schema}.tally(in v int, inout n int, out total bigint, out "Label" text)
+         language plpgsql as $$ begin
+           insert into ${schema}.t values (v);
+           n := n * 2;
+           select count(*) into total from ${schema}.t;
+           "Label" := 'added ' || v;
+         end $$`,
+      ),
+    );
+    const events = await runLive([
+      {
+        type: 'nonQuery',
+        sql: `call ${schema}.tally(:v, :n, :total, :Label)`,
+        parameters: { v: 5, n: 21 },
+        parameterDirections: { n: 'inOut', total: 'out', Label: 'out' },
+      },
+    ]);
+    expect(outputsOf(events)).toEqual({
+      resultSetCount: 0,
+      resultSets: [],
+      recordsAffected: 0,
+      // bigint reads as text, as Lookup's does.
+      outputParameters: { n: 42, total: '4', Label: 'added 5' },
+      truncated: false,
+    });
+    expect(await count()).toBe(4);
   });
 });

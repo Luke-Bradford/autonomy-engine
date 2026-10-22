@@ -129,3 +129,51 @@ describe('the Script dispatch schema (C10a)', () => {
     expect(scriptConfigSchema.safeParse({ blocks: [{ sql: 'select 1' }] }).success).toBe(false);
   });
 });
+
+describe('a Script block’s parameter directions are literal (C10b-2a)', () => {
+  it('accepts Out and In-out directions and hands them over unsubstituted', () => {
+    const node = script({
+      blocks: [
+        {
+          type: 'nonQuery',
+          sql: 'call p(:a, :b, :total)',
+          parameters: { a: '${run.runId}', b: '2' },
+          parameterDirections: { b: 'inOut', total: 'out' },
+        },
+      ],
+    });
+    expect(validateDoc(doc([node]))).toEqual([]);
+    const blocks = preparedInputOf(node)['blocks'] as Record<string, unknown>[];
+    expect(blocks[0]?.['parameterDirections']).toEqual({ b: 'inOut', total: 'out' });
+    expect(blocks[0]?.['parameters']).toEqual({ a: 'r1', b: '2' });
+  });
+
+  it('refuses a ${} as a direction, naming the block', () => {
+    const node = script({
+      blocks: [
+        {
+          type: 'nonQuery',
+          sql: 'call p(:total)',
+          parameterDirections: { total: '${params.dir}' },
+        },
+      ],
+    });
+    expect(validateDoc(doc([node])).join(' ')).toMatch(
+      /blocks\[0\]\.parameterDirections: a Script parameter's direction/,
+    );
+  });
+
+  it('refuses a ${} as a direction’s name', () => {
+    const node = script({
+      blocks: [{ type: 'nonQuery', sql: 'call p(:t)', parameterDirections: { '${x}': 'out' } }],
+    });
+    expect(validateDoc(doc([node])).join(' ')).toMatch(/blocks\[0\]\.parameterDirections/);
+  });
+
+  it('refuses a direction that is not In, Out or In-out', () => {
+    const parsed = scriptDispatchConfigSchema.safeParse({
+      blocks: [{ type: 'query', sql: 'call p(:t)', parameterDirections: { t: 'output' } }],
+    });
+    expect(parsed.success).toBe(false);
+  });
+});

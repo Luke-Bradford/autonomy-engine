@@ -17,6 +17,28 @@ export type ScriptBlockType = z.infer<typeof scriptBlockTypeSchema>;
 export const SCRIPT_NON_QUERY_BLOCK = 'nonQuery' satisfies ScriptBlockType;
 
 /**
+ * #1600 OR41 C10b-2a — a Script parameter's direction (§4.5, after ADF's
+ * `scripts[].parameters[].direction` Input / Output / InputOutput). In is the
+ * default and needs no entry. An Out parameter's value is never sent (ADF
+ * ignores it too): it binds NULL, and its value is read back by NAME from the
+ * one row the block returns, into `outputParameters`. In-out sends its value
+ * and reads it back the same way. A procedure's `CALL` returns exactly that row,
+ * its columns named after its INOUT and OUT parameters.
+ */
+export const SCRIPT_PARAMETER_DIRECTIONS = ['in', 'out', 'inOut'] as const;
+export const scriptParameterDirectionSchema = z.enum(SCRIPT_PARAMETER_DIRECTIONS);
+export type ScriptParameterDirection = z.infer<typeof scriptParameterDirectionSchema>;
+
+/** The names a block reads back into `outputParameters`: its Out and In-out ones. */
+export function scriptOutputParameterNames(block: {
+  readonly parameterDirections?: Readonly<Record<string, ScriptParameterDirection>> | undefined;
+}): string[] {
+  return Object.entries(block.parameterDirections ?? {})
+    .filter(([, direction]) => direction !== 'in')
+    .map(([name]) => name);
+}
+
+/**
  * The rows one result set keeps under *First 1000 rows*. Lookup's default row
  * bound, for Lookup's reason: result sets are outputs, and outputs are durable.
  */
@@ -36,6 +58,9 @@ export type ScriptCapture = z.infer<typeof scriptCaptureSchema>;
 /** The most blocks one Script may hold. ADF names none; a bound keeps one node's log bounded. */
 export const SCRIPT_MAX_BLOCKS = 50;
 
+/** The block fields §8 keeps literal. */
+type ScriptLiteralField = 'sql' | 'type' | 'parameterDirections';
+
 /**
  * #1600 OR41 C10a — why a block's SQL breaks §8's literal rule, or `null`, as
  * `preCopyScriptIssue` decides it for Copy's Pre-copy script: a `${` substituted
@@ -47,13 +72,13 @@ export const SCRIPT_MAX_BLOCKS = 50;
  */
 export function scriptBlockIssues(
   config: Record<string, unknown>,
-): { readonly path: readonly [number, 'sql' | 'type']; readonly message: string }[] {
+): { readonly path: readonly [number, ScriptLiteralField]; readonly message: string }[] {
   const blocks = config['blocks'];
   if (!Array.isArray(blocks)) return [];
-  const issues: { path: readonly [number, 'sql' | 'type']; message: string }[] = [];
+  const issues: { path: readonly [number, ScriptLiteralField]; message: string }[] = [];
   blocks.forEach((block: unknown, i) => {
     if (block === null || typeof block !== 'object') return;
-    const { sql, type } = block as Record<string, unknown>;
+    const { sql, type, parameterDirections } = block as Record<string, unknown>;
     if (typeof sql === 'string' && sql.includes('${')) {
       issues.push({
         path: [i, 'sql'],
@@ -63,6 +88,21 @@ export function scriptBlockIssues(
     }
     if (typeof type === 'string' && type.includes('${')) {
       issues.push({ path: [i, 'type'], message: "a Script block's Type is Query or Non-query" });
+    }
+    // C10b-2a — a direction decides what is sent and what is read back, so it
+    // is wiring, literal as the Type is.
+    if (
+      parameterDirections !== null &&
+      typeof parameterDirections === 'object' &&
+      Object.entries(parameterDirections).some(
+        ([name, direction]) =>
+          name.includes('${') || (typeof direction === 'string' && direction.includes('${')),
+      )
+    ) {
+      issues.push({
+        path: [i, 'parameterDirections'],
+        message: "a Script parameter's direction is In, Out or In-out, and its name is literal",
+      });
     }
   });
   return issues;
@@ -117,6 +157,27 @@ const scriptInputShape = <B extends z.ZodType>(bindValue: B) =>
                   description:
                     'A value for each :name in the SQL, keyed without the colon. A value may be ${...}.',
                 }),
+                // LITERAL (§8), as the Type: `prepInput` evaluates only `parameters`.
+                parameterDirections: presented(
+                  z
+                    .record(
+                      z.string().min(1),
+                      presented(scriptParameterDirectionSchema, {
+                        title: 'Direction',
+                        options: optionTitles(scriptParameterDirectionSchema, {
+                          in: 'In',
+                          out: 'Out',
+                          inOut: 'In-out',
+                        }),
+                      }),
+                    )
+                    .optional(),
+                  {
+                    title: 'Parameter directions',
+                    description:
+                      'Out or In-out by parameter name; a name not listed is In. Read back by column name from the row a CALL returns, into outputParameters (PostgreSQL only).',
+                  },
+                ),
               })
               // Strict, so the dock draws the blocks as a table (`deriveElementFields`).
               .strict(),

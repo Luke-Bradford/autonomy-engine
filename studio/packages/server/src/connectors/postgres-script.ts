@@ -3,12 +3,16 @@ import {
   formatZodIssues,
   postgresConnectionConfigSchema,
   scriptDispatchConfigSchema,
+  scriptOutputParameterNames,
+  sqlBindNames,
   sqlLeadingKeyword,
   type ScriptDispatchConfig,
+  type SqlParameterValue,
 } from '@autonomy-studio/shared';
+import { LOOKUP_BYTE_CAP } from '../limits.js';
 import { failed } from './activity-events.js';
 import { DatasetIoError } from './dataset-io-error.js';
-import { LookupValueError } from './lookup.js';
+import { LookupValueError, keepRowWithin } from './lookup.js';
 import {
   rewriteNamedParametersToPositional,
   type PostgresStatement,
@@ -31,6 +35,7 @@ import {
   asStatement,
   blockName,
   blockWording,
+  type OutputParameters,
   scriptFailure,
   scriptSucceeded,
 } from './script.js';
@@ -72,6 +77,16 @@ import type { ActivityContext, ActivityEvent } from './types.js';
  * the server's and pg's own timer (`clientOptionsFor`). Cancel is checked
  * between blocks and before a COMMIT; a block in flight runs to completion or
  * to that timeout, which it cannot lift (`SCRIPT_POSTGRES_STATEMENTS`).
+ *
+ * **Out and In-out parameters (C10b-2a).** An Out parameter binds NULL, whatever
+ * value it was given (ADF ignores it too); an In-out one sends its value. Both
+ * are read back by NAME from the one row the block returns, which is what a
+ * `CALL` of a procedure with INOUT or OUT parameters returns, its columns named
+ * after them. By name, never by position: `CALL p(1, null, :z)` would map `:z`
+ * to the first OUT column. A later block's value of the same name replaces an
+ * earlier one, as in ADF. They are read after the statement has run, so a
+ * failure to read them leaves it applied, and they are bounded as the result
+ * sets are, by a 1 MiB allowance of their own.
  */
 
 /** What a streamed statement hands back once it completes. */
@@ -190,6 +205,26 @@ function sqlStateOf(err: unknown): string | null {
 interface PreparedBlock {
   readonly statement: PostgresStatement;
   readonly mayCommitPartway: boolean;
+  /** The Out and In-out names read back from the block's row, or none. */
+  readonly outputNames: readonly string[];
+}
+
+/**
+ * A block's bind values as sent: its Parameters, with NULL for each Out one,
+ * whatever value it was given. Built by `Object.fromEntries`, so every name
+ * stays an own property.
+ */
+function boundParameters(
+  block: ScriptDispatchConfig['blocks'][number],
+): Record<string, SqlParameterValue> {
+  const directions = block.parameterDirections ?? {};
+  const out = (name: string) => Object.hasOwn(directions, name) && directions[name] === 'out';
+  return Object.fromEntries([
+    ...Object.entries(block.parameters ?? {}).filter(([name]) => !out(name)),
+    ...Object.keys(directions)
+      .filter(out)
+      .map((name): [string, SqlParameterValue] => [name, null]),
+  ]);
 }
 
 /**
@@ -199,16 +234,25 @@ interface PreparedBlock {
 export function preparePostgresBlocks(config: ScriptDispatchConfig): string | PreparedBlock[] {
   const prepared: PreparedBlock[] = [];
   for (const [i, block] of config.blocks.entries()) {
+    // An Out parameter needs no value of its own, so it is bound before the
+    // refusal looks for every :name's value.
+    const parameters = boundParameters(block);
     const refusal = authoredStatementRefusal(
-      asStatement(block),
+      { ...asStatement(block), parameters },
       'postgres',
       SCRIPT_POSTGRES_STATEMENTS,
       blockWording(i),
     );
     if (refusal !== null) return refusal;
+    const outputNames = scriptOutputParameterNames(block);
+    const bound = sqlBindNames(block.sql, 'postgres');
+    const unbound = outputNames.find((name) => !bound.includes(name));
+    if (unbound !== undefined) {
+      return `${blockName(i)} gives '${unbound}' a direction, but its SQL never binds :${unbound}`;
+    }
     let statement: PostgresStatement;
     try {
-      statement = rewriteNamedParametersToPositional(block.sql, block.parameters);
+      statement = rewriteNamedParametersToPositional(block.sql, parameters);
     } catch (err) {
       // Its one refusal is a positional placeholder beside named values. Its
       // sentence names a query dataset; this one names the block.
@@ -216,7 +260,11 @@ export function preparePostgresBlocks(config: ScriptDispatchConfig): string | Pr
       return `${blockName(i)} uses a positional placeholder ($1) as well as named Parameters; write :name for every value`;
     }
     const keyword = sqlLeadingKeyword(block.sql, 'postgres') ?? '';
-    prepared.push({ statement, mayCommitPartway: MAY_COMMIT_PARTWAY.has(keyword) });
+    prepared.push({
+      statement,
+      mayCommitPartway: MAY_COMMIT_PARTWAY.has(keyword),
+      outputNames,
+    });
   }
   return prepared;
 }
@@ -233,8 +281,13 @@ export async function executePostgresScript(args: {
   secret: string | null;
   signal: AbortSignal;
   stream: PostgresStatementStream;
-}): Promise<{ capture: ResultCapture; recordsAffected: number }> {
+}): Promise<{
+  capture: ResultCapture;
+  recordsAffected: number;
+  outputParameters: OutputParameters;
+}> {
   const { client, config, blocks, readOnly, secret, signal, stream } = args;
+  const outputParameters = new OutputParameterValues();
   const path = readOnly ? 'read' : 'write';
   const capture = new ResultCapture(config.captureResultSets);
   let recordsAffected = 0;
@@ -259,10 +312,16 @@ export async function executePostgresScript(args: {
       if (signal.aborted) throw new DatasetIoError('cancelled', SCRIPT_ABORTED);
       const prepared = blocks[i] as PreparedBlock;
       const set = block.type === 'query' ? capture.begin() : undefined;
+      // Counted here and judged once the statement has run: a throw from
+      // `onRow` would read as the statement's own failure.
+      const reads = prepared.outputNames.length > 0;
+      let rowsSeen = 0;
+      let firstRow: Record<string, unknown> | undefined;
 
       let result: PostgresStreamedResult;
       try {
         result = await stream(client, prepared.statement, (row) => {
+          if (reads && ++rowsSeen === 1) firstRow = row;
           if (set !== undefined) capture.add(set, () => row);
         });
       } catch (err) {
@@ -302,6 +361,9 @@ export async function executePostgresScript(args: {
       ) {
         recordsAffected += result.rowCount ?? 0;
       }
+      if (reads) {
+        outputParameters.read(i, prepared.outputNames, rowsSeen, firstRow);
+      }
     }
 
     // A cancel during the last block still undoes a script in one transaction.
@@ -323,7 +385,7 @@ export async function executePostgresScript(args: {
         open = false;
       }
     }
-    return { capture, recordsAffected };
+    return { capture, recordsAffected, outputParameters: outputParameters.toOutput() };
   } catch (err) {
     let failure =
       err instanceof DatasetIoError || err instanceof LookupValueError
@@ -345,6 +407,95 @@ export async function executePostgresScript(args: {
     }
     throw failure;
   }
+}
+
+/** The columns a missing-column failure lists before it stops. */
+const LISTED_COLUMNS = 20;
+
+/**
+ * The script's Out and In-out values by name, within one `LOOKUP_BYTE_CAP`
+ * allowance of their own. A Map, so no name can reach a prototype. A later
+ * block's value of a name replaces the earlier one, and its bytes with it.
+ */
+class OutputParameterValues {
+  private readonly values = new Map<string, { value: unknown; size: number }>();
+  private bytes = 0;
+
+  /**
+   * Read a block's names from the one row it returned. Throws a
+   * `DatasetIoError` naming the block when there is not exactly one row, a
+   * name has no column, a value cannot be kept, or the values would pass the
+   * allowance, which is checked before a large value is copied.
+   */
+  read(
+    index: number,
+    names: readonly string[],
+    rowsSeen: number,
+    row: Record<string, unknown> | undefined,
+  ): void {
+    const has = `${blockName(index)} has Out or In-out parameters, but its statement returned`;
+    if (row === undefined) {
+      throw new DatasetIoError(
+        'permanent',
+        `${has} no row to read them from; a CALL returns one when its procedure has INOUT or OUT parameters`,
+      );
+    }
+    if (rowsSeen > 1) {
+      throw new DatasetIoError(
+        'permanent',
+        `${has} ${String(rowsSeen)} rows; they are read from one`,
+      );
+    }
+    const picked = Object.fromEntries(
+      names.map((name) => {
+        if (!Object.hasOwn(row, name)) throw missingColumn(index, name, row);
+        return [name, row[name]];
+      }),
+    );
+    // The bytes this block's values would replace are free again.
+    const replaced = names.reduce((sum, name) => sum + (this.values.get(name)?.size ?? 0), 0);
+    let kept: ReturnType<typeof keepRowWithin>;
+    try {
+      kept = keepRowWithin(picked, 0, undefined, LOOKUP_BYTE_CAP - (this.bytes - replaced));
+    } catch (err) {
+      if (!(err instanceof LookupValueError)) throw err;
+      throw new DatasetIoError(
+        'permanent',
+        `${blockName(index)}'s Out parameter '${err.column}' cannot hold its value: ${err.detail}`,
+      );
+    }
+    if (kept === null) {
+      throw new DatasetIoError(
+        'permanent',
+        `${blockName(index)}'s Out parameters would pass the ${String(LOOKUP_BYTE_CAP)}-byte cap a script may keep of them`,
+      );
+    }
+    // Charged per name, as each serialises on its own, so a replaced value
+    // gives back exactly what it took.
+    for (const [name, value] of Object.entries(kept.row)) {
+      const size = Buffer.byteLength(JSON.stringify(Object.fromEntries([[name, value]])), 'utf8');
+      this.bytes += size - (this.values.get(name)?.size ?? 0);
+      this.values.set(name, { value, size });
+    }
+  }
+
+  toOutput(): OutputParameters {
+    return Object.fromEntries([...this.values].map(([name, { value }]) => [name, value]));
+  }
+}
+
+function missingColumn(index: number, name: string, row: Record<string, unknown>): DatasetIoError {
+  const columns = Object.keys(row);
+  const listed =
+    columns.length === 0
+      ? 'no columns'
+      : columns.length > LISTED_COLUMNS
+        ? `${columns.slice(0, LISTED_COLUMNS).join(', ')} and ${String(columns.length - LISTED_COLUMNS)} more`
+        : columns.join(', ');
+  return new DatasetIoError(
+    'permanent',
+    `${blockName(index)} returned no column '${name}' for its Out parameter; name the parameter after the procedure's (the row has ${listed}; postgres lower-cases an unquoted name)`,
+  );
 }
 
 /** Run one `script` on a postgres connection: at most one warning, then one terminal event. */
@@ -442,5 +593,5 @@ export async function* runPostgresScript(
     yield failure ?? failed('permanent', 'the script failed');
     return;
   }
-  yield* scriptSucceeded(result.capture, result.recordsAffected);
+  yield* scriptSucceeded(result.capture, result.recordsAffected, result.outputParameters);
 }
