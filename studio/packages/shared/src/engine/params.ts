@@ -1389,6 +1389,9 @@ export function coerceReturnValue(
       };
 }
 
+/** #1600 C12b — the fields a return value row may hold. */
+const RETURN_VALUE_ROW_KEYS = new Set(['key', 'type', 'content']);
+
 /**
  * #1600 OR41 C12b — the save-time rules of a *Pipeline return value* node:
  * at least one row; each key an identifier, not `__proto__`, and unique; each
@@ -1399,8 +1402,6 @@ export function coerceReturnValue(
  * the per-item outputs are dropped at the end of each item, so the caller would
  * get nothing.
  */
-const RETURN_VALUE_ROW_KEYS = new Set(['key', 'type', 'content']);
-
 function validateReturnValueConfig(node: Node, foreachOwned: boolean, errors: string[]): void {
   const at = `node.${node.id}`;
   if (node.config['variable'] !== undefined) {
