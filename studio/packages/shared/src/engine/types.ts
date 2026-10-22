@@ -720,6 +720,13 @@ export const FAILURE_CODES = {
    * *Give up after* deadline. Minted by the driver's `armRecheck`; permanent.
    */
   WAIT_UNTIL_TIMEOUT: 'wait_until_timeout',
+  /**
+   * #1600 OR41 C5a — a Copy with Load Incremental and Watermark from Automatic
+   * found another attempt copying the same source, which would read the same old
+   * watermark and copy the same rows. Transient: a retry, or the next run,
+   * copies once that attempt has ended.
+   */
+  COPY_WATERMARK_BUSY: 'copy_watermark_busy',
   /** The adapter's stream ended with no terminal event (contract violation). */
   ADAPTER_NO_TERMINAL: 'adapter_no_terminal',
   /** The adapter threw instead of yielding a terminal `failed` (a bug). */

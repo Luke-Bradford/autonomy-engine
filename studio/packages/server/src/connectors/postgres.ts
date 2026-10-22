@@ -10,6 +10,7 @@ import {
   tableDatasetConfigSchema,
   type DatasetAddress,
   type DatasetKind,
+  type SqlParameterValue,
 } from '@autonomy-studio/shared';
 import type { ActivityContext, ActivityEvent, ConnectorAdapter, ResolvedDataset } from './types.js';
 import { failed } from './activity-events.js';
@@ -19,7 +20,14 @@ import { runCopyActivity } from './copy.js';
 import { runLookupActivity } from './lookup.js';
 import { postgresTableMetadata } from './postgres-table-metadata.js';
 import { runTableMetadata } from './table-metadata.js';
-import type { PartitionPlan, PartitionedRead, SourceIo } from './source-io.js';
+import {
+  emptyIncrementalPlan,
+  type IncrementalPlan,
+  type IncrementalRead,
+  type PartitionPlan,
+  type PartitionedRead,
+  type SourceIo,
+} from './source-io.js';
 import { dynamicRanges, rangePredicate, type PartitionRange } from './partition-ranges.js';
 import { mergeBatches } from './merge-batches.js';
 import { quoteIdentifier } from './sql-identifier.js';
@@ -211,6 +219,8 @@ export function createPostgresAdapter(
           readPostgresDatasetBatches(read(dataset, signal, batchRows)),
         planPartitions: ({ dataset, signal, batchRows, partition }) =>
           planPostgresPartitions(read(dataset, signal, batchRows), partition),
+        planIncremental: ({ dataset, signal, batchRows, watermark }) =>
+          planPostgresIncremental(read(dataset, signal, batchRows), watermark),
       };
 
       // #1190 (M10 slice 2) — `copy` is the ONE activity a store connection
@@ -739,6 +749,133 @@ export async function planPostgresPartitions(
     }
   }
   return { partitions: ranges.length, batches: batches(), close };
+}
+
+/**
+ * #1600 OR41 C5a — the watermark column types an Incremental read accepts: the
+ * ones whose text form (under `DateStyle` ISO) reads back as the same value and
+ * whose order is the value's. `money` (locale-formatted), `boolean`, `uuid`,
+ * `json` and the rest are refused rather than compared by a guess.
+ */
+const WATERMARK_COLUMN_TYPES: readonly string[] = [
+  'smallint',
+  'integer',
+  'bigint',
+  'numeric',
+  'real',
+  'double precision',
+  'date',
+  'timestamp without time zone',
+  'timestamp with time zone',
+  'time without time zone',
+  'text',
+  'character varying',
+  'character',
+];
+const INTEGER_WATERMARK_TYPES: readonly string[] = ['smallint', 'integer', 'bigint'];
+
+/**
+ * #1600 OR41 C5a — plan an Incremental read: the column's type and the highest
+ * watermark above `old`, in one short read-only transaction (`DateStyle` ISO so
+ * the text is unambiguous), then the bounded read through the ordinary cursor.
+ * No shared snapshot: the read is bounded by `next`, so a row committed between
+ * the two is copied now rather than missed for good. The bounds are bound as
+ * untyped parameters, so postgres reads them in the column's own type, and
+ * `next` is bound as the server's own text for it, so a timestamp keeps its
+ * microseconds. The query timeout, when the source has one, bounds the max too.
+ */
+export async function planPostgresIncremental(
+  read: PostgresDatasetRead,
+  watermark: IncrementalRead,
+): Promise<IncrementalPlan> {
+  const base = sourceStatementFor(read.datasetKind, read.datasetConfig);
+  const column = `${SOURCE_ALIAS}.${quoteIdentifier(watermark.column, 'watermark column')}`;
+  const from = `(\n${base.sql}\n) ${SOURCE_ALIAS}`;
+  const oldValue = watermark.old === null ? null : String(watermark.old);
+  /** The bounds after the query's own `$n`: `> old` when there is one, `<= next` when given. */
+  const bounded = (next: string | null) => {
+    const values: (string | number | null)[] = [...base.values];
+    const where: string[] = [];
+    if (oldValue !== null) {
+      values.push(oldValue);
+      where.push(`${column} > $${values.length}`);
+    }
+    if (next !== null) {
+      values.push(next);
+      where.push(`${column} <= $${values.length}`);
+    }
+    return { where: where.length === 0 ? '' : ` WHERE ${where.join(' AND ')}`, values };
+  };
+  if (read.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset read aborted');
+
+  const timeoutSeconds = queryTimeoutSecondsOf(read.datasetKind, read.datasetConfig);
+  const client = await openSession(
+    read.createClient,
+    read.connectionConfig,
+    read.secret,
+    'cannot reach the postgres server to read the source',
+  );
+  let hi: unknown;
+  let type: string;
+  try {
+    await client.query('BEGIN READ ONLY');
+    await client.query("SET LOCAL DateStyle = 'ISO, YMD'");
+    // A float's text is exact (the default from postgres 12, not before).
+    await client.query('SET LOCAL extra_float_digits = 3');
+    if (timeoutSeconds !== null) {
+      await client.query(`SET LOCAL statement_timeout = ${Math.trunc(timeoutSeconds * 1000)}`);
+    }
+    const typed = await runBound(
+      client,
+      `SELECT pg_typeof((SELECT ${column} FROM ${from} LIMIT 0))::text AS type`,
+      base,
+    );
+    type = String(typed.rows[0]?.['type']);
+    if (!WATERMARK_COLUMN_TYPES.includes(type)) {
+      throw new DatasetIoError(
+        'permanent',
+        `the watermark column '${watermark.column}' is ${type}; a watermark is a number, a date, a time or text`,
+      );
+    }
+    const max = bounded(null);
+    const found = await runBound(
+      client,
+      `SELECT max(${column})::text AS hi FROM ${from}${max.where}`,
+      {
+        sql: '',
+        values: max.values,
+      },
+    );
+    hi = found.rows[0]?.['hi'] ?? null;
+    await client.query('COMMIT');
+  } catch (err) {
+    throw readFailure(
+      err,
+      `the watermark column '${watermark.column}' could not be read`,
+      read.secret,
+    );
+  } finally {
+    try {
+      await client.end();
+    } catch {
+      // A close failure never replaces the outcome.
+    }
+  }
+  if (read.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset read aborted');
+  if (typeof hi !== 'string') return emptyIncrementalPlan(watermark.old);
+  const asNumber = Number(hi);
+  const next: SqlParameterValue =
+    INTEGER_WATERMARK_TYPES.includes(type) && Number.isSafeInteger(asNumber) ? asNumber : hi;
+  // The new bound is the server's own text, never `next` re-printed.
+  const ranged = bounded(hi);
+  return {
+    next,
+    batches: readCursorBatches(
+      read,
+      () => ({ sql: `SELECT * FROM ${from}${ranged.where}`, values: ranged.values }),
+      ['BEGIN READ ONLY'],
+    ),
+  };
 }
 
 /**

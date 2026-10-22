@@ -12,6 +12,7 @@ import {
   LOOKUP_ACTIVITY_TYPE,
   type DatasetAddress,
   type DatasetKind,
+  type SqlParameterValue,
 } from '@autonomy-studio/shared';
 import { COPY_BATCH_ROWS, SQLITE_BUSY_TIMEOUT_MS } from '../limits.js';
 // #1196 — the store leaf and the sink, lifted out so `copy-sink.ts` can reach
@@ -52,7 +53,12 @@ import { quoteIdentifier } from './sql-identifier.js';
 import { runCopyActivity } from './copy.js';
 import { runLookupActivity } from './lookup.js';
 import { runTableMetadata, type TableMetadataIo } from './table-metadata.js';
-import type { SourceIo } from './source-io.js';
+import {
+  emptyIncrementalPlan,
+  type IncrementalPlan,
+  type IncrementalRead,
+  type SourceIo,
+} from './source-io.js';
 // #1165 M7 slice 2 — §9's batch-yield primitive, shared with the `delimited`
 // reader rather than duplicated (the macrotask choice is not the obvious one).
 import { yieldToEventLoop } from './scheduling.js';
@@ -144,6 +150,132 @@ export interface SqliteDatasetRead {
   readonly batchRows?: number;
   /** Honoured at BATCH BOUNDARIES (§10) — a run cancel stops the next pull. */
   readonly signal?: AbortSignal;
+  /** #1600 OR41 C5a — an Incremental read's bounds: `old < column <= next`. */
+  readonly range?: {
+    readonly column: string;
+    readonly old: SqlParameterValue;
+    readonly next: SqlParameterValue;
+  };
+}
+
+/** #1600 OR41 C5a — the bind names the watermark bounds take beside a query's own. */
+const WATERMARK_OLD = '__studio_wm_old';
+const WATERMARK_NEXT = '__studio_wm_next';
+
+/**
+ * #1600 OR41 C5a — the source statement as a subquery with the watermark bounds
+ * outside it: `old < column <= next` (no lower bound when `old` is null), or the
+ * new watermark's `max(column)` above `old`. Wrapping a table read too keeps one
+ * shape; a plain column keeps its affinity through the subquery, so a bound
+ * compares in the column's type. A `;` that ends the statement is dropped (it
+ * cannot sit inside the parentheses); one followed by a comment is not, so that
+ * statement fails as a syntax error. The newline before `)` ends a trailing line
+ * comment.
+ */
+function watermarkStatement(
+  base: { sql: string; parameters: Record<string, unknown> | null },
+  column: string,
+  old: SqlParameterValue,
+  select: { readonly next: SqlParameterValue } | 'max',
+): { sql: string; parameters: Record<string, unknown> | null } {
+  const col = `"__studio_src".${quoteIdentifier(column, 'watermark column')}`;
+  const from = `(\n${base.sql.replace(/;\s*$/, '')}\n) AS "__studio_src"`;
+  const where: string[] = [];
+  const parameters: Record<string, unknown> = { ...(base.parameters ?? {}) };
+  if (old !== null) {
+    where.push(`${col} > :${WATERMARK_OLD}`);
+    parameters[WATERMARK_OLD] = old;
+  }
+  if (select !== 'max') {
+    where.push(`${col} <= :${WATERMARK_NEXT}`);
+    parameters[WATERMARK_NEXT] = select.next;
+  }
+  const filter = where.length === 0 ? '' : ` WHERE ${where.join(' AND ')}`;
+  return {
+    sql:
+      select === 'max'
+        ? `SELECT max(${col}) AS hi FROM ${from}${filter}`
+        : `SELECT * FROM ${from}${filter}`,
+    parameters: Object.keys(parameters).length === 0 ? null : parameters,
+  };
+}
+
+/**
+ * #1600 OR41 C5a — plan an Incremental read: the highest watermark above `old`,
+ * one short statement on its own read-only handle, then the bounded read. No
+ * shared snapshot: the read is bounded by `next`, so a row committed between the
+ * two statements is copied now rather than missed for good. An integer past
+ * 2^53 is refused, because it cannot be carried exactly as a JSON number and a
+ * text bound would not compare as an integer through a computed column.
+ */
+export async function planSqliteIncremental(
+  read: SqliteDatasetRead,
+  watermark: IncrementalRead,
+): Promise<IncrementalPlan> {
+  const cfg = sqliteConnectionConfigSchema.safeParse(read.connectionConfig);
+  if (!cfg.success) {
+    throw new DatasetIoError(
+      'permanent',
+      `invalid sqlite connection config: ${formatZodIssues(cfg.error.issues)}`,
+    );
+  }
+  const statement = watermarkStatement(
+    statementFor(read.datasetKind, read.datasetConfig),
+    watermark.column,
+    watermark.old,
+    'max',
+  );
+  const db = await openSqliteReadOnly(cfg.data, read.signal, 'dataset read aborted');
+  let hi: unknown;
+  try {
+    db.defaultSafeIntegers(true);
+    const prepared = db.prepare(statement.sql);
+    const row = (
+      statement.parameters === null ? prepared.get() : prepared.get(statement.parameters)
+    ) as { hi: unknown } | undefined;
+    hi = row?.hi ?? null;
+  } catch (err) {
+    throw storeFailure(err, `the watermark column '${watermark.column}' could not be read`);
+  } finally {
+    try {
+      db.close();
+    } catch {
+      // Never let a close failure replace the outcome the caller is unwinding with.
+    }
+  }
+  if (hi === null) return emptyIncrementalPlan(watermark.old);
+  let next: SqlParameterValue;
+  if (typeof hi === 'bigint') {
+    if (hi > BigInt(Number.MAX_SAFE_INTEGER) || hi < BigInt(Number.MIN_SAFE_INTEGER)) {
+      throw new DatasetIoError(
+        'permanent',
+        `the watermark column '${watermark.column}' holds ${hi}, past 2^53, which a watermark cannot carry exactly`,
+      );
+    }
+    next = Number(hi);
+  } else if (typeof hi === 'number') {
+    if (!Number.isFinite(hi)) {
+      throw new DatasetIoError(
+        'permanent',
+        `the watermark column '${watermark.column}' holds ${hi}, which a watermark cannot carry`,
+      );
+    }
+    next = hi;
+  } else if (typeof hi === 'string') {
+    next = hi;
+  } else {
+    throw new DatasetIoError(
+      'permanent',
+      `the watermark column '${watermark.column}' holds a blob; a watermark is a number, a date or text`,
+    );
+  }
+  return {
+    next,
+    batches: readSqliteDatasetBatches({
+      ...read,
+      range: { column: watermark.column, old: watermark.old, next },
+    }),
+  };
 }
 
 /** The prepared statement text and its bound parameters, per dataset kind. */
@@ -229,6 +361,17 @@ function sqliteSource(connectionConfig: z.infer<typeof sqliteConnectionConfigSch
         ...(signal === undefined ? {} : { signal }),
         ...(batchRows === undefined ? {} : { batchRows }),
       }),
+    planIncremental: ({ dataset, signal, batchRows, watermark }) =>
+      planSqliteIncremental(
+        {
+          connectionConfig,
+          datasetKind: dataset.kind,
+          datasetConfig: dataset.config,
+          ...(signal === undefined ? {} : { signal }),
+          ...(batchRows === undefined ? {} : { batchRows }),
+        },
+        watermark,
+      ),
   };
 }
 
@@ -344,7 +487,11 @@ export async function* readSqliteDatasetBatches(
     );
   }
 
-  const statement = statementFor(read.datasetKind, read.datasetConfig);
+  const base = statementFor(read.datasetKind, read.datasetConfig);
+  const statement =
+    read.range === undefined
+      ? base
+      : watermarkStatement(base, read.range.column, read.range.old, { next: read.range.next });
 
   const db = await openSqliteReadOnly(cfg.data, read.signal, 'dataset read aborted');
 

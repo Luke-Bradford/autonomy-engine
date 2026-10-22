@@ -8,6 +8,7 @@ import type {
   DatasetColumn,
   DatasetKind,
   MeteringStatus,
+  SqlParameterValue,
   WarningCode,
 } from '@autonomy-studio/shared';
 
@@ -164,6 +165,19 @@ export interface ActivityContext {
    * `LOOKUP_ROW_CAP`. The adapter gets the number, never the owner.
    */
   lookupMaxRows?: number;
+  /**
+   * #1600 OR41 C5a — a `copy` with Load Incremental and Watermark from
+   * Automatic: the watermark the executor stored when this activity last
+   * committed a copy of the same source (null when it never has), and `commit`,
+   * which stores the new one. The copy calls `commit` once its sink has
+   * committed, so the watermark moves exactly when the rows land. Set for that
+   * copy only; the adapter refuses Automatic without it rather than copying
+   * every row again.
+   */
+  copyWatermark?: {
+    readonly old: SqlParameterValue;
+    readonly commit: (next: SqlParameterValue) => void;
+  };
   /** Aborts in-flight work (run cancel / server shutdown). */
   signal: AbortSignal;
 }

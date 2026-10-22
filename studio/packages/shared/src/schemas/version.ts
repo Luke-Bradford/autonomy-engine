@@ -649,7 +649,13 @@
 // unknown Operation and ends the run `invalid_event`, so an export it imports
 // would save and never run; and its child projection lets any node's
 // `pipelineReturnValue` output through.
-export const CATALOG_VERSION = 69;
+// BUMP 69→70 for #1600 OR41 C5a: a rows Copy's Load Incremental (`load`,
+// `watermarkColumnName`, `watermarkFrom`, `watermarkOld`) and its `watermark`
+// output, with a `formerOutputs` snapshot. `copyInputSchema` is not strict, so a
+// pre-C5a build strips the four fields and copies EVERY source row on each run,
+// where this build copies only the rows above the old watermark: an outcome,
+// not only a speed.
+export const CATALOG_VERSION = 70;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

@@ -20,6 +20,7 @@ import {
   findLlmMessagesRowIndex,
   LLM_CALL_ACTIVITY_TYPE,
   LOOKUP_ACTIVITY_TYPE,
+  COPY_ACTIVITY_TYPE,
   llmCallConfigSchema,
   llmCaptureModeSchema,
   normalizeLlmRequest,
@@ -43,6 +44,11 @@ import {
 import { RUN_CANCELLED_REASON, runCancelledFailure } from './cancel.js';
 import { ACTIVITY_TIMEOUT_REASON, activityTimeoutFailure, armDeadline } from './timeout.js';
 import { getRun } from '../repo/runs.js';
+import {
+  acquireCopyWatermark,
+  copyWatermarkKey,
+  type CopyWatermarkLease,
+} from './copy-watermark.js';
 import { markExternalWaitExpired, recordExternalWait } from '../repo/external-waits.js';
 import {
   deriveExternalWaitToken,
@@ -487,6 +493,69 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // instance-suffix strip resolves the doc node behind the item instance.
     const node = resolveDocNode(pv.nodes, nodeId) ?? null;
     return node === null ? null : { node, ownerId: run.ownerId };
+  }
+
+  /**
+   * #1600 OR41 C5a — a copy with Load Incremental and Watermark from Automatic:
+   * its lease and stored watermark (`copy-watermark.ts`), `null` for every other
+   * node, or the failure when another attempt holds the lease or the store
+   * cannot be read. Keyed by the pipeline (across its versions, since every save
+   * mints one), the doc node and the resolved source and sink.
+   */
+  function copyWatermarkFor(
+    node: Node,
+    command: Extract<ExecutorCommand, { type: 'dispatchNode' }>,
+    datasets: ActivityContext['datasets'],
+    runId: string,
+  ):
+    | { lease: CopyWatermarkLease }
+    | { error: { error: string; kind: FailureKind; code?: string } }
+    | null {
+    const input = command.preparedInput;
+    const column = input['watermarkColumnName'];
+    if (
+      node.type !== COPY_ACTIVITY_TYPE ||
+      datasets === undefined ||
+      input['load'] !== 'incremental' ||
+      (input['watermarkFrom'] ?? 'automatic') !== 'automatic' ||
+      typeof column !== 'string'
+    ) {
+      return null;
+    }
+    const run = getRun(deps.db, runId);
+    if (run === null) return null;
+    try {
+      const lease = acquireCopyWatermark(deps.db, {
+        pipelineId: deps.resolveDoc(run.pipelineVersionId).pipelineId,
+        nodeId: node.id,
+        copyKey: copyWatermarkKey({
+          source: { connectionId: command.resolvedConnectionIds?.source, dataset: datasets.source },
+          sink: { connectionId: command.resolvedConnectionIds?.sink, dataset: datasets.sink },
+          column,
+        }),
+        column,
+        runId,
+      });
+      if (lease === 'busy') {
+        return {
+          error: {
+            error:
+              'another run is copying this source with Load Incremental, and both would copy ' +
+              'the same rows; it is copied once that run ends',
+            kind: 'transient',
+            code: FAILURE_CODES.COPY_WATERMARK_BUSY,
+          },
+        };
+      }
+      return { lease };
+    } catch (err) {
+      return {
+        error: {
+          error: `the stored watermark could not be read: ${err instanceof Error ? err.message : String(err)}`,
+          kind: 'permanent',
+        },
+      };
+    }
   }
 
   /**
@@ -2041,6 +2110,15 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         : {}),
     };
 
+    // #1600 OR41 C5a — Watermark from Automatic: the lease on this copy's source
+    // and the watermark stored for it. Taken here, with no yield before the
+    // adapter's promise below, whose `finally` releases it on every path.
+    const watermark = copyWatermarkFor(node, command, datasets, runId);
+    if (watermark !== null && 'error' in watermark) {
+      yield nodeFailed(runId, nodeId, attemptId, watermark.error);
+      return;
+    }
+
     const ctx: ActivityContext = {
       runId,
       nodeId,
@@ -2060,6 +2138,10 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       ...(datasets !== undefined ? { datasets } : {}),
       // #1600 C7d — omitted for every activity but a lookup, the same rule.
       ...(lookupMaxRows !== undefined ? { lookupMaxRows } : {}),
+      // #1600 C5a — omitted for every node but an Automatic incremental copy.
+      ...(watermark !== null
+        ? { copyWatermark: { old: watermark.lease.old, commit: watermark.lease.commit } }
+        : {}),
       signal: controller.signal,
     };
     // F4 output/error redaction (item 7 / S3): an ADDITIVE executor-level choke
@@ -2174,6 +2256,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       })
       .finally(() => {
         controller.signal.removeEventListener('abort', onQueuedAbort);
+        watermark?.lease.release();
         settled = true;
         signal();
       });

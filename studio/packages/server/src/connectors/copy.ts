@@ -20,6 +20,7 @@ import {
   type CopyRowFailure,
   type CopyPumpMappingEntry,
   type CopyWriteMode,
+  type SqlParameterValue,
 } from '@autonomy-studio/shared';
 import { AsyncEventQueue } from '../util/async-event-queue.js';
 import { failed, sessionLogRunEvents } from './activity-events.js';
@@ -35,7 +36,7 @@ import {
   SessionLogWriter,
   sessionLogWriterOptions,
 } from './session-log-file.js';
-import type { PartitionPlan, SourceIo } from './source-io.js';
+import type { IncrementalPlan, PartitionPlan, SourceIo } from './source-io.js';
 import type { ActivityContext, ActivityEvent, ResolvedDataset } from './types.js';
 
 /** The resolved SINK connection, as `ActivityContext` declares it. */
@@ -173,6 +174,7 @@ function copyOutputs(
   measure: CopyMeasure,
   logPath: string | null,
   usedParallelCopies: number,
+  watermark: CopyWatermarkOutput | undefined,
 ): Record<string, unknown> {
   return {
     rowsRead: counters.rowsRead,
@@ -188,8 +190,43 @@ function copyOutputs(
     usedParallelCopies,
     // #1600 OR41 C6c-1b — the folder log's file, null for the run log.
     logPath,
+    // #1600 OR41 C5a — under Load Incremental only, so a Full copy's outputs
+    // are exactly what they were.
+    ...(watermark === undefined ? {} : { watermark }),
   };
 }
+
+/**
+ * #1600 OR41 C5a — an Incremental copy's `watermark` output: the column, the
+ * old watermark it read above, and the new one it read up to (the old one when
+ * nothing was above it). Reported on a failure only when the sink committed.
+ */
+interface CopyWatermarkOutput {
+  readonly column: string;
+  readonly old: SqlParameterValue;
+  readonly new: SqlParameterValue;
+}
+
+/**
+ * #1600 OR41 C5a — store Automatic's new watermark once the sink has committed:
+ * `null` when stored (or when there is nothing to store), else why it was not.
+ * The rows are committed either way, so a failure says the next run copies them
+ * again rather than letting the node succeed with a watermark left behind.
+ */
+function storeWatermark(ctx: ActivityContext, watermark: CopyWatermarkOutput): string | null {
+  if (watermark.new === null || ctx.copyWatermark === undefined) return null;
+  try {
+    ctx.copyWatermark.commit(watermark.new);
+    return null;
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    return `the rows were committed, but the watermark could not be stored, so the next run copies them again: ${reason}`;
+  }
+}
+
+/** #1600 OR41 C5a — Load Incremental on a source that is not a database. */
+export const INCREMENTAL_NEEDS_DATABASE =
+  'Load Incremental reads a SQLite or PostgreSQL table or query; set Load to Full for a file source';
 
 /**
  * #1600 OR41 C6f-3 — Dynamic range on a source whose store cannot read ranges
@@ -712,6 +749,48 @@ async function* copyRows(
   }
   const partitionPlan = plan;
 
+  // #1600 OR41 C5a — Load Incremental: the new watermark is read before the sink
+  // opens, so a bad column or a file source refuses with nothing written.
+  // Automatic reads the old watermark the executor stored (`ctx.copyWatermark`);
+  // without it the copy refuses rather than copying every row again.
+  let incremental: IncrementalPlan | undefined;
+  let watermark: CopyWatermarkOutput | undefined;
+  if (parsed.data.load === 'incremental') {
+    const column = parsed.data.watermarkColumnName;
+    if (column === undefined) {
+      yield* refuse(failed('permanent', 'Load Incremental needs a watermark column'));
+      return;
+    }
+    if (io.planIncremental === undefined) {
+      yield* refuse(failed('permanent', INCREMENTAL_NEEDS_DATABASE));
+      return;
+    }
+    let old: SqlParameterValue;
+    if (parsed.data.watermarkFrom === 'expression') {
+      old = parsed.data.watermarkOld ?? null;
+    } else if (ctx.copyWatermark === undefined) {
+      yield* refuse(
+        failed('permanent', 'Watermark from Automatic has no stored watermark to read'),
+      );
+      return;
+    } else {
+      old = ctx.copyWatermark.old;
+    }
+    try {
+      incremental = await io.planIncremental({
+        dataset: source,
+        signal: ctx.signal,
+        ...batchRows,
+        watermark: { column, old },
+      });
+    } catch (err) {
+      yield* refuse(copyFailure(err));
+      return;
+    }
+    watermark = { column, old, new: incremental.next };
+  }
+  const incrementalPlan = incremental;
+
   // §5 — "a long copy must not look hung". One tick per batch, off the PUMP's
   // `onBatch` rather than the sink's: the pump fires it after the sink has taken
   // the batch (so `counters.rowsWritten` is that batch's number), AND for a batch
@@ -757,6 +836,7 @@ async function* copyRows(
       batches: pumpCopyRows(
         logged(
           partitionPlan?.batches ??
+            incrementalPlan?.batches ??
             io.readBatches({ dataset: source, signal: ctx.signal, ...batchRows }),
         ),
         {
@@ -803,6 +883,10 @@ async function* copyRows(
     )
     .finally(() => ticks.close());
   let outcome: Awaited<typeof write>;
+  // #1600 OR41 C5a — the watermark of a copy whose sink committed, and why
+  // Automatic's could not be stored (null when it was, or when there is none).
+  let committed: CopyWatermarkOutput | undefined;
+  let storeError: string | null = null;
   try {
     for await (const progress of ticks) {
       yield { type: 'output', name: COPY_PROGRESS_OUTPUT, value: progress };
@@ -813,6 +897,13 @@ async function* copyRows(
     // store — running under nobody. Closing waits for it, as the executor waits
     // for its adapter; only a normal exit goes on to read the outcome.
     outcome = await write;
+    // C5a — stored here, the moment the sink has committed: a consumer that
+    // closes this generator once the write is done must not leave the rows
+    // committed and the watermark behind (the next run would copy them again).
+    if (outcome.ok && watermark !== undefined) {
+      committed = watermark;
+      if (parsed.data.watermarkFrom === 'automatic') storeError = storeWatermark(ctx, watermark);
+    }
     // C6f-3 — a sink that failed before pulling a row never iterated the plan.
     await partitionPlan?.close();
   }
@@ -821,6 +912,18 @@ async function* copyRows(
     if (!outcome.ok) throw outcome.error;
     const { result } = outcome;
     counters.rowsWritten = result.rowsWritten;
+    // #1600 OR41 C5a — Automatic's watermark was stored as the sink committed
+    // (above); one that could not be fails the node, with the rows committed.
+    if (storeError !== null) {
+      yield* endLog(storeError);
+      for (const [name, value] of Object.entries(
+        copyOutputs(counters, measured(), logPath, usedParallelCopies, committed),
+      )) {
+        yield { type: 'output', name, value };
+      }
+      yield failed('permanent', storeError);
+      return;
+    }
     // `close` reports a failure rather than throwing it, so the committed count
     // is never zeroed by the catch below.
     const logError = yield* endLog();
@@ -848,7 +951,7 @@ async function* copyRows(
         // so only closing the file is left to fail, and the rows are committed.
         // The counts are reported, then the failure (Files as-is's rule, C6c-1a).
         for (const [name, value] of Object.entries(
-          copyOutputs(counters, measured(), null, usedParallelCopies),
+          copyOutputs(counters, measured(), null, usedParallelCopies, committed),
         )) {
           yield { type: 'output', name, value };
         }
@@ -862,7 +965,7 @@ async function* copyRows(
     }
     yield {
       type: 'succeeded',
-      outputs: copyOutputs(counters, measured(), logPath, usedParallelCopies),
+      outputs: copyOutputs(counters, measured(), logPath, usedParallelCopies, watermark),
     };
   } catch (err) {
     // §10: "a cancel must never leave a silent partial". `node.failed` carries no
@@ -894,8 +997,10 @@ async function* copyRows(
     // keeps its own error, whatever the folder log's close reports.
     const terminal = copyFailure(err);
     yield* endLog(terminal.type === 'failed' ? terminal.error : undefined);
+    // C5a — a watermark only when the sink committed: a rolled-back copy's
+    // `new` would read as copied up to a value nothing landed for.
     for (const [name, value] of Object.entries(
-      copyOutputs(counters, measured(), logPath, usedParallelCopies),
+      copyOutputs(counters, measured(), logPath, usedParallelCopies, committed),
     )) {
       yield { type: 'output', name, value };
     }

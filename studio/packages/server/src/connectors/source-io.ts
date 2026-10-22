@@ -1,4 +1,4 @@
-import type { CoercionOptions } from '@autonomy-studio/shared';
+import type { CoercionOptions, SqlParameterValue } from '@autonomy-studio/shared';
 import type { ResolvedDataset } from './types.js';
 
 /**
@@ -67,6 +67,19 @@ export interface SourceIo {
     readonly partition: PartitionedRead;
   }) => Promise<PartitionPlan>;
   /**
+   * #1600 OR41 C5a — an Incremental read (catalogue §4.1 Load), planned BEFORE
+   * the copy writes anything, as a partitioned read is: the new watermark is
+   * read first, so a bad column refuses before the sink's transaction. OPTIONAL:
+   * only a database store implements it, and `copy` refuses Load Incremental on
+   * a source without it rather than copying every row.
+   */
+  readonly planIncremental?: (args: {
+    readonly dataset: ResolvedDataset;
+    readonly signal: AbortSignal | undefined;
+    readonly batchRows?: number;
+    readonly watermark: IncrementalRead;
+  }) => Promise<IncrementalPlan>;
+  /**
    * §6.4's per-source-dataset format facts (`nullValue`, `dateFormat`), read off
    * the SOURCE dataset's own config by the store that knows its shape.
    *
@@ -117,4 +130,34 @@ export interface PartitionPlan {
   readonly partitions: number;
   readonly batches: AsyncIterable<readonly Record<string, unknown>[]>;
   readonly close: () => Promise<void>;
+}
+
+/** #1600 OR41 C5a — what a rows Copy asks an Incremental read for. */
+export interface IncrementalRead {
+  /** The watermark column, as authored; the store quotes it. */
+  readonly column: string;
+  /** The old watermark; null reads every row up to the new one. */
+  readonly old: SqlParameterValue;
+}
+
+/**
+ * #1600 OR41 C5a — a planned Incremental read. `next` is the highest watermark
+ * above `old` the source holds, and `batches` reads `old < column <= next`.
+ * When nothing is above `old`, `next` is `old` and `batches` reads nothing, so
+ * the watermark never moves back. A value is the store's text for it, or a
+ * number where the store's integer (or SQLite real) is exact in one.
+ */
+export interface IncrementalPlan {
+  readonly next: SqlParameterValue;
+  readonly batches: AsyncIterable<readonly Record<string, unknown>[]>;
+}
+
+/** #1600 OR41 C5a — the plan when nothing is above the old watermark. */
+export function emptyIncrementalPlan(old: SqlParameterValue): IncrementalPlan {
+  return {
+    next: old,
+    batches: (async function* () {
+      // Nothing above the old watermark: no read at all.
+    })(),
+  };
 }

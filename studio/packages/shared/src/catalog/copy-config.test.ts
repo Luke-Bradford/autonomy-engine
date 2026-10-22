@@ -6,6 +6,7 @@ import {
   CopyMappingSchema,
   autoCreateCollisionIssue,
   copyDispatchInputSchema,
+  copyIncrementalIssues,
   copyInputSchema,
   copySkipIncompatibleIssue,
   copyVerifyConsistencyIssue,
@@ -578,12 +579,13 @@ describe('session log to a folder (C6c-1b)', () => {
     expect(settings.bindings).toEqual(['logConnection']);
   });
 
-  it('declares logPath last, and keeps the outputs a node saved before C6c-1b declares', () => {
+  it('declares logPath after the C6f outputs, and keeps the outputs a node saved before C6c-1b declares', () => {
     const entry = getActivity(COPY_ACTIVITY_TYPE)!;
-    const names = entry.outputs.map((o) => o.name);
-    expect(names.at(-1)).toBe('logPath');
-    expect(entry.outputs.at(-1)?.optional).toBe(true);
-    expect(entry.formerOutputs![0]!).toEqual(entry.outputs.slice(0, -1));
+    // C5a's watermark follows it; `formerOutputs[0]` is the C5a snapshot.
+    const beforeC5a = entry.formerOutputs![0]!;
+    expect(beforeC5a.at(-1)?.name).toBe('logPath');
+    expect(beforeC5a.at(-1)?.optional).toBe(true);
+    expect(entry.formerOutputs![1]!).toEqual(beforeC5a.slice(0, -1));
   });
 });
 
@@ -695,7 +697,7 @@ describe('partitioned reads (C6f-3)', () => {
   it('places the range on the Source tab, drawn only under Dynamic range, and the degree first on Settings', () => {
     const entry = getActivity(COPY_ACTIVITY_TYPE)!;
     const tab = (key: string) => entry.tabs?.find((t) => t.key === key)?.fields;
-    expect(tab('source')).toEqual([
+    expect(tab('source')?.slice(4)).toEqual([
       'partitionOption',
       'partitionColumnName',
       'partitionLowerBound',
@@ -712,5 +714,104 @@ describe('partitioned reads (C6f-3)', () => {
         { field: 'partitionOption', in: ['dynamicRange'] },
       ]);
     }
+  });
+});
+
+describe('incremental load (#1600 OR41 C5a)', () => {
+  const id = { source: 'a', sink: 'id', type: 'integer' as const };
+  const issues = (extra: Record<string, unknown>) => {
+    const r = copyInputSchema.safeParse({ mapping: [id], ...extra });
+    return r.success ? [] : r.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`);
+  };
+  const incremental = { load: 'incremental', watermarkColumnName: 'modified_at' };
+
+  it('defaults to a Full load with Automatic watermark, so a stored copy reads as it did', () => {
+    const cfg = copyInputSchema.parse({ mapping: [id] });
+    expect(cfg.load).toBe('full');
+    expect(cfg.watermarkFrom).toBe('automatic');
+    expect(cfg.watermarkColumnName).toBeUndefined();
+    expect(cfg.watermarkOld).toBeUndefined();
+  });
+
+  it('takes Incremental with a column, Automatic or Expression', () => {
+    expect(issues(incremental)).toEqual([]);
+    expect(
+      issues({
+        ...incremental,
+        watermarkFrom: 'expression',
+        watermarkOld: '${nodes.l.output.firstRow.wm}',
+      }),
+    ).toEqual([]);
+  });
+
+  it('needs a watermark column under Incremental, and an old watermark under Expression', () => {
+    expect(issues({ load: 'incremental' })).toEqual([
+      'watermarkColumnName: Load Incremental needs a watermark column',
+    ]);
+    expect(issues({ ...incremental, watermarkFrom: 'expression' })).toEqual([
+      'watermarkOld: Watermark from Expression needs an old watermark',
+    ]);
+    expect(issues({ ...incremental, watermarkFrom: 'expression', watermarkOld: ' ' })).toEqual([
+      'watermarkOld: Watermark from Expression needs an old watermark',
+    ]);
+  });
+
+  it('refuses the watermark settings under a Full load, and an old watermark under Automatic', () => {
+    expect(issues({ watermarkColumnName: 'm' })).toEqual([
+      'watermarkColumnName: a watermark column needs Load Incremental',
+    ]);
+    expect(issues({ watermarkFrom: 'expression' })).toEqual([
+      'watermarkFrom: Watermark from Expression needs Load Incremental',
+    ]);
+    expect(issues({ ...incremental, watermarkOld: '5' })).toEqual([
+      'watermarkOld: an old watermark is read only with Watermark from Expression; Automatic stores its own',
+    ]);
+  });
+
+  it('keeps Load, Watermark from and the column literal', () => {
+    expect(copyIncrementalIssues({ load: '${params.l}' })).toEqual([
+      { field: 'load', message: 'Load stays literal, because it decides which fields apply' },
+    ]);
+    expect(copyIncrementalIssues({ ...incremental, watermarkFrom: '${params.f}' })).toEqual([
+      {
+        field: 'watermarkFrom',
+        message: 'Watermark from stays literal, because it decides which fields apply',
+      },
+    ]);
+    expect(issues({ ...incremental, watermarkColumnName: '${params.c}' })).toEqual([
+      'watermarkColumnName: the watermark column stays literal, so a column name never comes from an expression',
+    ]);
+  });
+
+  it('refuses Incremental with a partitioned read', () => {
+    expect(
+      issues({ ...incremental, partitionOption: 'dynamicRange', partitionColumnName: 'id' }),
+    ).toEqual(['load: Load Incremental reads with one reader, so set Partition option to None']);
+  });
+
+  it('dispatches a resolved old watermark of any scalar type', () => {
+    const base = { mapping: [id], ...incremental, watermarkFrom: 'expression' };
+    expect(copyDispatchInputSchema.parse({ ...base, watermarkOld: 7 }).watermarkOld).toBe(7);
+    expect(copyDispatchInputSchema.parse({ ...base, watermarkOld: null }).watermarkOld).toBeNull();
+    expect(copyDispatchInputSchema.safeParse({ ...base, watermarkOld: true }).success).toBe(false);
+  });
+
+  it('places Load and the watermark first on the Source tab, drawn only where they apply', () => {
+    const entry = getActivity(COPY_ACTIVITY_TYPE)!;
+    expect(entry.tabs?.find((t) => t.key === 'source')?.fields.slice(0, 4)).toEqual([
+      'load',
+      'watermarkColumnName',
+      'watermarkFrom',
+      'watermarkOld',
+    ]);
+    expect(entry.appliesWhen?.['watermarkColumnName']).toEqual([
+      { field: 'load', in: ['incremental'] },
+    ]);
+    expect(entry.appliesWhen?.['watermarkFrom']).toEqual([{ field: 'load', in: ['incremental'] }]);
+    expect(entry.appliesWhen?.['watermarkOld']).toEqual([
+      { field: 'watermarkFrom', in: ['expression'] },
+    ]);
+    expect(entry.outputs.at(-1)).toMatchObject({ name: 'watermark', type: 'json', optional: true });
+    expect(entry.formerOutputs![0]!).toEqual(entry.outputs.slice(0, -1));
   });
 });
