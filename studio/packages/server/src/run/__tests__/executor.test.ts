@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
+import { sql } from 'drizzle-orm';
 import { join } from 'node:path';
 import sodium from 'libsodium-wrappers';
 import { z } from 'zod';
@@ -6268,7 +6269,7 @@ describe('createExecutor — a Web Wait for callback and the public base URL (#1
 
 describe('createExecutor — #1600 OR41 C5a: Copy Load Incremental', () => {
   const dirs: string[] = [];
-  const rowsOfDb = (db: Db, query: string) => db.$client.prepare(query).all();
+  const rowsOfDb = (db: Db, query: string) => db.all(sql.raw(query));
   afterAll(async () => {
     for (const d of dirs) await rm(d, { recursive: true, force: true });
   });

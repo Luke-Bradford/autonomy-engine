@@ -29,7 +29,8 @@ export function copyWatermarkSourceKey(input: {
   readonly dataset: ResolvedDataset;
   readonly column: string;
 }): string {
-  const { queryTimeoutSeconds: _timeout, ...config } = input.dataset.config;
+  const config: Record<string, unknown> = { ...input.dataset.config };
+  delete config['queryTimeoutSeconds'];
   return createHash('sha256')
     .update(
       canonicalStringify({
