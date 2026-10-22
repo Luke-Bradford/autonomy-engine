@@ -33,9 +33,9 @@ import type { ActivityContext, ActivityEvent } from './types.js';
  * #1600 OR41 C10a — the Script activity (activity catalogue §4.5, after ADF's
  * Script): authored SQL blocks, run in order on one database connection.
  *
- * Only SQLite so far; PostgreSQL is C10b. The store-agnostic parts (the block
- * checks, the result-set capture, the outputs) are written so C10b adds only
- * its session.
+ * This module runs it on SQLite; C10b-1 runs it on PostgreSQL
+ * (`postgres-script.ts`), which shares the store-agnostic parts exported here:
+ * the block wording, the result-set capture and the outputs.
  *
  * **What keeps it inside the connection's roots.** A block is authored SQL, as a
  * Pre-copy script is, and the same allow-list on its leading keyword is the
@@ -82,30 +82,71 @@ export const SCRIPT_SQLITE_STATEMENTS: readonly string[] = [
   'ALTER',
 ];
 
+/**
+ * #1600 OR41 C10b-1 — the statements a Script block may begin with on
+ * PostgreSQL. Its own list rather than the Pre-copy script's, so a change to
+ * one cannot silently change the other, but for the same reason
+ * (`PRE_COPY_SCRIPT_STATEMENTS`' comment): it is not a privilege boundary, the
+ * connection's credential is. What it keeps out is what would take the script
+ * out of the activity's hands:
+ *
+ * - transaction control (`BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT`), because
+ *   the transaction is the activity's (*Run as one transaction*);
+ * - `SET` and `RESET`. LOAD-BEARING: `SET TRANSACTION READ WRITE` as the first
+ *   statement of a read-only script's `BEGIN READ ONLY` would lift the
+ *   read-only guarantee, and `SET statement_timeout = 0` the server's cap on
+ *   every later block;
+ * - `COPY` (a `FROM STDIN` has no data to send) and `VACUUM` (refused inside a
+ *   transaction).
+ *
+ * The extended protocol makes the server refuse a second statement, so the word
+ * checked is the statement run. `VALUES`, `TABLE`, `EXPLAIN` and `SHOW` read;
+ * `REFRESH` rebuilds a materialized view after a load.
+ */
+export const SCRIPT_POSTGRES_STATEMENTS: readonly string[] = [
+  'SELECT',
+  'WITH',
+  'VALUES',
+  'TABLE',
+  'EXPLAIN',
+  'SHOW',
+  'INSERT',
+  'UPDATE',
+  'DELETE',
+  'MERGE',
+  'TRUNCATE',
+  'CREATE',
+  'DROP',
+  'ALTER',
+  'REFRESH',
+  'CALL',
+  'DO',
+];
+
 /** Rows pulled between yields to the event loop while a Query block steps. */
 const SCRIPT_BATCH_ROWS = 100;
 
-const ABORTED = 'script aborted';
+export const SCRIPT_ABORTED = 'script aborted';
 
 type SqliteConnectionConfig = z.infer<typeof sqliteConnectionConfigSchema>;
-type ScriptBlock = ScriptDispatchConfig['blocks'][number];
+export type ScriptBlock = ScriptDispatchConfig['blocks'][number];
 
 /** One Query block's result set, as the `resultSets` output holds it. */
-interface ResultSet {
+export interface ResultSet {
   rowCount: number;
   rows: Record<string, unknown>[];
 }
 
 /** 1-based, as the editor numbers the rows. */
-function blockName(index: number): string {
+export function blockName(index: number): string {
   return `Script block ${index + 1}`;
 }
 
-function blockWording(index: number): AuthoredStatementWording {
+export function blockWording(index: number): AuthoredStatementWording {
   return { the: blockName(index), any: 'a Script block', values: 'its Parameters' };
 }
 
-function asStatement(block: ScriptBlock): PreCopyScript {
+export function asStatement(block: ScriptBlock): PreCopyScript {
   return { sql: block.sql, parameters: block.parameters ?? {} };
 }
 
@@ -120,7 +161,7 @@ function asStatement(block: ScriptBlock): PreCopyScript {
  * into a value (`add` takes it lazily), so a value that cannot be kept cannot
  * fail the script either.
  */
-class ResultCapture {
+export class ResultCapture {
   readonly sets: ResultSet[] = [];
   private bytes = 0;
   private cause: 'rows' | 'bytes' | null = null;
@@ -180,7 +221,7 @@ class ResultCapture {
  * A failure as the node reports it. The store's own verdict passes through, as
  * Lookup's does (`lookupFailure`): a `SQLITE_BUSY` is transient.
  */
-function scriptFailure(err: unknown): ActivityEvent {
+export function scriptFailure(err: unknown): ActivityEvent {
   if (err instanceof LookupValueError) {
     return failed('permanent', `a Script result set cannot hold a value — ${err.message}`);
   }
@@ -251,7 +292,7 @@ export async function executeSqliteScript(
 
     for (const [i, block] of config.blocks.entries()) {
       if (i > 0) await yieldToEventLoop();
-      if (signal.aborted) throw new DatasetIoError('cancelled', ABORTED);
+      if (signal.aborted) throw new DatasetIoError('cancelled', SCRIPT_ABORTED);
 
       const statement = prepareBlock(db, block, i);
       const parameters = usedSqliteParameters(asStatement(block));
@@ -278,7 +319,7 @@ export async function executeSqliteScript(
             }
             if (done) break;
             await yieldToEventLoop();
-            if (signal.aborted) throw new DatasetIoError('cancelled', ABORTED);
+            if (signal.aborted) throw new DatasetIoError('cancelled', SCRIPT_ABORTED);
           }
           cursor = undefined;
         } else {
@@ -389,7 +430,7 @@ export async function* runSqliteScript(
     return;
   }
   if (ctx.signal.aborted) {
-    yield failed('cancelled', ABORTED);
+    yield failed('cancelled', SCRIPT_ABORTED);
     return;
   }
 
@@ -397,9 +438,9 @@ export async function* runSqliteScript(
   let release: (() => void) | undefined;
   try {
     if (readOnly) {
-      db = await openSqliteReadOnly(cfg, ctx.signal, ABORTED);
+      db = await openSqliteReadOnly(cfg, ctx.signal, SCRIPT_ABORTED);
     } else {
-      ({ db, release } = await openSqliteWriter(cfg, ctx.signal, ABORTED));
+      ({ db, release } = await openSqliteWriter(cfg, ctx.signal, SCRIPT_ABORTED));
     }
   } catch (err) {
     yield scriptFailure(err);
@@ -431,7 +472,14 @@ export async function* runSqliteScript(
     yield failure ?? failed('permanent', 'the script failed');
     return;
   }
-  const { capture, recordsAffected } = result;
+  yield* scriptSucceeded(result.capture, result.recordsAffected);
+}
+
+/** A finished script's events, on either store: the truncation warning, then its outputs. */
+export function* scriptSucceeded(
+  capture: ResultCapture,
+  recordsAffected: number,
+): Generator<ActivityEvent> {
   if (capture.truncated) {
     yield { type: 'warned', code: WARNING_CODES.SCRIPT_RESULT_TRUNCATED, reason: capture.reason() };
   }
@@ -441,6 +489,7 @@ export async function* runSqliteScript(
       resultSetCount: capture.sets.length,
       resultSets: capture.sets,
       recordsAffected,
+      // C10b-2 fills it from PostgreSQL's Out parameters; SQLite has none.
       outputParameters: {},
       truncated: capture.truncated,
     },

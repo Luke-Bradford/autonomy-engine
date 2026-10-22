@@ -663,7 +663,11 @@
 // successful one.
 // BUMP 71→72 for #1600 OR41 C10a: a new runnable type, `script`. A pre-C10a
 // build refuses the unknown type at import (C8a's reason).
-export const CATALOG_VERSION = 72;
+// BUMP 72→73 for #1600 OR41 C10b-1: `script.connectionKinds` gains `postgres`.
+// Bump 26's precedent: a pre-C10b build refuses a Script bound to a postgres
+// connection at the catalog's `connectionKinds` check, so it is refused at
+// import rather than half-loaded.
+export const CATALOG_VERSION = 73;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

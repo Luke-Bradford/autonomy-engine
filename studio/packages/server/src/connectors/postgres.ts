@@ -2,6 +2,7 @@ import pg from 'pg';
 import {
   COPY_ACTIVITY_TYPE,
   GET_METADATA_ACTIVITY_TYPE,
+  SCRIPT_ACTIVITY_TYPE,
   LOOKUP_ACTIVITY_TYPE,
   datasetConfigSchema,
   formatZodIssues,
@@ -18,6 +19,7 @@ import { COPY_BATCH_ROWS } from '../limits.js';
 import { DatasetIoError } from './dataset-io-error.js';
 import { runCopyActivity } from './copy.js';
 import { runLookupActivity } from './lookup.js';
+import { runPostgresScript } from './postgres-script.js';
 import { postgresTableMetadata } from './postgres-table-metadata.js';
 import { runTableMetadata } from './table-metadata.js';
 import {
@@ -303,6 +305,12 @@ export function createPostgresAdapter(
           ctx,
           postgresTableMetadata({ createClient, connectionConfig: ctx.connectionConfig, secret }),
         );
+        return;
+      }
+
+      // #1600 OR41 C10b-1 — Script: authored SQL blocks, run in order on the store.
+      if (ctx.activityType === SCRIPT_ACTIVITY_TYPE) {
+        yield* runPostgresScript(ctx, { createClient, secret, types: readerTypes() });
         return;
       }
 
