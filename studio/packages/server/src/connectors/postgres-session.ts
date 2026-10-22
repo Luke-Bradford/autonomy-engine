@@ -398,7 +398,8 @@ export const sendPostgresCancelRequest: PostgresCancelSender = (target, processI
     const timer = setTimeout(done, target.timeoutMs);
     timer.unref();
     socket.once('connect', () => socket.write(request));
-    socket.once('error', done);
+    // `on`, not `once`: a second `error` with no listener would end the server.
+    socket.on('error', done);
     socket.once('close', done);
   });
 

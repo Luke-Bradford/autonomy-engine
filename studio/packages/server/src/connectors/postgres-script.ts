@@ -90,9 +90,12 @@ import type { ActivityContext, ActivityEvent } from './types.js';
  * runs an abort sends the server a CancelRequest for the session
  * (`armPostgresCancel`). The block then fails `57014`, read as `cancelled`;
  * a cancelled statement applied nothing, so only a `CALL` or `DO` counts as
- * possibly applied, as for any other refusal. A request that lands after the
- * block finished is ignored by the server, and the next check stops the
- * script. None is sent during BEGIN, COMMIT or ROLLBACK.
+ * possibly applied, as for any other refusal. The server cancels whatever the
+ * session is running when the request lands. One that lands after the block
+ * finished finds the session idle, which ignores it, or in this script's own
+ * ROLLBACK, which the closing session undoes anyway; the next check stops the
+ * script before anything else is sent. None is sent during BEGIN, COMMIT or
+ * ROLLBACK.
  *
  * **Out and In-out parameters (C10b-2a).** An Out parameter binds NULL, whatever
  * value it was given (ADF ignores it too); an In-out one sends its value. Both

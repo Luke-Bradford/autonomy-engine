@@ -1385,32 +1385,40 @@ describe.skipIf(LIVE_HOST === undefined)('Script on a live postgres (C10b-1)', (
 
   it('cancels the block in flight at the server, well inside a long Statement timeout (#1800)', async () => {
     const marker = `c1800_${String(process.pid)}`;
-    const controller = new AbortController();
-    const started = Date.now();
-    setTimeout(() => controller.abort(), 500);
-    const events = await runLive([{ type: 'query', sql: `select pg_sleep(60) as ${marker}` }], {
-      signal: controller.signal,
-      connection: { statementTimeoutMs: 120_000 },
-    });
-    expect(failureOf(events)).toEqual({
-      type: 'failed',
-      kind: 'cancelled',
-      error: 'script aborted',
-    });
-    expect(Date.now() - started).toBeLessThan(10_000);
-    // The server is no longer running it.
-    let running = -1;
-    for (let i = 0; i < 50 && running !== 0; i += 1) {
-      running = await admin(async (c) => {
+    const active = () =>
+      admin(async (c) => {
         const r = await c.query<{ n: string }>(
           `select count(*) as n from pg_stat_activity where state = 'active' and query like $1 and pid <> pg_backend_pid()`,
           [`%${marker}%`],
         );
         return Number(r.rows[0]!.n);
       });
-      if (running !== 0) await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    expect(running).toBe(0);
+    /** Poll until the marker's active count is `n`, at most ~5 s. */
+    const until = async (n: number): Promise<number> => {
+      let seen = await active();
+      for (let i = 0; i < 50 && seen !== n; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        seen = await active();
+      }
+      return seen;
+    };
+    const controller = new AbortController();
+    const run = runLive([{ type: 'query', sql: `select pg_sleep(60) as ${marker}` }], {
+      signal: controller.signal,
+      connection: { statementTimeoutMs: 120_000 },
+    });
+    // Abort only once the block is running on the server, so the cancel is what ends it.
+    expect(await until(1)).toBe(1);
+    const aborted = Date.now();
+    controller.abort();
+    const events = await run;
+    expect(failureOf(events)).toEqual({
+      type: 'failed',
+      kind: 'cancelled',
+      error: 'script aborted',
+    });
+    expect(Date.now() - aborted).toBeLessThan(10_000);
+    expect(await until(0)).toBe(0);
   });
 
   it('streams a result without keeping its rows (pg 8.23 accumulates them under a callback)', async () => {

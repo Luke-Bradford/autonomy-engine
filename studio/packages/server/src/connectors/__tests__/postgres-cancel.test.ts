@@ -133,7 +133,6 @@ describe('armPostgresCancel (#1800)', () => {
     armPostgresCancel(keyed(4242, 99), target, controller.signal, send);
     expect(sent).toEqual([]);
     controller.abort();
-    controller.abort();
     expect(sent).toEqual([[target, 4242, 99]]);
   });
 
@@ -165,13 +164,28 @@ describe('armPostgresCancel (#1800)', () => {
     expect(sent).toEqual([]);
   });
 
-  it('swallows a sender that rejects', async () => {
-    const controller = new AbortController();
-    armPostgresCancel(keyed(1, 2), target, controller.signal, () =>
-      Promise.reject(new Error('boom')),
-    );
-    controller.abort();
-    // An unhandled rejection would fail the run; let it surface if there were one.
-    await new Promise((resolve) => setImmediate(resolve));
+  it.each([
+    ['rejects', () => Promise.reject(new Error('boom'))],
+    [
+      'throws',
+      () => {
+        throw new Error('boom');
+      },
+    ],
+  ])('swallows a sender that %s', async (_label, send: PostgresCancelSender) => {
+    const unhandled: unknown[] = [];
+    const record = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', record);
+    try {
+      const controller = new AbortController();
+      armPostgresCancel(keyed(1, 2), target, controller.signal, send);
+      expect(() => controller.abort()).not.toThrow();
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', record);
+    }
   });
 });
