@@ -14,6 +14,7 @@ import {
   type DatasetColumn,
 } from '@autonomy-studio/shared';
 import {
+  INCREMENTAL_NEEDS_DATABASE,
   runCopyActivity,
   storeCountAdvisory,
   verifyAfterCopyFailure,
@@ -2367,5 +2368,173 @@ describe('partitioned reads (#1600 OR41 C6f-3)', () => {
     const events = await drain(ctxFor({ mapping: partitioned.mapping }), io);
     expect(outputsOf(events)['usedParallelCopies']).toBe(1);
     expect(log).toEqual(['write', 'one reader']);
+  });
+});
+
+describe('copy activity — Load Incremental (#1600 OR41 C5a)', () => {
+  const mapping = [
+    { source: 'id', sink: 'id', type: 'integer' },
+    { source: 'name', sink: 'name', type: 'string' },
+  ];
+  const incremental = (extra: Record<string, unknown>) => ({
+    mapping,
+    load: 'incremental',
+    watermarkColumnName: 'id',
+    ...extra,
+  });
+  const outputsOf = (events: ActivityEvent[]) =>
+    Object.fromEntries(
+      events.flatMap((e) =>
+        e.type === 'output'
+          ? [[e.name, e.value]]
+          : e.type === 'succeeded'
+            ? Object.entries(e.outputs ?? {})
+            : [],
+      ),
+    );
+  function stores(rows = 3) {
+    const root = tempRoot();
+    return { root, sourcePath: seedDb(root, rows, 'src.db'), sinkPath: seedSink(root, 'dst.db') };
+  }
+  const withWatermark = (ctx: ActivityContext, old: unknown, commit: (next: unknown) => void) =>
+    ({ ...ctx, copyWatermark: { old, commit } }) as ActivityContext;
+
+  it('Expression over a TEXT column: compares as text in the store, and reports the watermark', async () => {
+    const s = stores();
+    const events = await run(
+      copyCtx({
+        ...s,
+        input: incremental({
+          watermarkColumnName: 'name',
+          watermarkFrom: 'expression',
+          watermarkOld: 'row-1',
+        }),
+      }),
+    );
+    expect(terminal(events).type).toBe('succeeded');
+    expect(rowsOf(s.sinkPath, 'SELECT id FROM sink ORDER BY id')).toEqual([{ id: 2 }, { id: 3 }]);
+    expect(outputsOf(events)['watermark']).toEqual({ column: 'name', old: 'row-1', new: 'row-3' });
+  });
+
+  it('a Full copy reports no watermark', async () => {
+    const s = stores();
+    const events = await run(copyCtx({ ...s, input: { mapping } }));
+    expect(terminal(events).type).toBe('succeeded');
+    expect('watermark' in outputsOf(events)).toBe(false);
+  });
+
+  it('Automatic reads the stored watermark and commits the new one after the sink commits', async () => {
+    const s = stores();
+    const committed: unknown[] = [];
+    const events = await run(
+      withWatermark(copyCtx({ ...s, input: incremental({}) }), 1, (next) => {
+        // The rows are already in the sink when the watermark moves.
+        committed.push([next, rowsOf(s.sinkPath, 'SELECT count(*) AS n FROM sink')]);
+      }),
+    );
+    expect(terminal(events).type).toBe('succeeded');
+    expect(committed).toEqual([[3, [{ n: 2 }]]]);
+    expect(outputsOf(events)['watermark']).toEqual({ column: 'id', old: 1, new: 3 });
+  });
+
+  it('Automatic without a stored watermark to read refuses rather than copying every row', async () => {
+    const s = stores();
+    const end = terminal(await run(copyCtx({ ...s, input: incremental({}) })));
+    expect(end).toMatchObject({
+      type: 'failed',
+      kind: 'permanent',
+      error: 'Watermark from Automatic has no stored watermark to read',
+    });
+    expect(rowsOf(s.sinkPath)).toEqual([]);
+  });
+
+  it('a watermark that cannot be stored fails the node, says the rows are committed, and keeps the outputs', async () => {
+    const s = stores();
+    const events = await run(
+      withWatermark(copyCtx({ ...s, input: incremental({}) }), null, () => {
+        throw new Error('disk I/O error');
+      }),
+    );
+    const end = terminal(events);
+    expect(end.type).toBe('failed');
+    expect(end.type === 'failed' ? end.error : '').toBe(
+      'the rows were committed, but the watermark could not be stored, so the next run copies them again: disk I/O error',
+    );
+    expect(rowsOf(s.sinkPath, 'SELECT count(*) AS n FROM sink')).toEqual([{ n: 3 }]);
+    expect(outputsOf(events)).toMatchObject({
+      rowsWritten: 3,
+      watermark: { column: 'id', old: null, new: 3 },
+    });
+  });
+
+  it('nothing above the old watermark reads nothing and keeps it', async () => {
+    const s = stores();
+    const committed: unknown[] = [];
+    const events = await run(
+      withWatermark(copyCtx({ ...s, input: incremental({}) }), 3, (next) => committed.push(next)),
+    );
+    expect(terminal(events).type).toBe('succeeded');
+    expect(outputsOf(events)).toMatchObject({ rowsRead: 0, watermark: { old: 3, new: 3 } });
+    expect(committed).toEqual([3]);
+  });
+
+  it.each([
+    ['an integer past 2^53', 'INSERT INTO t VALUES (9007199254740993, \'big\')', /past 2\^53/],
+    ['a blob', "UPDATE t SET name = x'00' WHERE id = 3", /holds a blob/],
+  ])('refuses %s as a watermark before the sink writes', async (_label, sql, message) => {
+    const s = stores();
+    const db = new Database(s.sourcePath);
+    db.exec(sql);
+    db.close();
+    const column = sql.includes('blob') || sql.includes("x'00'") ? 'name' : 'id';
+    const end = terminal(
+      await run(
+        copyCtx({
+          ...s,
+          input: incremental({
+            watermarkColumnName: column,
+            watermarkFrom: 'expression',
+            watermarkOld: null,
+            preCopyScript: 'INSERT INTO sink (id) VALUES (99)',
+          }),
+        }),
+      ),
+    );
+    expect(end.type === 'failed' ? end.error : '').toMatch(message);
+    expect(rowsOf(s.sinkPath)).toEqual([]);
+  });
+
+  it('refuses a column the source does not have before the sink writes', async () => {
+    const s = stores();
+    const end = terminal(
+      await run(copyCtx({ ...s, input: incremental({ watermarkColumnName: 'nope', watermarkFrom: 'expression', watermarkOld: 1 }) })),
+    );
+    expect(end).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(end.type === 'failed' ? end.error : '').toMatch(/watermark column 'nope'/);
+    expect(rowsOf(s.sinkPath)).toEqual([]);
+  });
+
+  it('refuses Load Incremental on a source with no incremental read (a file)', async () => {
+    const io: CopyIo = {
+      describeSource: () => Promise.resolve(['id', 'name']),
+      sourceCoercion: () => ({}),
+      readBatches: async function* () {
+        yield [{ id: 1, name: 'a' }];
+      },
+      writeRows: () => Promise.reject(new Error('the sink must not be reached')),
+    };
+    const events: ActivityEvent[] = [];
+    const ctx = copyCtx({
+      root: tempRoot(),
+      sourcePath: 'unused.db',
+      sinkPath: 'unused-dst.db',
+      input: incremental({ watermarkFrom: 'expression', watermarkOld: 1 }),
+    });
+    for await (const e of runCopyActivity(ctx, io)) events.push(e);
+    expect(terminal(events)).toMatchObject({
+      type: 'failed',
+      kind: 'permanent',
+      error: INCREMENTAL_NEEDS_DATABASE,
+    });
   });
 });
