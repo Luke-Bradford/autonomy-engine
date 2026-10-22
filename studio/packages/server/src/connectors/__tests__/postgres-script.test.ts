@@ -923,7 +923,11 @@ describe('a cancel reaches the block in flight (#1800)', () => {
     expect(sent).toEqual([
       [{ host: 'db.invalid', port: DEFAULT_POSTGRES_PORT, timeoutMs: 10_000 }, 4242, -99],
     ]);
-    expect(failureOf(events)).toEqual({ type: 'failed', kind: 'cancelled', error: 'script aborted' });
+    expect(failureOf(events)).toEqual({
+      type: 'failed',
+      kind: 'cancelled',
+      error: 'script aborted',
+    });
     expect(queries).not.toContain('insert into t values (2)');
   });
 
@@ -948,7 +952,11 @@ describe('a cancel reaches the block in flight (#1800)', () => {
     const { events } = await runCancelled([{ type: 'nonQuery', sql: SLEEP }], {
       blockTimeoutSeconds: 5,
     });
-    expect(failureOf(events)).toEqual({ type: 'failed', kind: 'cancelled', error: 'script aborted' });
+    expect(failureOf(events)).toEqual({
+      type: 'failed',
+      kind: 'cancelled',
+      error: 'script aborted',
+    });
   });
 
   it('rolls one transaction back after the cancel', async () => {
@@ -1380,11 +1388,15 @@ describe.skipIf(LIVE_HOST === undefined)('Script on a live postgres (C10b-1)', (
     const controller = new AbortController();
     const started = Date.now();
     setTimeout(() => controller.abort(), 500);
-    const events = await runLive(
-      [{ type: 'query', sql: `select pg_sleep(60) as ${marker}` }],
-      { signal: controller.signal, connection: { statementTimeoutMs: 120_000 } },
-    );
-    expect(failureOf(events)).toEqual({ type: 'failed', kind: 'cancelled', error: 'script aborted' });
+    const events = await runLive([{ type: 'query', sql: `select pg_sleep(60) as ${marker}` }], {
+      signal: controller.signal,
+      connection: { statementTimeoutMs: 120_000 },
+    });
+    expect(failureOf(events)).toEqual({
+      type: 'failed',
+      kind: 'cancelled',
+      error: 'script aborted',
+    });
     expect(Date.now() - started).toBeLessThan(10_000);
     // The server is no longer running it.
     let running = -1;
