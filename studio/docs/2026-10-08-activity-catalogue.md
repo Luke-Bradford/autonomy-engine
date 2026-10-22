@@ -899,12 +899,12 @@ Sources: [Set variable](https://learn.microsoft.com/azure/data-factory/control-f
 - `CATALOG_VERSION` 54→55: a build before C12a ignores `operation`, so a Set variable · Append would replace the array.
 
 **How C12b built it** (Pipeline return value):
-- `operation: 'return'` with `returnValues`, a table of `{key, type, value?}` rows that the dock draws as *Return keys* (Key · Type · Value, ⓕ on Value). Operation is now the tab's first field, as in ADF, because it decides the rest: Variable and Value apply to Set and Append, and Return keys to Pipeline return value (`appliesWhen`). A return node has no Variable or Value, and a Set or Append has no Return keys. Each is refused at save rather than ignored.
+- `operation: 'return'` with `returnValues`, a table of `{key, type, content?}` rows that the dock draws as *Return keys* (Key · Type · Content, ⓕ on Content; `content` is ADF's own name for a return value's payload). Operation is now the tab's first field, as in ADF, because it decides the rest: Variable and Value apply to Set and Append, and Return keys to Pipeline return value (`appliesWhen`). A return node has no Variable or Value, and a Set or Append has no Return keys. Each is refused at save rather than ignored.
 - **Types:** String · Number · Boolean · Array · Object · Null.
   - ADF's Int and Float are one Number, studio's number type.
   - ADF's *Expression* type is dropped, because every row already takes `${}`.
   - Array and Object take JSON text or one whole-value `${}` of that kind. A Set's array has no literal form, but a return value is typed per row, so its text is decided.
-  - Null takes no value. A String with none is `""`.
+  - Null takes no content. A String with none is `""`.
   - The literal and template checks are the run's own (`coerceReturnValue`, which reuses `coerceVariableValue` for the scalars), and a whole-value `${}` is type-checked at save as a Set's is.
 - **Keys:** letters, digits and `_`, not starting with a digit, so `…pipelineReturnValue.<key>` is one path segment. They must be unique, at least one is required, and `__proto__` is refused. The run builds the map from own keys, so a stored one is never a prototype write.
 - **Not a variable write.** The node succeeds the way Filter does: `succeedControl` → `node.succeeded` with the one output `pipelineReturnValue` (`json`). It records no `variable.*` event, and the determinism guard does not count it as a writer, although its reads still count. Its contract is derived from the Operation by `lowerSetVariableReturnOutputs` in `lowerPipelineNodes`, which overwrites it for a return node and heals the row back to `[]` when the Operation goes back to Set or Append. The canvas re-derives the contract on every config edit, so a child's own `${nodes.<ret>.output.pipelineReturnValue}` checks against what the server will store.

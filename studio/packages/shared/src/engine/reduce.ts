@@ -654,7 +654,7 @@ export function createEngine(doc: EngineDoc): Engine {
       if (typeof key !== 'string' || key === '' || type === undefined) {
         throw new SubstituteError(`'${node.type}' node has a malformed return value`);
       }
-      const raw = r['value'] ?? (type === 'string' || type === 'null' ? '' : undefined);
+      const raw = r['content'] ?? (type === 'string' || type === 'null' ? '' : undefined);
       if (typeof raw !== 'string') {
         throw new SubstituteError(`return value '${key}' must be text`);
       }

@@ -108,7 +108,10 @@ describe('node panel labels (#1396)', () => {
                     : // #1600 C3b — a record (Copy's Pre-copy bind values) takes a row.
                       f.kind === 'keyValue'
                       ? { x: 'x' }
-                      : 'x',
+                      : // #1600 C12b — a row list (Set variable's Return keys) takes a row.
+                        f.kind === 'objectList'
+                        ? [{}]
+                        : 'x',
           ]),
       ]);
       const overrides =

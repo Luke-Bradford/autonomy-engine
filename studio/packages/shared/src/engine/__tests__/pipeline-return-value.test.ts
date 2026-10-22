@@ -22,7 +22,7 @@ function node(id: string, config: Record<string, unknown> = {}, type = 'agent_ta
   const filled = type === 'agent_task' ? { task: 't', ...config } : config;
   return { id, type, config: filled, position: { x: seq, y: 0 } };
 }
-type Row = { key: unknown; type: unknown; value?: unknown };
+type Row = { key: unknown; type: unknown; content?: unknown };
 const ret = (id: string, returnValues: Row[] | unknown): Node =>
   node(id, { operation: 'return', returnValues }, 'set_variable');
 function edge(from: string, to: string, on: 'success' | 'failure' = 'success'): Edge {
@@ -55,14 +55,14 @@ describe('a Pipeline return value node succeeds with the typed map as its output
   it('coerces each row to its type, writes no variable, and is never dispatched', () => {
     const e = eng([
       ret('r', [
-        { key: 'label', type: 'string', value: 'n=${params.x}' },
+        { key: 'label', type: 'string', content: 'n=${params.x}' },
         { key: 'empty', type: 'string' },
-        { key: 'count', type: 'number', value: '42' },
-        { key: 'twice', type: 'number', value: '${mul(params.x, 2)}' },
-        { key: 'ok', type: 'boolean', value: 'true' },
-        { key: 'list', type: 'array', value: '["a", "b"]' },
-        { key: 'obj', type: 'object', value: '${params.j}' },
-        { key: 'lit', type: 'object', value: '{"k": [1]}' },
+        { key: 'count', type: 'number', content: '42' },
+        { key: 'twice', type: 'number', content: '${mul(params.x, 2)}' },
+        { key: 'ok', type: 'boolean', content: 'true' },
+        { key: 'list', type: 'array', content: '["a", "b"]' },
+        { key: 'obj', type: 'object', content: '${params.j}' },
+        { key: 'lit', type: 'object', content: '{"k": [1]}' },
         { key: 'none', type: 'null' },
       ]),
     ]);
@@ -98,7 +98,7 @@ describe('a Pipeline return value node succeeds with the typed map as its output
   it('a downstream node in the child reads it like any output', () => {
     const e = eng(
       [
-        ret('r', [{ key: 'total', type: 'number', value: '7' }]),
+        ret('r', [{ key: 'total', type: 'number', content: '7' }]),
         node(
           'w',
           { variable: 'n', value: '${nodes.r.output.pipelineReturnValue.total}' },
@@ -114,7 +114,7 @@ describe('a Pipeline return value node succeeds with the typed map as its output
 
   it('a key named __proto__ is an own key of the map, never a prototype write', () => {
     // The save gate refuses it; a run of a stored doc must still not pollute.
-    const e = eng([ret('r', [{ key: '__proto__', type: 'string', value: 'x' }])]);
+    const e = eng([ret('r', [{ key: '__proto__', type: 'string', content: 'x' }])]);
     const { state } = driveRun(e, { resolve: simpleResolve() });
     const map = (state.outputs['r'] as Record<string, unknown>)['pipelineReturnValue'] as object;
     expect(Object.getPrototypeOf(map)).toBe(Object.prototype);
@@ -124,12 +124,12 @@ describe('a Pipeline return value node succeeds with the typed map as its output
 
 describe('a value that cannot be RETURNED fails the node permanently', () => {
   it.each([
-    ['a whole-value of the wrong type', { key: 'k', type: 'string', value: '${params.x}' }],
-    ['a literal that is not a number', { key: 'k', type: 'number', value: 'five' }],
-    ['JSON text that is not an array', { key: 'k', type: 'array', value: '{"a":1}' }],
-    ['text that is not JSON', { key: 'k', type: 'object', value: 'nope' }],
-    ['an array for an object', { key: 'k', type: 'object', value: '${createArray(1)}' }],
-    ['a template for an object', { key: 'k', type: 'object', value: 'x${params.x}' }],
+    ['a whole-value of the wrong type', { key: 'k', type: 'string', content: '${params.x}' }],
+    ['a literal that is not a number', { key: 'k', type: 'number', content: 'five' }],
+    ['JSON text that is not an array', { key: 'k', type: 'array', content: '{"a":1}' }],
+    ['text that is not JSON', { key: 'k', type: 'object', content: 'nope' }],
+    ['an array for an object', { key: 'k', type: 'object', content: '${createArray(1)}' }],
+    ['a template for an object', { key: 'k', type: 'object', content: 'x${params.x}' }],
   ])('%s is a type mismatch naming the key', (_label, row) => {
     const { log, finish } = driveRun(eng([ret('r', [row])]), {
       resolve: simpleResolve(),
@@ -146,8 +146,8 @@ describe('a value that cannot be RETURNED fails the node permanently', () => {
     const { log } = driveRun(
       eng([
         ret('r', [
-          { key: 'a', type: 'string', value: half },
-          { key: 'b', type: 'string', value: half },
+          { key: 'a', type: 'string', content: half },
+          { key: 'b', type: 'string', content: half },
         ]),
       ]),
       { resolve: simpleResolve() },
@@ -158,7 +158,7 @@ describe('a value that cannot be RETURNED fails the node permanently', () => {
 
   it('an evaluation that throws ends the run invalid_event, as for every control node', () => {
     const { finish } = driveRun(
-      eng([ret('r', [{ key: 'k', type: 'string', value: '${nodes.nope.output.x}' }])]),
+      eng([ret('r', [{ key: 'k', type: 'string', content: '${nodes.nope.output.x}' }])]),
       { resolve: simpleResolve() },
     );
     expect(finish).toMatchObject({ outcome: 'failure', reason: 'invalid_event' });
@@ -172,7 +172,7 @@ describe('a value that cannot be RETURNED fails the node permanently', () => {
 
 describe('crash resume re-runs the SAME evaluation', () => {
   it('re-emits the succeedControl a projection discarded', () => {
-    const e = eng([ret('r', [{ key: 'k', type: 'number', value: '${params.x}' }])]);
+    const e = eng([ret('r', [{ key: 'k', type: 'number', content: '${params.x}' }])]);
     const projected = e.projectRunState([started({ x: 4 })]);
     expect(projected.nodes['r']!.status).toBe('ready');
     const { commands } = e.resume(projected);
@@ -251,12 +251,12 @@ describe('save rules', () => {
   it('accepts every type, a template string, and an absent value for Null and String', () => {
     expect(
       ok([
-        { key: 'a', type: 'string', value: 'n=${params.x}' },
+        { key: 'a', type: 'string', content: 'n=${params.x}' },
         { key: 'b', type: 'string' },
-        { key: 'c', type: 'number', value: '${params.x}' },
-        { key: 'd', type: 'boolean', value: 'false' },
-        { key: 'e', type: 'array', value: '[1, 2]' },
-        { key: 'f', type: 'object', value: '${params.j}' },
+        { key: 'c', type: 'number', content: '${params.x}' },
+        { key: 'd', type: 'boolean', content: 'false' },
+        { key: 'e', type: 'array', content: '[1, 2]' },
+        { key: 'f', type: 'object', content: '${params.j}' },
         { key: 'g', type: 'null' },
       ]),
     ).toEqual([]);
@@ -273,38 +273,46 @@ describe('save rules', () => {
       'a duplicate key',
       [
         { key: 'k', type: 'string' },
-        { key: 'k', type: 'number', value: '1' },
+        { key: 'k', type: 'number', content: '1' },
       ],
       "node.r.returnValues[1].key: 'k' is already returned",
     ],
-    ['an unknown type', [{ key: 'k', type: 'int', value: '1' }], 'node.r.returnValues[0].type'],
-    ['a number with no value', [{ key: 'k', type: 'number' }], 'node.r.returnValues[0].value'],
-    ['a value on Null', [{ key: 'k', type: 'null', value: 'x' }], 'node.r.returnValues[0].value'],
-    ['a non-text value', [{ key: 'k', type: 'number', value: 5 }], 'node.r.returnValues[0].value'],
+    ['an unknown type', [{ key: 'k', type: 'int', content: '1' }], 'node.r.returnValues[0].type'],
+    ['a number with no value', [{ key: 'k', type: 'number' }], 'node.r.returnValues[0].content'],
+    [
+      'a value on Null',
+      [{ key: 'k', type: 'null', content: 'x' }],
+      'node.r.returnValues[0].content',
+    ],
+    [
+      'a non-text value',
+      [{ key: 'k', type: 'number', content: 5 }],
+      'node.r.returnValues[0].content',
+    ],
     [
       'a bad number literal',
-      [{ key: 'k', type: 'number', value: 'five' }],
-      'node.r.returnValues[0].value',
+      [{ key: 'k', type: 'number', content: 'five' }],
+      'node.r.returnValues[0].content',
     ],
     [
       'a bad array literal',
-      [{ key: 'k', type: 'array', value: '{"a":1}' }],
-      'node.r.returnValues[0].value',
+      [{ key: 'k', type: 'array', content: '{"a":1}' }],
+      'node.r.returnValues[0].content',
     ],
     [
       'a template object',
-      [{ key: 'k', type: 'object', value: 'a${params.x}' }],
-      'node.r.returnValues[0].value',
+      [{ key: 'k', type: 'object', content: 'a${params.x}' }],
+      'node.r.returnValues[0].content',
     ],
     [
       'a number expression for a string',
-      [{ key: 'k', type: 'string', value: '${params.x}' }],
-      'node.r.returnValues[0].value',
+      [{ key: 'k', type: 'string', content: '${params.x}' }],
+      'node.r.returnValues[0].content',
     ],
     [
       'a number expression for an object',
-      [{ key: 'k', type: 'object', value: '${params.x}' }],
-      'node.r.returnValues[0].value',
+      [{ key: 'k', type: 'object', content: '${params.x}' }],
+      'node.r.returnValues[0].content',
     ],
   ])('refuses %s', (_label, rows, message) => {
     expect(validate([ret('r', rows)]).some((e) => e.includes(message))).toBe(true);
@@ -389,7 +397,7 @@ describe('save rules', () => {
     const errs = validate(
       [
         node('w', { variable: 'n', value: '1' }, 'set_variable'),
-        ret('r', [{ key: 'k', type: 'number', value: '${vars.n}' }]),
+        ret('r', [{ key: 'k', type: 'number', content: '${vars.n}' }]),
       ],
       [edge('w', 'r')],
     );

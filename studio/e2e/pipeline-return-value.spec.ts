@@ -49,13 +49,15 @@ test.describe('#1600 C12b — Pipeline return value', () => {
     await pane
       .getByRole('combobox', { name: 'Return keys row 1 type', exact: true })
       .selectOption('number');
-    await pane.getByRole('textbox', { name: 'Return keys row 1 value', exact: true }).fill('42');
+    await pane.getByRole('textbox', { name: 'Return keys row 1 content', exact: true }).fill('42');
     await addRow.click();
     await pane.getByRole('textbox', { name: 'Return keys row 2 key', exact: true }).fill('label');
     await pane
       .getByRole('combobox', { name: 'Return keys row 2 type', exact: true })
       .selectOption('string');
-    await pane.getByRole('textbox', { name: 'Return keys row 2 value', exact: true }).fill('done');
+    await pane
+      .getByRole('textbox', { name: 'Return keys row 2 content', exact: true })
+      .fill('done');
 
     // At 1440x900 the table's rows are on screen, and the tab does not scroll sideways.
     const row = await pane
@@ -89,8 +91,8 @@ test.describe('#1600 C12b — Pipeline return value', () => {
       config: {
         operation: 'return',
         returnValues: [
-          { key: 'total', type: 'number', value: '42' },
-          { key: 'label', type: 'string', value: 'done' },
+          { key: 'total', type: 'number', content: '42' },
+          { key: 'label', type: 'string', content: 'done' },
         ],
         outputs: [{ name: 'pipelineReturnValue', type: 'json' }],
       },

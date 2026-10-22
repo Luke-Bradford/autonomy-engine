@@ -472,8 +472,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
                       null: 'Null',
                     }),
                   }),
-                  value: presented(singleLine(z.string()).optional(), {
-                    title: 'Value',
+                  // ADF's name for a return value's payload (`{type, content}`).
+                  content: presented(singleLine(z.string()).optional(), {
+                    title: 'Content',
                     description:
                       'A literal or ${...}. Array and Object take JSON text or a whole-value ${...}. Null takes none, and an empty String is "".',
                   }),

@@ -336,8 +336,8 @@ describe('#1600 C12b — a child hands its parent a Pipeline return value', () =
     config: {
       operation: 'return',
       returnValues: [
-        { key: 'total', type: 'number', value: '${nodes.work.output.answer}' },
-        { key: 'label', type: 'string', value: 'done' },
+        { key: 'total', type: 'number', content: '${nodes.work.output.answer}' },
+        { key: 'label', type: 'string', content: 'done' },
       ],
     },
     position: { x: (seq += 1), y: 0 },

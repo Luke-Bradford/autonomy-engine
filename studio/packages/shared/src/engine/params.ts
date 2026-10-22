@@ -1429,10 +1429,10 @@ function validateReturnValueConfig(node: Node, foreachOwned: boolean, errors: st
   for (const [i, row] of rows.entries()) {
     const here = `${at}.returnValues[${i}]`;
     if (typeof row !== 'object' || row === null || Array.isArray(row)) {
-      errors.push(`${here}: must be a key, a type and a value`);
+      errors.push(`${here}: must be a key, a type and content`);
       continue;
     }
-    const { key, type, value } = row as Record<string, unknown>;
+    const { key, type, content } = row as Record<string, unknown>;
     let keyOk = false;
     if (typeof key !== 'string' || !RETURN_VALUE_KEY.test(key)) {
       errors.push(
@@ -1453,29 +1453,30 @@ function validateReturnValueConfig(node: Node, foreachOwned: boolean, errors: st
       continue;
     }
     if (known === 'null') {
-      if (value !== undefined) errors.push(`${here}.value: a Null return value takes no value`);
+      if (content !== undefined)
+        errors.push(`${here}.content: a Null return value takes no content`);
       continue;
     }
-    if (value === undefined) {
-      if (known !== 'string') errors.push(`${here}.value: ${articled(known)} needs a value`);
+    if (content === undefined) {
+      if (known !== 'string') errors.push(`${here}.content: ${articled(known)} needs content`);
       continue;
     }
-    if (typeof value !== 'string') {
+    if (typeof content !== 'string') {
       errors.push(
-        `${here}.value: must be text — a literal or a \${...} expression, got ${typeName(value)}`,
+        `${here}.content: must be text — a literal or a \${...} expression, got ${typeName(content)}`,
       );
       continue;
     }
-    const mode = variableValueMode(value);
+    const mode = variableValueMode(content);
     // `whole` is typed by `scanReturnValueTypes`; an unterminated `${` by `scan`.
     if (!keyOk || (mode !== 'literal' && mode !== 'interpolated')) continue;
     const verdict = coerceReturnValue(
       key as string,
       known,
       mode,
-      mode === 'literal' ? variableLiteralText(value) : '',
+      mode === 'literal' ? variableLiteralText(content) : '',
     );
-    if (!verdict.ok) errors.push(`${here}.value: ${verdict.error}`);
+    if (!verdict.ok) errors.push(`${here}.content: ${verdict.error}`);
   }
 }
 
@@ -1492,18 +1493,18 @@ function scanReturnValueTypes(node: Node, scope: ScanScope, errors: string[]): v
   if (!Array.isArray(rows)) return;
   for (const [i, row] of rows.entries()) {
     if (typeof row !== 'object' || row === null) continue;
-    const { key, type, value } = row as Record<string, unknown>;
-    if (typeof value !== 'string' || variableValueMode(value) !== 'whole') continue;
+    const { key, type, content } = row as Record<string, unknown>;
+    if (typeof content !== 'string' || variableValueMode(content) !== 'whole') continue;
     const known = RETURN_VALUE_TYPES.find((t) => t === type);
     if (known === undefined || known === 'null') continue;
-    const mode = interpolationMode(value);
+    const mode = interpolationMode(content);
     if (mode.mode !== 'whole') continue;
     const typed = wholeValueType(mode.body, scope);
     if (typed === null || typed.type === 'any') continue;
     const wrong = known === 'object' ? true : !assignableTo(typed.type, known);
     if (wrong) {
       errors.push(
-        `node.${node.id}.returnValues[${i}].value: return value '${String(key)}' is ` +
+        `node.${node.id}.returnValues[${i}].content: return value '${String(key)}' is ` +
           `${articled(known)}, but this expression is ${articled(typed.type as VariableDef['type'])}`,
       );
     }
