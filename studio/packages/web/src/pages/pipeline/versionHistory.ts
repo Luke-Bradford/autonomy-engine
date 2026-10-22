@@ -50,11 +50,12 @@ export function mergeVersionLists(
  *
  * Saved versions are numbered 1, 2, 3… with no gaps and are never deleted, so a
  * list holding every number up to N holds every version up to N, and a re-read
- * need only ask for what comes after it. The head alone is not that number: a
- * save appends the version it minted from the server's answer, so after another
- * tab's v2 and this page's v3 the list is [1, 3], complete only up to 1. Read
- * from the list rather than tracked beside it, so every way a version reaches
- * the list keeps it right, and a gap only ever makes the next read ask for more.
+ * need only ask for what comes after it. Today the list never has a gap: every
+ * version write is refused unless its basis is the server's head (#904), so a
+ * version this page mints always follows one it holds. The number is still
+ * read from the list's unbroken run rather than its head, so a write path that
+ * ever appended past an unseen version would make the next read ask for more,
+ * never less.
  */
 export function contiguousVersionCeiling(list: readonly PipelineVersion[]): number {
   const held = new Set(list.map((v) => v.version));

@@ -961,10 +961,11 @@ export function PipelineCanvas({
    * number up to which the list on screen is complete
    * (`contiguousVersionCeiling`). Each version carries its whole doc, so a
    * full re-read downloaded a long history on every alt-tab. The delta is
-   * exact because saved versions are numbered without gaps and never deleted;
-   * a gap in the list (a save appended v3 while another tab's v2 went unseen)
-   * lowers the ceiling, so the read fetches the gap too. The open-time read and
-   * the stale-write refetches stay FULL: those take their head from the answer.
+   * exact because saved versions are numbered without gaps and never deleted,
+   * and a gap in the list could only lower the ceiling, so the read would ask
+   * for more. An idle focus answers `[]` and leaves the list as it was. The
+   * open-time read and the stale-write refetches stay FULL: those take their
+   * head from the answer.
    *
    * A failed read KEEPS what is on screen, unlike the open-time read above,
    * which has nothing to keep. Focus arrives on wake and reconnect, exactly when
@@ -992,7 +993,7 @@ export function PipelineCanvas({
         ]),
       {
         onData: ([fresh, s]) => {
-          setVersions((prev) => mergeVersionLists(prev, fresh));
+          if (fresh.length > 0) setVersions((prev) => mergeVersionLists(prev, fresh));
           if (!claimTicket(publishSeq.current, ticket)) return;
           setActive(s.active);
           setGit(s.git);

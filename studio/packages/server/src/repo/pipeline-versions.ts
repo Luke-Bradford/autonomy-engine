@@ -440,10 +440,11 @@ export function isDebugVersion(db: Db, id: string): boolean | null {
  * latest version a trigger binds, the workspace-git working copy and drift,
  * export and import. A debug version is reachable only by its id.
  *
- * `after` (#1507) keeps only the versions numbered above it. That is a complete
- * delta: saved versions are numbered `max()+1` inside one synchronous
- * transaction and are never deleted, so every version at or below a list's
- * head was already in that list.
+ * `after` (#1507) keeps only the versions numbered above it. Saved versions are
+ * numbered `max()+1` inside one synchronous transaction and are never deleted,
+ * so a list that holds every number from 1 to N holds every version up to N,
+ * and `after=N` is exactly what it lacks. N is that unbroken run, not merely
+ * the list's head (`contiguousVersionCeiling`).
  */
 export function listPipelineVersions(
   db: Db,

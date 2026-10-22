@@ -287,6 +287,11 @@ describe('pipelines routes', () => {
       });
       expect(res.statusCode, `after=${JSON.stringify(bad)}`).toBe(400);
     }
+    const repeated = await app.inject({
+      method: 'GET',
+      url: `/api/pipelines/${pipeline.id}/versions?after=1&after=2`,
+    });
+    expect(repeated.statusCode).toBe(400);
   });
 
   it('deleting a pipeline that has run history is a 409 conflict', async () => {

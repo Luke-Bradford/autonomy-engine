@@ -146,9 +146,8 @@ test('a version saved elsewhere reaches the badge and the history on focus', asy
   const publishRead = page.waitForResponse((r) =>
     r.url().endsWith(`/api/pipelines/${pipelineId}/active`),
   );
-  const openRead = page.waitForRequest(
-    (r) => r.url().includes(`/api/pipelines/${pipelineId}/versions`) && r.method() === 'GET',
-  );
+  const versionsList = new RegExp(`/api/pipelines/${pipelineId}/versions(\\?|$)`);
+  const openRead = page.waitForRequest((r) => versionsList.test(r.url()) && r.method() === 'GET');
   await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
   expect(new URL((await openRead).url()).search).toBe('');
   await publishRead;
@@ -170,8 +169,7 @@ test('a version saved elsewhere reaches the badge and the history on focus', asy
   await expect(part(page, 'editing')).toHaveText(/^v1 \(latest\)/);
 
   const reread = page.waitForResponse(
-    (r) =>
-      r.url().includes(`/api/pipelines/${pipelineId}/versions`) && r.request().method() === 'GET',
+    (r) => versionsList.test(r.url()) && r.request().method() === 'GET',
   );
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   const delta = await reread;

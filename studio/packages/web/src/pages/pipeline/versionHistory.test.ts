@@ -79,9 +79,10 @@ describe('contiguousVersionCeiling (#1507)', () => {
     expect(contiguousVersionCeiling(at(1, 2, 3))).toBe(3);
   });
 
-  it('stops below a gap another tab left, so the next read fetches the gap', () => {
-    // This page saved v3 while another tab's v2 was unseen: [1, 3] is complete
-    // only up to 1, and the delta read must ask for everything after it.
+  it('stops below a gap, so the next read fetches the gap', () => {
+    // The #904 CAS keeps the list gap-free today; should a write path ever
+    // append v3 past an unseen v2, [1, 3] is complete only up to 1, and the
+    // delta read must ask for everything after it.
     expect(contiguousVersionCeiling(at(1, 3))).toBe(1);
     expect(contiguousVersionCeiling(at(2, 3))).toBe(0);
   });
