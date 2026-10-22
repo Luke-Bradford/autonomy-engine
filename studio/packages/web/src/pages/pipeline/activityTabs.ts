@@ -202,3 +202,22 @@ export function issuesOfShownFields<I extends { path: readonly PropertyKey[] }>(
     return applicableFieldNames(entry, [name], fields, inputs, candidate).length > 0;
   });
 }
+
+/**
+ * #1600 OR41 C12b — the fields the panel does not draw for the current choices
+ * (`applicableFieldNames` hides them, and they hold nothing). Apply leaves them
+ * out of the config it writes: an empty control the author cannot see must not
+ * become a value, as a hidden required text box would become `""` (a Pipeline
+ * return value's Variable, which its save rules refuse).
+ */
+export function undrawnFieldNames(
+  entry: Pick<ActivityCatalogEntry, 'appliesWhen'> | undefined,
+  fields: readonly ConfigField[],
+  inputs: Readonly<Record<string, FieldInput>>,
+  stored: Readonly<Record<string, unknown>>,
+  connectionKind?: string,
+): string[] {
+  const names = fields.map((f) => f.name);
+  const shown = new Set(applicableFieldNames(entry, names, fields, inputs, stored, connectionKind));
+  return names.filter((n) => !shown.has(n));
+}

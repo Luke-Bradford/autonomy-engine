@@ -154,6 +154,7 @@ import {
   applicableFieldNames,
   issuesOfShownFields,
   nodeTypeTabs,
+  undrawnFieldNames,
   offeredFieldOptions,
 } from './activityTabs';
 import { activityModeTitle } from './activityModes';
@@ -3766,11 +3767,20 @@ export function NodePanel({
   function apply() {
     // `readConfigDraft` reads whichever draft is ON SCREEN — the one answer to
     // "what would Apply write" that the connection and dataset forms share.
-    const read = readConfigDraft(editor.jsonMode, draft, editor.fields);
-    if (!read.ok) {
-      setError(read.message);
+    const drafted = readConfigDraft(editor.jsonMode, draft, editor.fields);
+    if (!drafted.ok) {
+      setError(drafted.message);
       return;
     }
+    // #1600 C12b — a field the panel does not draw is not written (the JSON
+    // editor shows every key, so it drops none).
+    const undrawn = editor.jsonMode
+      ? []
+      : undrawnFieldNames(entry, editor.fields, editor.inputs, editable, sourceConnection?.kind);
+    const read = {
+      config: withoutKeys(drafted.config, undrawn),
+      owned: withoutKeys(drafted.owned, undrawn),
+    };
     // Stripped before the pre-check too: a `.strict()` schema would otherwise
     // refuse a typed `outputs` as an unknown key the author cannot see is dropped.
     const issues = schemaIssues(withoutOutputs(read.owned));
@@ -4581,4 +4591,15 @@ export function NodePanel({
       <SubjectIssues issues={ownIssues} listedElsewhere={policyElsewhere} />
     </section>
   );
+}
+
+/** #1600 C12b — `config` without `keys`. */
+function withoutKeys(
+  config: Record<string, unknown>,
+  keys: readonly string[],
+): Record<string, unknown> {
+  if (keys.length === 0) return config;
+  const out = { ...config };
+  for (const k of keys) delete out[k];
+  return out;
 }

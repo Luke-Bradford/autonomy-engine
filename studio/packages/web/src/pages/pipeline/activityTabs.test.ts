@@ -5,6 +5,7 @@ import {
   applicableFieldNames,
   issuesOfShownFields,
   nodeTypeTabs,
+  undrawnFieldNames,
   offeredFieldOptions,
 } from './activityTabs';
 import { deriveConfigFields, seedFieldInputs } from './configForm';
@@ -430,5 +431,24 @@ describe('#1600 C12b — issuesOfShownFields', () => {
     expect(
       precheck({ operation: 'return', variable: 5, returnValues: [{ key: 'k', type: 'null' }] }),
     ).toEqual(['variable']);
+  });
+});
+
+describe('#1600 C12b — undrawnFieldNames', () => {
+  const entry = getActivity('set_variable')!;
+  const fields = deriveConfigFields(entry.configSchema)!;
+
+  it('a Pipeline return value does not draw an empty Variable or Value', () => {
+    expect(undrawnFieldNames(entry, fields, { operation: 'return' }, {})).toEqual([
+      'variable',
+      'value',
+    ]);
+  });
+
+  it('a Set draws them but not Return keys; a held value is always drawn', () => {
+    expect(undrawnFieldNames(entry, fields, { operation: 'set' }, {})).toEqual(['returnValues']);
+    expect(undrawnFieldNames(entry, fields, { operation: 'return', variable: 'x' }, {})).toEqual([
+      'value',
+    ]);
   });
 });
