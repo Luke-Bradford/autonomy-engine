@@ -44,6 +44,7 @@ import {
   streamInto,
 } from './fs-write.js';
 import { runPool } from './run-pool.js';
+import { storeWatermark } from './copy-watermark-store.js';
 import {
   checkLogConnectionFolder,
   sessionLogFileName,
@@ -54,6 +55,66 @@ import {
 } from './session-log-file.js';
 import type { ActivityContext, ActivityEvent } from './types.js';
 import { FS_STREAM_CHUNK_BYTES } from '../limits.js';
+
+/**
+ * #1600 OR41 C5b — how far behind the clock Load Incremental's cutoff is taken.
+ * A file's times come from its file system's clock, which can trail the
+ * server's: FAT and exFAT store modified times rounded to 2 seconds, and a
+ * kernel's file timestamps can lag its clock by a tick. A file written just
+ * after the listing could otherwise carry a time below the cutoff and never be
+ * copied. A file changed within the margin is copied by the next run.
+ */
+export const COPY_FILES_SETTLE_MS = 2000;
+
+/**
+ * #1600 OR41 C5b — the window Load Incremental selects: files whose later of
+ * modified and status-change time is in [old, cutoff). The status-change time
+ * is read because a rename or a move into the folder keeps the modified time:
+ * a file written as `x.tmp` and renamed `x.csv`, or moved in from elsewhere,
+ * would otherwise sit below the last cutoff for good. It may copy a file again
+ * whose permissions or links changed; it never misses one. Successive runs'
+ * windows meet with no gap and no overlap, and the cutoff is taken before the
+ * listing, so a file written while it runs falls in the next window.
+ */
+interface IncrementalWindow {
+  readonly old: string | null;
+  /** The stored time after this run: the cutoff, or `old` if that is later. */
+  readonly next: string | null;
+  readonly contains: (st: BigIntStats) => boolean;
+}
+
+/** A file's time in milliseconds, from a `bigint` stat's nanoseconds. */
+const msOf = (ns: bigint): number => Number(ns) / 1e6;
+
+function incrementalWindow(
+  stored: unknown,
+): { ok: true; window: IncrementalWindow } | { ok: false; error: string } {
+  const oldMs = typeof stored === 'string' ? Date.parse(stored) : Number.NaN;
+  if (stored !== null && !Number.isFinite(oldMs)) {
+    return {
+      ok: false,
+      error: `the stored watermark ${JSON.stringify(stored)} is not a time; Load Incremental cannot tell which files are new`,
+    };
+  }
+  const old = stored as string | null;
+  const cutoffMs = Date.now() - COPY_FILES_SETTLE_MS;
+  // A clock set back since the last run: nothing is new, and the stored time stays.
+  if (old !== null && oldMs >= cutoffMs) {
+    return { ok: true, window: { old, next: old, contains: () => false } };
+  }
+  // Modified between's own window, read against the later of the two times.
+  const next = new Date(cutoffMs).toISOString();
+  const between = modifiedWindow(old ?? undefined, next);
+  if (!between.ok) return between;
+  return {
+    ok: true,
+    window: {
+      old,
+      next,
+      contains: (st) => between.contains(Math.max(msOf(st.mtimeNs), msOf(st.ctimeNs))),
+    },
+  };
+}
 
 /**
  * #1600 OR41 C1a — Copy · Files as-is (activity catalogue §4.1): copy files
@@ -215,12 +276,20 @@ function outputsOf(
   measure: CopyMeasure,
   usedParallelCopies: number,
   logPath: string | null,
+  watermark: { old: string | null; new: string | null } | undefined,
 ): Record<string, unknown> {
   // No row outputs: a files copy moves no rows, and a `rowsWritten` of 0 would
   // read as "wrote nothing" in the runs list's rows total. #1600 OR41 C6f-1 —
   // the run's measures last, in the catalog entry's order (C6f-2's degree, then
-  // C6c-1a's log file).
-  return { ...c, ...paths, ...measure, usedParallelCopies, logPath };
+  // C6c-1a's log file, then C5b's watermark, under Load Incremental only).
+  return {
+    ...c,
+    ...paths,
+    ...measure,
+    usedParallelCopies,
+    logPath,
+    ...(watermark === undefined ? {} : { watermark }),
+  };
 }
 
 type OpenedLog = { ok: true; writer: SessionLogWriter } | { ok: false; error: string };
@@ -446,7 +515,7 @@ function segmentsBelow(base: string, relPath: string, what: string): string[] {
 async function selectSources(
   cfg: CopyFilesConfig,
   source: FsConfig,
-  contains: (mtimeMs: number) => boolean,
+  contains: (st: BigIntStats) => boolean,
   signal: AbortSignal,
   skips: Skips,
   onSkip: OnSkip,
@@ -457,7 +526,7 @@ async function selectSources(
   if (rootStat === null) refuse(`source path '${cfg.sourcePath}' does not exist`);
   const files: SourceFile[] = [];
   const take = (abs: string, rel: string, st: BigIntStats) => {
-    if (contains(Number(st.mtimeNs) / 1e6)) {
+    if (contains(st)) {
       files.push({ abs, rel, dev: st.dev, ino: st.ino, mode: Number(st.mode) & 0o777 });
     }
   };
@@ -949,6 +1018,34 @@ export async function* runFilesCopy(
     yield failed('permanent', window.error);
     return;
   }
+  // #1600 OR41 C5b — Load Incremental: the stored time from the executor's
+  // lease, and the cutoff, taken here, before anything is listed.
+  let incremental: IncrementalWindow | undefined;
+  if (cfg.load === 'incremental') {
+    if (ctx.copyWatermark === undefined) {
+      yield failed('permanent', 'Load Incremental has no stored watermark to read');
+      return;
+    }
+    const planned = incrementalWindow(ctx.copyWatermark.old);
+    if (!planned.ok) {
+      yield failed('permanent', planned.error);
+      return;
+    }
+    incremental = planned.window;
+  }
+  const selects = incremental?.contains ?? ((st: BigIntStats) => window.contains(msOf(st.mtimeNs)));
+  // C5b — `{old, new}` once every selected file is written and the time stored
+  // (or its store failed, which the failure says): never for a window not
+  // finished. A window that selected nothing keeps the stored time, as a rows
+  // Copy with nothing above its watermark does (C5a): the next run's window
+  // starts where this one did, so nothing is lost and nothing is stored.
+  let watermark: { old: string | null; new: string | null } | undefined;
+  const finishWindow = (selected: boolean): string | null => {
+    if (incremental === undefined) return null;
+    const next = selected ? incremental.next : incremental.old;
+    watermark = { old: incremental.old, new: next };
+    return next === incremental.old ? null : storeWatermark(ctx, next, 'files were copied');
+  };
 
   const signal = ctx.signal;
   const c: Counters = Object.fromEntries(COUNTERS.map((k) => [k, 0])) as Counters;
@@ -1031,14 +1128,7 @@ export async function* runFilesCopy(
   let where: CopyPaths | undefined;
   try {
     // ── Plan ────────────────────────────────────────────────────────────
-    const { root, files } = await selectSources(
-      cfg,
-      source,
-      window.contains,
-      signal,
-      skips,
-      onSkip,
-    );
+    const { root, files } = await selectSources(cfg, source, selects, signal, skips, onSkip);
     const sinkDir = await planDir(sink.roots, cfg.sinkFolder);
     const targets = planTargets(cfg, sinkDir.path, files);
     // Named as `planTargets` names them, so `dest` is known when nothing is selected too.
@@ -1120,6 +1210,8 @@ export async function* runFilesCopy(
     // Nothing selected: a success that creates no folders. Its lines are the
     // skips made while selecting (C6d-2).
     if (targets.length === 0) {
+      // C5b — an empty window keeps the stored time.
+      finishWindow(false);
       const logError = yield* endLog();
       if (logError !== undefined && !(yield* logErrorWarned(logError))) {
         yield failed(
@@ -1128,7 +1220,10 @@ export async function* runFilesCopy(
         );
         return;
       }
-      yield { type: 'succeeded', outputs: outputsOf(c, where, measured(), width, logPath) };
+      yield {
+        type: 'succeeded',
+        outputs: outputsOf(c, where, measured(), width, logPath, watermark),
+      };
       return;
     }
 
@@ -1320,13 +1415,20 @@ export async function* runFilesCopy(
       logWorking();
     });
     if (failure !== undefined) throw failure.err;
+    // C5b — stored the moment every file is written, before the log closes, as
+    // a rows Copy's is as its sink commits: a log that then fails to close does
+    // not leave the time behind, and the next run would copy these files again.
+    const storeError = finishWindow(true);
+    if (storeError !== null) throw new Refusal(storeError);
     // Nothing that can throw sits between the lines and the success, so they
     // are yielded once (a rows Copy needs a guard for that; this does not):
     // `close` reports a failure rather than throwing it.
     const logError = yield* endLog();
     if (logError !== undefined && !(yield* logErrorWarned(logError))) {
       // The files are copied: the counts are reported, then the failure.
-      for (const [name, value] of Object.entries(outputsOf(c, where, measured(), width, null)))
+      for (const [name, value] of Object.entries(
+        outputsOf(c, where, measured(), width, null, watermark),
+      ))
         yield { type: 'output', name, value };
       yield failed(
         'permanent',
@@ -1334,7 +1436,10 @@ export async function* runFilesCopy(
       );
       return;
     }
-    yield { type: 'succeeded', outputs: outputsOf(c, where, measured(), width, logPath) };
+    yield {
+      type: 'succeeded',
+      outputs: outputsOf(c, where, measured(), width, logPath, watermark),
+    };
   } catch (err) {
     // Whatever unwound the copy once it was aborted, the outcome is the abort.
     const terminal = signal.aborted
@@ -1354,7 +1459,9 @@ export async function* runFilesCopy(
     yield* endLog();
     // A skip made while selecting is counted, so its line has its counter.
     if (started || c.filesSkipped > 0) {
-      for (const [name, value] of Object.entries(outputsOf(c, where, measured(), width, logPath)))
+      for (const [name, value] of Object.entries(
+        outputsOf(c, where, measured(), width, logPath, watermark),
+      ))
         yield { type: 'output', name, value };
     }
     yield terminal;

@@ -1,4 +1,8 @@
-import { canonicalStringify, type SqlParameterValue } from '@autonomy-studio/shared';
+import {
+  canonicalStringify,
+  copyFilesConfigSchema,
+  type SqlParameterValue,
+} from '@autonomy-studio/shared';
 import type { ResolvedDataset } from '../connectors/types.js';
 import {
   getCopyWatermark,
@@ -44,6 +48,53 @@ export function copyWatermarkKey(input: {
       source: end(input.source.connectionId, input.source.dataset),
       column: input.column,
       sink: end(input.sink.connectionId, input.sink.dataset),
+    }),
+  );
+}
+
+/**
+ * #1600 OR41 C5b — the column a Files as-is copy's stored time is kept under
+ * (`copy_watermarks.column_name` is required): the later of each file's
+ * modified and status-change times, which is what the window compares.
+ */
+export const COPY_FILES_WATERMARK_COLUMN = 'lastModified';
+
+/**
+ * #1600 OR41 C5b — the copy a Files as-is watermark belongs to: the source
+ * connection and what it selects (path type, path, wildcard, subfolders, file
+ * list), and the sink connection and where it writes (folder, file name, copy
+ * behaviour), all as resolved for this run. So a `${}` folder keeps a time per
+ * folder, and pointing the copy elsewhere starts from nothing; how it copies
+ * (If file exists, After copy, parallelism, the log) does not move it. Read from
+ * the parsed config, so a default written out keys as one left absent, and
+ * tagged `files` so it never meets a rows Copy's key. `null` when the config
+ * does not parse: the copy then refuses it with the schema's own message.
+ */
+export function copyFilesWatermarkKey(input: {
+  readonly sourceConnectionId: string | undefined;
+  readonly sinkConnectionId: string | undefined;
+  readonly input: Record<string, unknown>;
+}): string | null {
+  const parsed = copyFilesConfigSchema.safeParse(input.input);
+  if (!parsed.success) return null;
+  const cfg = parsed.data;
+  return sha256Hex(
+    canonicalStringify({
+      kind: 'files',
+      source: {
+        connectionId: input.sourceConnectionId ?? null,
+        pathType: cfg.pathType,
+        sourcePath: cfg.sourcePath,
+        wildcard: cfg.wildcard,
+        recursive: cfg.recursive,
+        fileListPath: cfg.fileListPath ?? null,
+      },
+      sink: {
+        connectionId: input.sinkConnectionId ?? null,
+        sinkFolder: cfg.sinkFolder ?? null,
+        sinkFileName: cfg.sinkFileName ?? null,
+        copyBehavior: cfg.copyBehavior,
+      },
     }),
   );
 }

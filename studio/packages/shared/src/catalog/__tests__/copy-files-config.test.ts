@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { COPY_MAX_PARALLEL_COPIES, copyFilesConfigSchema } from '../copy-files-config.js';
+import {
+  COPY_MAX_PARALLEL_COPIES,
+  copyFilesConfigSchema,
+  copyFilesIncrementalIssues,
+} from '../copy-files-config.js';
 import { getActivity } from '../registry.js';
 import { COPY_FILES_ACTIVITY_TYPE } from '../types.js';
 import { activityNodeErrors } from '../../engine/activity-config-check.js';
@@ -17,6 +21,7 @@ describe('copy_files config', () => {
     expect(copyFilesConfigSchema.parse({ sourcePath: 'in' })).toEqual({
       sourcePath: 'in',
       pathType: 'folder',
+      load: 'full',
       wildcard: '*',
       recursive: true,
       afterCopy: 'keep',
@@ -113,6 +118,7 @@ describe('copy_files config', () => {
         'source',
         'throughput',
         'usedParallelCopies',
+        'watermark',
       ].sort(),
     );
   });
@@ -137,14 +143,20 @@ describe('copy_files appliesWhen (#1686)', () => {
     skipForbiddenFiles: true,
     validateDataConsistency: true,
     parallelCopies: 4,
+    // #1600 C5b — Modified between, drawn under Load Full only.
+    modifiedStart: '2026-10-01T00:00:00Z',
+    modifiedEnd: '2026-10-02T00:00:00Z',
   };
   const combos = (['file', 'folder', 'list'] as const).flatMap((pathType) =>
     (['keep', 'delete', 'move'] as const).flatMap((afterCopy) =>
-      (['preserve', 'flatten', 'merge'] as const).map((copyBehavior) => ({
-        pathType,
-        afterCopy,
-        copyBehavior,
-      })),
+      (['preserve', 'flatten', 'merge'] as const).flatMap((copyBehavior) =>
+        (['full', 'incremental'] as const).map((load) => ({
+          pathType,
+          afterCopy,
+          copyBehavior,
+          load,
+        })),
+      ),
     ),
   );
   const applies = (name: string, controls: Record<string, string>) =>
@@ -261,8 +273,9 @@ describe('copy_files session log to a folder (#1600 OR41 C6c-1a)', () => {
     const names = entry.outputs.map((o) => o.name);
     expect(names).toContain('logPath');
     expect(entry.outputs.find((o) => o.name === 'logPath')?.optional).toBe(true);
-    const former = entry.formerOutputs![0]!.map((o) => o.name);
-    expect(former).toEqual(names.filter((n) => n !== 'logPath'));
+    // #1600 C5b — the snapshot before C6c-1a is the second: C5b's leads.
+    const former = entry.formerOutputs![1]!.map((o) => o.name);
+    expect(former).toEqual(names.filter((n) => n !== 'logPath' && n !== 'watermark'));
   });
 });
 
@@ -408,5 +421,58 @@ describe('copy_files log connection at save (#1600 OR41 C6c-1a)', () => {
     expect(activityNodeErrors(rows).filter((e) => e.includes('connectionIds.log'))).toEqual([
       "node 'c': connectionIds.log: this activity has no log connection",
     ]);
+  });
+});
+
+/**
+ * #1600 OR41 C5b — Load Incremental on a Files as-is copy: *Modified since last
+ * successful run*. The window is studio's, so the explicit Modified between and
+ * a Merge (one file holding only the new files) are refused beside it.
+ */
+describe('copy_files Load Incremental (C5b)', () => {
+  it('saves Incremental on a folder, a file list and one file', () => {
+    for (const pathType of ['folder', 'file']) {
+      expect(issues({ sourcePath: 'in', pathType, load: 'incremental' })).toEqual([]);
+    }
+    expect(
+      issues({ sourcePath: 'in', pathType: 'list', fileListPath: 'l', load: 'incremental' }),
+    ).toEqual([]);
+  });
+
+  it.each([
+    [{ modifiedStart: '2026-10-01T00:00:00Z' }, 'modifiedStart'],
+    [{ modifiedEnd: '2026-10-01T00:00:00Z' }, 'modifiedEnd'],
+    [{ copyBehavior: 'merge', sinkFileName: 'all.bin' }, 'copyBehavior'],
+    [{ copyBehavior: 'flatten' }, 'copyBehavior'],
+  ])('refuses %j under Incremental', (config, field) => {
+    const found = issues({ sourcePath: 'in', load: 'incremental', ...config });
+    expect(found).toEqual([expect.stringMatching(new RegExp(`^${field}: .*Incremental`))]);
+    // Under Full each is what it was.
+    expect(issues({ sourcePath: 'in', ...config })).toEqual([]);
+  });
+
+  it('keeps Load literal at save', () => {
+    const errs = copyFilesIncrementalIssues({
+      sourcePath: 'in',
+      load: '${pipeline().parameters.l}',
+    });
+    expect(errs).toEqual([
+      { field: 'load', message: 'Load stays literal, because it decides which fields apply' },
+    ]);
+  });
+
+  it('draws Load after Source path on the Source tab, and Modified between only under Full', () => {
+    const entry = getActivity(COPY_FILES_ACTIVITY_TYPE)!;
+    expect(entry.tabs?.find((t) => t.key === 'source')?.fields?.slice(0, 2)).toEqual([
+      'sourcePath',
+      'load',
+    ]);
+    expect(entry.appliesWhen?.['modifiedStart']).toEqual([{ field: 'load', in: ['full'] }]);
+    expect(entry.appliesWhen?.['modifiedEnd']).toEqual([{ field: 'load', in: ['full'] }]);
+    expect(entry.outputs.at(-1)).toMatchObject({ name: 'watermark', optional: true });
+    // A node saved before C5b keeps the contract it was saved with.
+    expect(entry.formerOutputs![0]!.map((o) => o.name)).toEqual(
+      entry.outputs.map((o) => o.name).filter((n) => n !== 'watermark'),
+    );
   });
 });

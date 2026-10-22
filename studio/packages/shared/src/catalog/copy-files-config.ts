@@ -58,6 +58,68 @@ export const parallelCopiesField = (description: string) =>
     description,
   });
 
+/**
+ * #1600 OR41 C5a — catalogue §4.1's Load: Full reads every source row,
+ * Incremental only the rows above the old watermark. C5b — on a Files as-is
+ * copy, Incremental reads only the files changed since the last successful
+ * copy. Defined here, beside the Files as-is config, because the rows Copy's
+ * config imports this module.
+ */
+export const COPY_LOAD_OPTIONS = ['full', 'incremental'] as const;
+export const copyLoadSchema = z.enum(COPY_LOAD_OPTIONS);
+
+/**
+ * Load stays literal in both Copy modes: it decides which fields apply and
+ * whether studio stores a watermark.
+ */
+export function copyLoadLiteralIssue(
+  load: unknown,
+): { readonly field: string; readonly message: string } | undefined {
+  return typeof load === 'string' && load.includes('${')
+    ? { field: 'load', message: 'Load stays literal, because it decides which fields apply' }
+    : undefined;
+}
+
+/**
+ * #1600 OR41 C5b — a Files as-is copy's Load Incremental, *Modified since last
+ * successful run*. Studio sets the modified window itself, so the explicit
+ * Modified between (Load Full's) is refused beside it, and so are a Merge (its
+ * one file would hold only the files changed since the last run, losing under
+ * Overwrite or never adding under Skip the earlier ones) and a Flatten (below). Read from the raw
+ * config too, at save, where a `${}` Load would otherwise wait for dispatch.
+ */
+export function copyFilesIncrementalIssues(
+  config: Record<string, unknown>,
+): readonly { readonly field: string; readonly message: string }[] {
+  const load = config['load'] ?? 'full';
+  const literal = copyLoadLiteralIssue(load);
+  if (literal !== undefined) return [literal];
+  if (load !== 'incremental') return [];
+  const issues: { field: string; message: string }[] = [];
+  for (const field of ['modifiedStart', 'modifiedEnd'] as const) {
+    if (config[field] !== undefined) {
+      issues.push({
+        field,
+        message:
+          'Load Incremental sets the modified window itself; for an explicit Modified between, set Load to Full',
+      });
+    }
+  }
+  // Flatten names each file by its name alone, and a later run sees only its
+  // own files: `b/x.csv` would overwrite the `a/x.csv` an earlier run wrote,
+  // a clash Load Full refuses because it sees both.
+  if (config['copyBehavior'] === 'merge' || config['copyBehavior'] === 'flatten') {
+    issues.push({
+      field: 'copyBehavior',
+      message:
+        config['copyBehavior'] === 'merge'
+          ? 'a merge under Load Incremental would hold only the files changed since the last run; set Copy behaviour to Preserve hierarchy, or Load to Full'
+          : 'flattening under Load Incremental could overwrite a file an earlier run copied from another folder under the same name; set Copy behaviour to Preserve hierarchy, or Load to Full',
+    });
+  }
+  return issues;
+}
+
 const IN_ROOTS = "Absolute, or relative to the connection's first allowed folder.";
 
 const path = (title: string, description: string) =>
@@ -91,6 +153,17 @@ export const copyFilesConfigSchema = z
     recursive: presented(z.boolean().default(true), {
       title: 'Include subfolders',
       description: 'Folder only. Also copies matching files in every subfolder.',
+    }),
+    // #1600 OR41 C5b — catalogue §4.1's Load, first on the Source tab. ADF's
+    // Copy Data tool calls it *Incremental load: LastModifiedDate*
+    // (https://learn.microsoft.com/azure/data-factory/tutorial-incremental-copy-lastmodified-copy-data-tool).
+    load: presented(copyLoadSchema.default('full'), {
+      title: 'Load',
+      description:
+        'Incremental copies only the files created, changed or moved in since the last ' +
+        'successful run; the first run copies every file. Each source and sink folder ' +
+        'keeps its own time, so a sink folder that changes on every run copies every file.',
+      options: optionTitles(copyLoadSchema, { full: 'Full', incremental: 'Incremental' }),
     }),
     modifiedStart: instant(
       'Modified from',
@@ -198,6 +271,7 @@ export const copyFilesConfigSchema = z
     if (cfg.pathType !== 'folder' && cfg.wildcard !== '*') {
       issue('wildcard', 'a wildcard is only read when the path type is Folder');
     }
+    for (const found of copyFilesIncrementalIssues(cfg)) issue(found.field, found.message);
     const window = modifiedWindowIssue(cfg.modifiedStart, cfg.modifiedEnd);
     if (window !== undefined) issue('modifiedEnd', window);
     if (cfg.pathType === 'list' && cfg.fileListPath === undefined) {

@@ -365,12 +365,14 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   // +2 for C6c-1a's Write to and Log folder: the list walk writes its log to a
   // folder on a log connection, so both are drawn.
   // +1 for C6c-2's Log mode, drawn for that folder log.
-  'Copy data (files as-is)': 23,
+  // +1 for C5b's Load, on the Source tab.
+  'Copy data (files as-is)': 24,
   // +1 for C6e-2's Verify copied files, drawn under Preserve hierarchy (the
   // merge walk above does not draw it, and its skip waits for it to be on).
   // +1 for C6f-2's Degree of copy parallelism, not drawn under Merge either.
   // +1 for C6c-1a's Write to, drawn while the session log is on (the default).
-  'Copy data (files from a folder)': 22,
+  // +1 for C5b's Load, on the Source tab.
+  'Copy data (files from a folder)': 23,
   // +1 for C1q-c's Query timeout, a new field whose `?` says blank means no limit.
   // +1 for C6e-1's Verify after copy, measured at 19.
   // +1 for C6c-1b's Write to, measured at 20.

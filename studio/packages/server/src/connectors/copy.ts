@@ -37,6 +37,7 @@ import {
   sessionLogWriterOptions,
 } from './session-log-file.js';
 import type { IncrementalPlan, PartitionPlan, SourceIo } from './source-io.js';
+import { storeWatermark } from './copy-watermark-store.js';
 import type { ActivityContext, ActivityEvent, ResolvedDataset } from './types.js';
 
 /** The resolved SINK connection, as `ActivityContext` declares it. */
@@ -205,23 +206,6 @@ interface CopyWatermarkOutput {
   readonly column: string;
   readonly old: SqlParameterValue;
   readonly new: SqlParameterValue;
-}
-
-/**
- * #1600 OR41 C5a — store Automatic's new watermark once the sink has committed:
- * `null` when stored (or when there is nothing to store), else why it was not.
- * The rows are committed either way, so a failure says the next run copies them
- * again rather than letting the node succeed with a watermark left behind.
- */
-function storeWatermark(ctx: ActivityContext, watermark: CopyWatermarkOutput): string | null {
-  if (watermark.new === null || ctx.copyWatermark === undefined) return null;
-  try {
-    ctx.copyWatermark.commit(watermark.new);
-    return null;
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
-    return `the rows were committed, but the watermark could not be stored, so the next run copies them again: ${reason}`;
-  }
 }
 
 /** #1600 OR41 C5a — Load Incremental on a source that is not a database. */
@@ -902,7 +886,8 @@ async function* copyRows(
     // committed and the watermark behind (the next run would copy them again).
     if (outcome.ok && watermark !== undefined) {
       committed = watermark;
-      if (parsed.data.watermarkFrom === 'automatic') storeError = storeWatermark(ctx, watermark);
+      if (parsed.data.watermarkFrom === 'automatic')
+        storeError = storeWatermark(ctx, watermark.new, 'rows were committed');
     }
     // C6f-3 — a sink that failed before pulling a row never iterated the plan.
     await partitionPlan?.close();
