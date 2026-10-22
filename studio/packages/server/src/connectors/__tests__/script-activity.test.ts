@@ -32,7 +32,13 @@ type Block = {
 function scriptCtx(
   connectionConfig: Record<string, unknown>,
   blocks: Block[],
-  over: { runAsOneTransaction?: boolean; captureResultSets?: string; signal?: AbortSignal } = {},
+  over: {
+    runAsOneTransaction?: boolean;
+    captureResultSets?: string;
+    captureMessages?: boolean;
+    blockTimeoutSeconds?: number;
+    signal?: AbortSignal;
+  } = {},
 ): ActivityContext {
   const { signal, ...settings } = over;
   return {
@@ -113,6 +119,7 @@ describe('Script on SQLite (C10a)', () => {
       ],
       recordsAffected: 3,
       outputParameters: {},
+      outputLogs: '',
       truncated: false,
     });
     expect(count(path)).toBe(4);
@@ -213,6 +220,31 @@ describe('Script on SQLite (C10a)', () => {
     expect(count(path)).toBe(2);
   });
 
+  it('refuses a Block timeout, which SQLite cannot honour, before anything runs (C10b-2b)', async () => {
+    const { root, path } = store(2);
+    const events = await run(
+      scriptCtx(writableConfig(root, path), [{ type: 'nonQuery', sql: 'delete from t' }], {
+        blockTimeoutSeconds: 5,
+      }),
+    );
+    expect(failureOf(events)).toMatchObject({
+      kind: 'permanent',
+      error:
+        'SQLite cannot interrupt a running statement, so it cannot honour a Timeout per block; clear Timeout per block, or run the script on a postgres connection',
+    });
+    expect(count(path)).toBe(2);
+  });
+
+  it('keeps outputLogs empty under Capture messages: SQLite sends no messages (C10b-2b)', async () => {
+    const { root, path } = store(1);
+    const events = await run(
+      scriptCtx(writableConfig(root, path), [{ type: 'query', sql: 'select 1 as one' }], {
+        captureMessages: true,
+      }),
+    );
+    expect(outputsOf(events)).toMatchObject({ outputLogs: '', truncated: false });
+  });
+
   it('runs an In direction on SQLite as a plain bind value (C10b-2a)', async () => {
     const { root, path } = store(1);
     const events = await run(
@@ -228,6 +260,7 @@ describe('Script on SQLite (C10a)', () => {
     expect(outputsOf(events)).toMatchObject({
       resultSets: [{ rowCount: 1, rows: [{ n: 3 }] }],
       outputParameters: {},
+      outputLogs: '',
     });
   });
 

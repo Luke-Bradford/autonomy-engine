@@ -1601,10 +1601,21 @@ const ENTRIES: ActivityCatalogEntry[] = [
       {
         key: 'settings',
         bindings: ['connection'],
-        fields: ['runAsOneTransaction', 'captureResultSets'],
+        fields: [
+          'runAsOneTransaction',
+          'captureResultSets',
+          'captureMessages',
+          'blockTimeoutSeconds',
+        ],
       },
       { key: 'script', fields: ['blocks'] },
     ],
+    // C10b-2b — SQLite sends no messages and cannot interrupt a statement, so
+    // it refuses a Block timeout at dispatch.
+    appliesWhen: {
+      captureMessages: [{ connectionKind: ['postgres'] }],
+      blockTimeoutSeconds: [{ connectionKind: ['postgres'] }],
+    },
     // A Non-query block changes the store, and a crash mid-script cannot tell
     // which blocks committed.
     idempotent: false,
@@ -1618,7 +1629,23 @@ const ENTRIES: ActivityCatalogEntry[] = [
       // Each Out and In-out value by name, read from the row a PostgreSQL
       // block returns (C10b-2a). Always `{}` on SQLite, which has none.
       out('outputParameters', 'json'),
+      // Whether a result set or, under Capture messages, outputLogs kept less
+      // than it was sent (each has its own warning code).
       out('truncated', 'boolean'),
+      // The server's messages under *Capture messages* (C10b-2b), one per
+      // line; empty when it is off, and always on SQLite.
+      out('outputLogs', 'string'),
+    ],
+    // The five a node saved before C10b-2b declares. Written out, not derived
+    // from `outputs`: it is a snapshot of an old default.
+    formerOutputs: [
+      [
+        out('resultSetCount', 'number'),
+        out('resultSets', 'json'),
+        out('recordsAffected', 'number'),
+        out('outputParameters', 'json'),
+        out('truncated', 'boolean'),
+      ],
     ],
     configSchema: scriptConfigSchema,
     dispatchConfigSchema: scriptDispatchConfigSchema,

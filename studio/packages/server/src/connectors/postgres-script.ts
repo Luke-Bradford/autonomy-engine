@@ -18,8 +18,10 @@ import {
   type PostgresStatement,
 } from './postgres-named-parameters.js';
 import {
+  isPostgresStatementTimeout,
   openSession,
   readFailure,
+  statementTimeoutMsOf,
   type PostgresClient,
   type PostgresClientFactory,
   type PostgresClientOptions,
@@ -28,6 +30,7 @@ import {
 import { authoredStatementRefusal } from './pre-copy-script.js';
 import { yieldToEventLoop } from './scheduling.js';
 import {
+  MessageCapture,
   ResultCapture,
   SCRIPT_ABORTED,
   notRetried,
@@ -281,12 +284,21 @@ export async function executePostgresScript(args: {
   secret: string | null;
   signal: AbortSignal;
   stream: PostgresStatementStream;
+  /** C10b-2b — the Block timeout, when it is the session's statement bound. */
+  blockTimeoutSeconds?: number | null;
 }): Promise<{
   capture: ResultCapture;
   recordsAffected: number;
   outputParameters: OutputParameters;
 }> {
   const { client, config, blocks, readOnly, secret, signal, stream } = args;
+  const blockTimeoutSeconds = args.blockTimeoutSeconds ?? null;
+  // C10b-2b — a failure names the Timeout per block when it was the session's
+  // bound and the statement timed out. The kind stays the path's.
+  const within = (context: string, err: unknown): string =>
+    blockTimeoutSeconds !== null && isPostgresStatementTimeout(err)
+      ? `${context} within the Timeout per block of ${String(blockTimeoutSeconds)} seconds`
+      : context;
   const outputParameters = new OutputParameterValues();
   const path = readOnly ? 'read' : 'write';
   const capture = new ResultCapture(config.captureResultSets);
@@ -302,7 +314,12 @@ export async function executePostgresScript(args: {
       try {
         await client.query(readOnly ? 'BEGIN READ ONLY' : 'BEGIN');
       } catch (err) {
-        throw readFailure(err, 'the script could not begin its transaction', secret, path);
+        throw readFailure(
+          err,
+          within('the script could not begin its transaction', err),
+          secret,
+          path,
+        );
       }
       open = true;
     }
@@ -344,7 +361,12 @@ export async function executePostgresScript(args: {
             path,
           );
         }
-        throw readFailure(err, `${blockName(i)} failed`, secret, path);
+        // C10b-2b — the kind stays the path's; only the wording names the bound.
+        const context =
+          blockTimeoutSeconds !== null && isPostgresStatementTimeout(err)
+            ? `${blockName(i)} ran past the Timeout per block of ${String(blockTimeoutSeconds)} seconds`
+            : `${blockName(i)} failed`;
+        throw readFailure(err, context, secret, path);
       }
 
       if (!inTransaction) applied += 1;
@@ -377,10 +399,10 @@ export async function executePostgresScript(args: {
         if (!readOnly && sqlStateOf(err) === null) {
           throw new DatasetIoError(
             'permanent',
-            `${readFailure(err, 'the script could not commit', secret, path).message} — the COMMIT's outcome is unknown, so the script may have been applied`,
+            `${readFailure(err, within('the script could not commit', err), secret, path).message} — the COMMIT's outcome is unknown, so the script may have been applied`,
           );
         }
-        throw readFailure(err, 'the script could not commit', secret, path);
+        throw readFailure(err, within('the script could not commit', err), secret, path);
       } finally {
         open = false;
       }
@@ -498,7 +520,11 @@ function missingColumn(index: number, name: string, row: Record<string, unknown>
   );
 }
 
-/** Run one `script` on a postgres connection: at most one warning, then one terminal event. */
+/**
+ * Run one `script` on a postgres connection: at most two warnings, then one
+ * terminal event. The messages kept under *Capture messages* are an output, so
+ * a failed script reports none of them (its failure carries the server's error).
+ */
 export async function* runPostgresScript(
   ctx: ActivityContext,
   deps: {
@@ -548,11 +574,26 @@ export async function* runPostgresScript(
     return;
   }
 
+  // C10b-2b — the Block timeout arms both statement timers (`clientOptionsFor`)
+  // for the whole session, so it bounds every block and the BEGIN and COMMIT
+  // around them. It only ever LOWERS the connection's Statement timeout: that is
+  // its owner's bound, which a node may not lift (`queryTimeoutSeconds`' rule).
+  const connectionTimeoutMs = statementTimeoutMsOf(cfg.data);
+  const blockTimeoutSeconds =
+    config.blockTimeoutSeconds !== undefined &&
+    config.blockTimeoutSeconds * 1000 < connectionTimeoutMs
+      ? config.blockTimeoutSeconds
+      : null;
+  const sessionConfig =
+    blockTimeoutSeconds === null
+      ? ctx.connectionConfig
+      : { ...ctx.connectionConfig, statementTimeoutMs: blockTimeoutSeconds * 1000 };
+
   let client: PostgresClient;
   try {
     client = await openSession(
       deps.createClient,
-      ctx.connectionConfig,
+      sessionConfig,
       deps.secret,
       'cannot reach the postgres server to run the script',
       deps.types,
@@ -565,6 +606,21 @@ export async function* runPostgresScript(
   // even under a running statement, and an `error` with no listener ends the
   // server. The statement in flight is rejected through its callback anyway.
   client.on?.('error', () => undefined);
+  // C10b-2b — registered once the session is open, so the messages are the
+  // script's own, never `openSession`'s set-up. The session is never pooled and
+  // is ended below, so the listener goes with it.
+  const messages = new MessageCapture(deps.secret);
+  if (config.captureMessages) {
+    client.on?.('notice', (notice) => {
+      // A listener's throw would surface inside pg's message handling; a
+      // message never fails the script (ADF: an error caused by log won't).
+      try {
+        messages.add(notice);
+      } catch {
+        // Dropped, as a message past the cap is.
+      }
+    });
+  }
 
   // The outcome is decided, and the session closed, before anything is yielded.
   let result: Awaited<ReturnType<typeof executePostgresScript>> | undefined;
@@ -578,6 +634,7 @@ export async function* runPostgresScript(
       secret: deps.secret,
       signal: ctx.signal,
       stream: deps.stream ?? streamPostgresStatement,
+      blockTimeoutSeconds,
     });
   } catch (err) {
     failure = scriptFailure(err);
@@ -593,5 +650,5 @@ export async function* runPostgresScript(
     yield failure ?? failed('permanent', 'the script failed');
     return;
   }
-  yield* scriptSucceeded(result.capture, result.recordsAffected, result.outputParameters);
+  yield* scriptSucceeded(result.capture, result.recordsAffected, result.outputParameters, messages);
 }

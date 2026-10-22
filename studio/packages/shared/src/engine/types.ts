@@ -1172,6 +1172,13 @@ export const WARNING_CODES = {
    */
   SCRIPT_RESULT_TRUNCATED: 'script_result_truncated',
   /**
+   * #1600 OR41 C10b-2b — a Script under *Capture messages* received more server
+   * messages than the 1 MiB `outputLogs` may keep. The node succeeds with
+   * `truncated: true` and `outputLogs` holding the messages that came first,
+   * each whole. The `reason` names the bound, never a message.
+   */
+  SCRIPT_MESSAGES_TRUNCATED: 'script_messages_truncated',
+  /**
    * #1761 — a Web *Wait for callback* sent a `callBackUri` on a loopback host
    * (`127.0.0.0/8`, `::1`, `localhost`). That is the default when
    * `AUTONOMY_PUBLIC_URL` is unset, and a remote endpoint can never reach it, so
