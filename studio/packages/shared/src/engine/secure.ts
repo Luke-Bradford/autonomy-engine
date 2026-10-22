@@ -48,7 +48,7 @@
  * `number` output's marker would judge the marker string itself and flip it to
  * invalid. Nothing re-redacts, and a second caller must not be added.
  */
-import { SESSION_LOG_OUTPUT } from '../catalog/session-log.js';
+import { RUN_LOG_STREAMS } from '../catalog/session-log.js';
 import type { Node } from '../schemas/pipeline.js';
 import type { CapturedContent, EngineEvent } from './types.js';
 import {
@@ -163,8 +163,9 @@ export function redactSecureEvent(node: Node | undefined, event: EngineEvent): E
     }
     case 'node.output':
       // #1600 OR41 C9c — a session log line carries an item's error, as a
-      // failure does, so EITHER flag withholds it, as for `node.failed`.
-      return secureOut || event.name === SESSION_LOG_OUTPUT
+      // failure does, so EITHER flag withholds it, as for `node.failed`; so does
+      // a failed Script's server message (#1801).
+      return secureOut || RUN_LOG_STREAMS.has(event.name)
         ? { ...event, name: SECURE_REDACTED, value: SECURE_REDACTED }
         : event;
     case 'node.failed':

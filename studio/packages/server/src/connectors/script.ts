@@ -1,7 +1,9 @@
 import type Database from 'better-sqlite3';
 import type { z } from 'zod';
 import {
+  SCRIPT_MESSAGES_OUTPUT,
   SCRIPT_RESULT_ROW_CAP,
+  SESSION_LOG_RUN_MAX_LINES,
   WARNING_CODES,
   formatZodIssues,
   scriptDispatchConfigSchema,
@@ -274,11 +276,51 @@ export class MessageCapture {
 
   /** The prose for a truncation, naming the bound, never a message. */
   reason(): string {
-    return `the server's messages reached the ${LOOKUP_BYTE_CAP}-byte cap outputLogs may keep, so later messages were not kept`;
+    return `the server's messages reached the ${LOOKUP_BYTE_CAP}-byte cap a script may keep, so later messages were not kept`;
   }
 
   toOutput(): string {
     return this.entries.join('\n');
+  }
+
+  /** The messages kept, one entry each, in the order the server sent them. */
+  get kept(): readonly string[] {
+    return this.entries;
+  }
+}
+
+/** The warning for messages the cap left out, on either terminal. */
+function* messagesTruncated(messages: MessageCapture): Generator<ActivityEvent> {
+  if (messages.truncated) {
+    yield {
+      type: 'warned',
+      code: WARNING_CODES.SCRIPT_MESSAGES_TRUNCATED,
+      reason: messages.reason(),
+    };
+  }
+}
+
+/**
+ * #1801 — a failed script's messages, for the events before its failure.
+ * `outputLogs` is an output and outputs come only with success (as in ADF), so
+ * without this the RAISE NOTICE lines that led up to a failure were lost. They
+ * go to the run log instead, one `node.output outputLogs` per message (inert,
+ * as a session log line is), the first `SESSION_LOG_RUN_MAX_LINES` and then a
+ * line counting the rest. A succeeded script's stay in its output alone.
+ */
+export function* scriptMessagesOnFailure(messages: MessageCapture): Generator<ActivityEvent> {
+  yield* messagesTruncated(messages);
+  const kept = messages.kept;
+  for (const value of kept.slice(0, SESSION_LOG_RUN_MAX_LINES)) {
+    yield { type: 'output', name: SCRIPT_MESSAGES_OUTPUT, value };
+  }
+  const more = kept.length - SESSION_LOG_RUN_MAX_LINES;
+  if (more > 0) {
+    yield {
+      type: 'output',
+      name: SCRIPT_MESSAGES_OUTPUT,
+      value: `${String(more)} more message${more === 1 ? '' : 's'} not kept in the run log`,
+    };
   }
 }
 
@@ -591,13 +633,7 @@ export function* scriptSucceeded(
   if (capture.truncated) {
     yield { type: 'warned', code: WARNING_CODES.SCRIPT_RESULT_TRUNCATED, reason: capture.reason() };
   }
-  if (messages.truncated) {
-    yield {
-      type: 'warned',
-      code: WARNING_CODES.SCRIPT_MESSAGES_TRUNCATED,
-      reason: messages.reason(),
-    };
-  }
+  yield* messagesTruncated(messages);
   yield {
     type: 'succeeded',
     outputs: {
@@ -608,7 +644,7 @@ export function* scriptSucceeded(
       outputParameters,
       truncated: capture.truncated || messages.truncated,
       // The server's messages under Capture messages (C10b-2b); SQLite has none.
-      outputLogs: messages.toOutput(),
+      [SCRIPT_MESSAGES_OUTPUT]: messages.toOutput(),
     },
   };
 }

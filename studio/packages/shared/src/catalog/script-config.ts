@@ -146,7 +146,7 @@ const scriptInputShape = <B extends z.ZodType>(bindValue: B) =>
       captureMessages: presented(z.boolean().default(false), {
         title: 'Capture messages',
         description:
-          "Keeps the server's notices and warnings (RAISE NOTICE) in outputLogs, up to 1 MiB, when the script succeeds.",
+          "Keeps the server's notices and warnings (RAISE NOTICE) in outputLogs, up to 1 MiB, when the script succeeds. A failed script writes them to its run log.",
       }),
       // C10b-2b — ADF's `scriptBlockExecutionTimeout`; PostgreSQL only. Blank
       // keeps the connection's Statement timeout, which it can only lower.

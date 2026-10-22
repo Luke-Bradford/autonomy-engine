@@ -36,6 +36,7 @@ import { agentTaskConfigSchema } from './agent-config.js';
 import { copyDispatchInputSchema, copyInputSchema } from './copy-config.js';
 import { copyFilesConfigSchema } from './copy-files-config.js';
 import { deleteConfigSchema } from './delete-config.js';
+import { SCRIPT_MESSAGES_OUTPUT } from './session-log.js';
 import {
   HTTP_SECRET_HEADERS_FIELD,
   httpSecretHeadersSchema,
@@ -1634,7 +1635,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
       out('truncated', 'boolean'),
       // The server's messages under *Capture messages* (C10b-2b), one per
       // line; empty when it is off, and always on SQLite.
-      out('outputLogs', 'string'),
+      out(SCRIPT_MESSAGES_OUTPUT, 'string'),
     ],
     // The five a node saved before C10b-2b declares. Written out, not derived
     // from `outputs`: it is a snapshot of an old default.

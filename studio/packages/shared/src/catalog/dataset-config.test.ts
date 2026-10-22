@@ -23,6 +23,7 @@ import {
   DelimitedEncodingSchema,
   delimitedDatasetConfigSchema,
   isSqlIdentifier,
+  MAX_QUERY_TIMEOUT_SECONDS,
   queryDatasetConfigSchema,
   tableDatasetConfigSchema,
   excelDatasetConfigSchema,
@@ -621,5 +622,16 @@ describe('dataset form labels (#1396)', () => {
     // `presented()` tags the instance it is given, and this enum is exported;
     // the title belongs on the dataset field's own wrapper.
     expect(fieldLabelOf(DelimitedEncodingSchema)).toBeUndefined();
+  });
+});
+
+// #1799 — postgres refuses a statement_timeout past 2^31-1 ms, which the last
+// stretch of a read would be set to, so the Query timeout stops below it.
+describe('Query timeout fits postgres statement_timeout (#1799)', () => {
+  const field = queryDatasetConfigSchema.shape.queryTimeoutSeconds;
+  it('accepts the ceiling and refuses one past it', () => {
+    expect(MAX_QUERY_TIMEOUT_SECONDS * 1000).toBeLessThanOrEqual(2 ** 31 - 1);
+    expect(field.safeParse(MAX_QUERY_TIMEOUT_SECONDS).success).toBe(true);
+    expect(field.safeParse(MAX_QUERY_TIMEOUT_SECONDS + 1).success).toBe(false);
   });
 });

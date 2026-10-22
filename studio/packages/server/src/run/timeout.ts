@@ -1,4 +1,4 @@
-import { FAILURE_CODES, type EngineEvent } from '@autonomy-studio/shared';
+import { FAILURE_CODES, MAX_TIMER_DELAY_MS, type EngineEvent } from '@autonomy-studio/shared';
 
 /**
  * #1600 OR41 C0a (#1 F3) — the activity timeout: `policy.timeoutSeconds` bounds
@@ -48,13 +48,6 @@ export function activityTimeoutFailure(
     code: FAILURE_CODES.TIMEOUT,
   };
 }
-
-/**
- * The longest delay `setTimeout` honours. Anything above it is treated as 1 ms and
- * fires at once — and a timeout may be up to a year (the write schema's ceiling;
- * the read path has none).
- */
-export const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 
 /**
  * Call `fire` once, `ms` from now, re-arming in `MAX_TIMER_DELAY_MS` steps for a

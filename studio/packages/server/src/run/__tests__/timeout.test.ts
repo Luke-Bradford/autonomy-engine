@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { FAILURE_CODES } from '@autonomy-studio/shared';
-import { activityTimeoutFailure, armDeadline, MAX_TIMER_DELAY_MS } from '../timeout.js';
+import { FAILURE_CODES, MAX_TIMER_DELAY_MS } from '@autonomy-studio/shared';
+import { activityTimeoutFailure, armDeadline } from '../timeout.js';
 
 describe('#1600 C0a — armDeadline', () => {
   beforeEach(() => {
