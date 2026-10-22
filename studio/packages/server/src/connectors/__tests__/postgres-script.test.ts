@@ -967,6 +967,15 @@ describe('a cancel reaches the block in flight (#1800)', () => {
     expect(failureOf(events).error).toMatch(/^script aborted — 1 block\(s\)/);
   });
 
+  it('sends nothing for a cancel during COMMIT, once the block’s arming is undone', async () => {
+    const { events, sent } = await runCancelled(
+      [{ type: 'nonQuery', sql: 'insert into t values (1)' }],
+      { runAsOneTransaction: true, abortOn: 'COMMIT' },
+    );
+    expect(sent).toEqual([]);
+    expect(terminal(events)).toMatchObject({ type: 'succeeded' });
+  });
+
   it('sends nothing for a cancel while no block is in flight (during BEGIN)', async () => {
     const { events, sent, queries } = await runCancelled([{ type: 'nonQuery', sql: SLEEP }], {
       runAsOneTransaction: true,
