@@ -102,8 +102,9 @@ export type PostgresStatementStream = (
  */
 export class StreamedQuery extends pg.Query {
   handleRowDescription(msg: unknown): void {
-    (pg.Query.prototype as unknown as { handleRowDescription(m: unknown): void })
-      .handleRowDescription.call(this, msg);
+    (
+      pg.Query.prototype as unknown as { handleRowDescription(m: unknown): void }
+    ).handleRowDescription.call(this, msg);
     (this as unknown as { _accumulateRows: boolean })._accumulateRows = false;
   }
 }
@@ -121,7 +122,11 @@ export const streamPostgresStatement: PostgresStatementStream = (client, stateme
     let failedRow = false;
     const query = new StreamedQuery(
       // `queryMode` is pg's own (`PostgresExtendedQuery`), missing from its types.
-      { text: statement.sql, values: [...statement.values], queryMode: 'extended' } as pg.QueryConfig,
+      {
+        text: statement.sql,
+        values: [...statement.values],
+        queryMode: 'extended',
+      } as pg.QueryConfig,
       undefined,
       (err: Error | null | undefined, result?: pg.QueryResult) => {
         if (err !== null && err !== undefined) {

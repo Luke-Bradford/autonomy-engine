@@ -75,9 +75,7 @@ function recordingFactory(failOn: Record<string, Error> = {}): {
         const text = typeof sql === 'string' ? sql : sql.text;
         queries.push(text);
         const err = failOn[text];
-        return err === undefined
-          ? Promise.resolve({ rows: [], fields: [] })
-          : Promise.reject(err);
+        return err === undefined ? Promise.resolve({ rows: [], fields: [] }) : Promise.reject(err);
       },
       end: () => Promise.resolve(),
     } satisfies PostgresClient;
@@ -168,10 +166,15 @@ describe('Script on PostgreSQL, the blocks checked before any session (C10b-1)',
 
   it('rewrites :name to $n and names a block whose value is missing', () => {
     const prepared = preparePostgresBlocks(
-      config([{ type: 'query', sql: 'select * from t where a = :a and b = :a', parameters: { a: 1 } }]),
+      config([
+        { type: 'query', sql: 'select * from t where a = :a and b = :a', parameters: { a: 1 } },
+      ]),
     );
     expect(prepared).toEqual([
-      { statement: { sql: 'select * from t where a = $1 and b = $1', values: [1] }, mayCommitPartway: false },
+      {
+        statement: { sql: 'select * from t where a = $1 and b = $1', values: [1] },
+        mayCommitPartway: false,
+      },
     ]);
     expect(
       preparePostgresBlocks(
@@ -258,7 +261,7 @@ describe('Script on PostgreSQL, the run (C10b-1)', () => {
       truncated: false,
     });
     expect(queries).toEqual([
-      'SET SESSION DateStyle = \'ISO, YMD\'',
+      "SET SESSION DateStyle = 'ISO, YMD'",
       'BEGIN READ ONLY',
       'select a from t where a > $1',
       'select 2 as b',
@@ -309,10 +312,9 @@ describe('Script on PostgreSQL, the run (C10b-1)', () => {
   });
 
   it('refuses a Query block whose statement returns no rows', async () => {
-    const { events } = await runFake(
-      scriptCtx([{ type: 'query', sql: 'update t set a = 1' }]),
-      { 'update t set a = 1': { command: 'UPDATE', rowCount: 1, hasFields: false } },
-    );
+    const { events } = await runFake(scriptCtx([{ type: 'query', sql: 'update t set a = 1' }]), {
+      'update t set a = 1': { command: 'UPDATE', rowCount: 1, hasFields: false },
+    });
     expect(failureOf(events).error).toBe(
       'Script block 1 is a Query, but its statement returns no rows; make it a Non-query block',
     );
@@ -323,7 +325,10 @@ describe('Script on PostgreSQL, the run (C10b-1)', () => {
     const { events } = await runFake(scriptCtx([{ type: 'query', sql: 'select i' }]), {
       'select i': { rows },
     });
-    expect(events[0]).toMatchObject({ type: 'warned', code: WARNING_CODES.SCRIPT_RESULT_TRUNCATED });
+    expect(events[0]).toMatchObject({
+      type: 'warned',
+      code: WARNING_CODES.SCRIPT_RESULT_TRUNCATED,
+    });
     const outputs = outputsOf(events);
     const [set] = outputs['resultSets'] as { rowCount: number; rows: unknown[] }[];
     expect(set!.rowCount).toBe(SCRIPT_RESULT_ROW_CAP + 5);
@@ -369,10 +374,9 @@ describe('Script on PostgreSQL, the run (C10b-1)', () => {
     });
 
     it('a CALL may have committed partway, so it is never retried', async () => {
-      const { events } = await runFake(
-        scriptCtx([{ type: 'nonQuery', sql: 'call load()' }]),
-        { 'call load()': pgError('deadlock detected', '40P01') },
-      );
+      const { events } = await runFake(scriptCtx([{ type: 'nonQuery', sql: 'call load()' }]), {
+        'call load()': pgError('deadlock detected', '40P01'),
+      });
       expect(failureOf(events).kind).toBe('permanent');
     });
 
@@ -516,7 +520,11 @@ describe.skipIf(LIVE_HOST === undefined)('Script on a live postgres (C10b-1)', (
     await reset();
     const events = await runLive([
       { type: 'nonQuery', sql: `insert into ${schema}.t values (:v), (:v)`, parameters: { v: 9 } },
-      { type: 'query', sql: `select a from ${schema}.t where a >= :min order by a`, parameters: { min: 3 } },
+      {
+        type: 'query',
+        sql: `select a from ${schema}.t where a >= :min order by a`,
+        parameters: { min: 3 },
+      },
       { type: 'nonQuery', sql: `delete from ${schema}.t where a = 1` },
     ]);
     expect(outputsOf(events)).toEqual({
@@ -563,7 +571,10 @@ describe.skipIf(LIVE_HOST === undefined)('Script on a live postgres (C10b-1)', (
     const events = await runLive([
       { type: 'nonQuery', sql: `delete from ${schema}.t` },
       { type: 'query', sql: `insert into ${schema}.t values (5) returning a` },
-      { type: 'query', sql: `with d as (delete from ${schema}.t returning a) select count(*)::int as n from d` },
+      {
+        type: 'query',
+        sql: `with d as (delete from ${schema}.t returning a) select count(*)::int as n from d`,
+      },
       { type: 'query', sql: `call ${schema}.p(:a, null)`, parameters: { a: 1 } },
     ]);
     expect(outputsOf(events)['resultSets']).toEqual([
@@ -590,7 +601,9 @@ describe.skipIf(LIVE_HOST === undefined)('Script on a live postgres (C10b-1)', (
     const events = await runLive([
       { type: 'nonQuery', sql: `delete from ${schema}.t; delete from ${schema}.t` },
     ]);
-    expect(failureOf(events).error).toMatch(/cannot insert multiple commands into a prepared statement/);
+    expect(failureOf(events).error).toMatch(
+      /cannot insert multiple commands into a prepared statement/,
+    );
     expect(await count()).toBe(3);
   });
 
@@ -618,7 +631,7 @@ describe.skipIf(LIVE_HOST === undefined)('Script on a live postgres (C10b-1)', (
     expect(await count()).toBe(0);
   });
 
-  it("reads values as Lookup on postgres does: int8 as text, a naive timestamp as UTC", async () => {
+  it('reads values as Lookup on postgres does: int8 as text, a naive timestamp as UTC', async () => {
     const events = await runLive([
       {
         type: 'query',
