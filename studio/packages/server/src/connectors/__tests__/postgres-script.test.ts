@@ -411,7 +411,7 @@ describe('Script on PostgreSQL, the run (C10b-1)', () => {
 
     it('a row that cannot be kept fails after its statement ran, so it counts as applied', async () => {
       const { events } = await runFake(scriptCtx([{ type: 'query', sql: 'select v' }]), {
-        'select v': new LookupValueError('row 1 column v is not a value'),
+        'select v': new LookupValueError('v', 0, 'is not a value'),
       });
       expect(failureOf(events)).toMatchObject({ kind: 'permanent' });
       expect(failureOf(events).error).toMatch(/^a Script result set cannot hold a value/);
