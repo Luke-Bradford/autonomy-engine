@@ -80,12 +80,12 @@ describe('set_variable / append_variable config rules', () => {
     [
       'an unknown Operation',
       node('w', { variable: 'n', value: '1', operation: 'prepend' }, 'set_variable'),
-      'node.w.operation: must be Set or Append',
+      'node.w.operation: must be Set, Append or Pipeline return value',
     ],
     [
       'a ${} Operation',
       node('w', { variable: 'n', value: '1', operation: '${params.x}' }, 'set_variable'),
-      'node.w.operation: must be Set or Append',
+      'node.w.operation: must be Set, Append or Pipeline return value',
     ],
     ['a literal the coercion refuses', set('w', 'n', 'abc'), 'expected a finite number'],
     ['text around the braces for a number', set('w', 'n', 'n=${params.x}'), 'text around'],

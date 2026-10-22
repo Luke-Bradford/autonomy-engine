@@ -480,7 +480,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
             )
             .optional(),
           {
-            title: 'Return values',
+            title: 'Return keys',
             description:
               'What this pipeline hands the Execute pipeline that called it. Make sure only one return value activity runs.',
           },

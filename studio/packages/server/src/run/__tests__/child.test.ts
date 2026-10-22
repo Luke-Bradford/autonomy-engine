@@ -316,6 +316,89 @@ describe('#796 — a call node runs a REAL child', () => {
   });
 });
 
+describe('#1600 C12b — a child hands its parent a Pipeline return value', () => {
+  /** A version with edges and variables, which `seedVersion` does not take. */
+  function seedDoc(db: Db, nodes: Node[], edges: NewPipelineVersion['edges']): string {
+    const pipeline = createPipeline(db, { ownerId: 'local', name: `P${(seq += 1)}` });
+    return createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      variables: [{ name: 'got', type: 'number', default: 0 }],
+      nodes,
+      edges,
+      catalogVersion: CATALOG_VERSION,
+    }).id;
+  }
+  const returner = (): Node => ({
+    id: 'ret',
+    type: 'set_variable',
+    config: {
+      operation: 'return',
+      returnValues: [
+        { key: 'total', type: 'number', value: '${nodes.work.output.answer}' },
+        { key: 'label', type: 'string', value: 'done' },
+      ],
+    },
+    position: { x: (seq += 1), y: 0 },
+  });
+  const reader = (ref: string): Node => ({
+    id: 'use',
+    type: 'set_variable',
+    config: { variable: 'got', value: `\${${ref}}` },
+    position: { x: (seq += 1), y: 0 },
+  });
+  const childDoc = (db: Db) =>
+    seedDoc(
+      db,
+      [leaf('work', [{ name: 'answer', type: 'number' }]), returner()],
+      [{ id: 'w-r', from: 'work', to: 'ret', on: 'success' }],
+    );
+
+  it('the parent reads output.pipelineReturnValue.<key> from the call node', async () => {
+    const { db } = freshDb();
+    const childPv = childDoc(db);
+    const parentPv = seedDoc(
+      db,
+      [callNode('caller', childPv), reader('nodes.caller.output.pipelineReturnValue.total')],
+      [{ id: 'c-u', from: 'caller', to: 'use', on: 'success' }],
+    );
+    const run = seedRun(db, parentPv);
+    const b = boundary(db, { work: { answer: 42 } });
+    await b.drives.serialize(run.id, () => startRun(b, run));
+    await settle(b.drives);
+
+    const returned = loadEngineEvents(db, run.id).find((e) => e.type === 'call.returned');
+    expect(returned).toMatchObject({
+      childOutcome: 'success',
+      outputs: { answer: 42, pipelineReturnValue: { total: 42, label: 'done' } },
+    });
+    expect(loadEngineEvents(db, run.id)).toContainEqual(
+      expect.objectContaining({ type: 'variable.set', name: 'got', value: 42 }),
+    );
+    expect(getRun(db, run.id)!.status).toBe('success');
+    b.unsubscribe();
+  });
+
+  it('a key the child does not return fails the parent, as in ADF', async () => {
+    const { db } = freshDb();
+    const childPv = childDoc(db);
+    const parentPv = seedDoc(
+      db,
+      [callNode('caller', childPv), reader('nodes.caller.output.pipelineReturnValue.nope')],
+      [{ id: 'c-u', from: 'caller', to: 'use', on: 'success' }],
+    );
+    const run = seedRun(db, parentPv);
+    const b = boundary(db, { work: { answer: 42 } });
+    await b.drives.serialize(run.id, () => startRun(b, run));
+    await settle(b.drives);
+
+    expect(loadEngineEvents(db, run.id).some((e) => e.type === 'variable.set')).toBe(false);
+    expect(getRun(db, run.id)!.status).toBe('failure');
+    b.unsubscribe();
+  });
+});
+
 describe('#796 item 2 — wait: false detaches the parent from its child', () => {
   it('the parent SUCCEEDS once the child is started; the failing child runs on and returns nothing', async () => {
     const { db } = freshDb();

@@ -286,7 +286,7 @@ describe('save rules', () => {
       node('w', { variable: 'n', value: '1', returnValues: [{ key: 'k', type: 'null' }] }, 'set_variable'),
     ], [edge('r', 'w')]);
     expect(errs).toContain('node.r.variable: Pipeline return value has no variable — remove it');
-    expect(errs).toContain('node.r.value: Pipeline return value has no value — its values are in Return values');
+    expect(errs).toContain('node.r.value: Pipeline return value has no value — its values are in Return keys');
     expect(errs).toContain('node.w.returnValues: only Pipeline return value has return values — remove it');
   });
 

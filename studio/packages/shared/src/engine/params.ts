@@ -1416,7 +1416,7 @@ function validateReturnValueConfig(
     errors.push(`${at}.variable: Pipeline return value has no variable — remove it`);
   }
   if (node.config['value'] !== undefined) {
-    errors.push(`${at}.value: Pipeline return value has no value — its values are in Return values`);
+    errors.push(`${at}.value: Pipeline return value has no value — its values are in Return keys`);
   }
   if (foreachOwned) {
     errors.push(
