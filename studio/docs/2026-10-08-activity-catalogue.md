@@ -898,6 +898,27 @@ Sources: [Set variable](https://learn.microsoft.com/azure/data-factory/control-f
 - Not built here: ＋ New variable in the chooser (variables are declared on the pipeline's Variables tab, as before) and the one-click *Convert*, which is C13's.
 - `CATALOG_VERSION` 54→55: a build before C12a ignores `operation`, so a Set variable · Append would replace the array.
 
+**How C12b built it** (Pipeline return value):
+- `operation: 'return'` with `returnValues`, a table of `{key, type, value?}` rows that the dock draws as *Return keys* (Key · Type · Value, ⓕ on Value). Operation is now the tab's first field, as in ADF, because it decides the rest: Variable and Value apply to Set and Append, and Return keys to Pipeline return value (`appliesWhen`). A return node has no Variable or Value, and a Set or Append has no Return keys. Each is refused at save rather than ignored.
+- **Types:** String · Number · Boolean · Array · Object · Null.
+  - ADF's Int and Float are one Number, studio's number type.
+  - ADF's *Expression* type is dropped, because every row already takes `${}`.
+  - Array and Object take JSON text or one whole-value `${}` of that kind. A Set's array has no literal form, but a return value is typed per row, so its text is decided.
+  - Null takes no value. A String with none is `""`.
+  - The literal and template checks are the run's own (`coerceReturnValue`, which reuses `coerceVariableValue` for the scalars), and a whole-value `${}` is type-checked at save as a Set's is.
+- **Keys:** letters, digits and `_`, not starting with a digit, so `…pipelineReturnValue.<key>` is one path segment. They must be unique, at least one is required, and `__proto__` is refused. The run builds the map from own keys, so a stored one is never a prototype write.
+- **Not a variable write.** The node succeeds the way Filter does: `succeedControl` → `node.succeeded` with the one output `pipelineReturnValue` (`json`). It records no `variable.*` event, and the determinism guard does not count it as a writer, although its reads still count. Its contract is derived from the Operation by `lowerSetVariableReturnOutputs` in `lowerPipelineNodes`, which overwrites it for a return node and heals the row back to `[]` when the Operation goes back to Set or Append. The canvas re-derives the contract on every config edit, so a child's own `${nodes.<ret>.output.pipelineReturnValue}` checks against what the server will store.
+- **Failures:** a row of the wrong type, a map that is not replay-safe, or a map over `VARIABLE_MAX_BYTES` (256 KiB, counted over the whole map) fails the node `permanent` with the Set's `VARIABLE_*` codes. ADF's cap is 4 MB; studio keeps one bound for everything a run holds in state. A malformed table, or an evaluation that throws, ends the run `invalid_event`, as a Set does. Dispatch and crash resume share one function (`variableWriteCommand` → `returnValueCommand`).
+- **The parent** reads `${nodes.<call>.output.pipelineReturnValue.<key>}`. `projectChildRunOutputs` reserves the name:
+  - Only a return node contributes `pipelineReturnValue`, so an ordinary node's same-named output can't pose as one.
+  - A nested call's value, which came from its grandchild, doesn't pass up (ADF parity).
+  - If two return nodes both run, the last by sorted id wins, with its whole map: the keys aren't merged. ADF says to make sure only one runs.
+  - With none, the key is absent, so a parent that reads one fails, as ADF's does. A rerun-from-failed copies the call node's outputs, or the return node's, like any other succeeded node's.
+- **Not inside a ForEach**, at any depth, which is refused at save. Each item would replace the map, and a parallel body's per-item outputs are dropped at the end of each item, so the caller would get nothing.
+- **Secure flags are refused**, because the values are handed unredacted to the calling pipeline.
+- **`CATALOG_VERSION` 68→69:** a build before C12b reads an unknown Operation and ends the run `invalid_event`.
+- **Split from OR34 #1483:** the C12 row bundled C12b with OR34's pipeline outputs. C12b builds the ADF mechanism, a return value. OR34 keeps a declared pipeline-level `outputs` getting value expressions, its binding modes (*Follow live* · *Follow latest* · *Pin*), and moving the merged child outputs under `.nodes`.
+
 ### 4.8 Unchanged except as noted
 
 | Activity | Change |
@@ -967,7 +988,7 @@ The matrix is generated from adapter capability declarations, and **OR39 #1574 m
 | C9 | Delete: wildcard, folders, dates, log. Lower file_delete. Split: **C9a** the `delete` type on a file system connection, with path type, wildcard, Include subfolders, modified window, Max concurrent deletes, Fail if nothing matched and Delete empty folders, on Get metadata's walk (built); **C9b** the `file_delete` lowering (Path type File, Fail if nothing matched on, `path` kept), Delete file retired from the palette (built); **C9c** the session log and `logPath` (a new output, so a `formerOutputs` snapshot and a version bump), shared with Copy's (built) | OR17 #1408 |
 | C10 | Script activity | OR12 #1403, OR15 sql_script |
 | C11 | Web: fail-on-error, response cap, parse, retry-after, wait-for-callback. Lower http_request and webhook. Split: **C11a** the `web` type, its Request, Auth and Settings tabs, and the redirect walk that keeps secret headers on their origin (built); **C11b** the `http_request` lowering (Fail on HTTP error off, Parse as Text, method upper-cased) and HTTP request retired from the palette (built); **C11c-1** Wait for callback with a URL (built); **C11c-2** a Web with no URL, the `webhook` lowering and Webhook retired from the palette (built) | — |
-| C12 | Set variable operations + pipeline return value. Lower append_variable. Split: **C12a** Operation Set · Append, the `append_variable` lowering and Append variable retired from the palette (built); **C12b** Pipeline return value, read by the parent as `output.pipelineReturnValue.<key>`, with OR34 #1483's pipeline outputs | OR34 outputs |
+| C12 | Set variable operations + pipeline return value. Lower append_variable. Split: **C12a** Operation Set · Append, the `append_variable` lowering and Append variable retired from the palette (built); **C12b** Pipeline return value, read by the parent as `output.pipelineReturnValue.<key>` (built). OR34 #1483's declared pipeline outputs, binding modes and `.nodes` stay in OR34, see §4.7 | OR34 outputs (return value only) |
 | C13 | Palette regroup (§2), retire the remaining old types from the palette (C1b retired Copy file and Move file), `CATALOG_VERSION` bump, the migration guarantees in §8. `file_read` is NOT retired: since C7b it is Lookup's *Whole file as text* mode, so it is never refused, converted or listed as retired | — |
 
 **Order:** C0, then C1 (the operator's "copy and copy file" complaint), C7, C8, C9 (cheap consolidations), C11, C12, then C2–C6 as their dependencies (OR10, OR14) land, then C10 and C13. C13 can only land once every retired type has a lowering.
