@@ -5,7 +5,7 @@
  * (a secure node is never copied by rerun-from-failed).
  */
 import { describe, expect, it } from 'vitest';
-import { SESSION_LOG_OUTPUT } from '../../catalog/session-log.js';
+import { SCRIPT_MESSAGES_OUTPUT, SESSION_LOG_OUTPUT } from '../../catalog/session-log.js';
 import type { Container, Edge, EngineEvent, Node, NodeRunState, RunState } from '../types.js';
 import { createEngine, type Engine } from '../reduce.js';
 import { availableRefs } from '../params.js';
@@ -146,6 +146,8 @@ describe('#1 F4 — Engine.redact (emit-time)', () => {
       value: 'Error FileDelete a.txt hunter2',
     });
     expect(JSON.stringify(e.redact(line(SESSION_LOG_OUTPUT)))).not.toContain('hunter2');
+    // #1801 — so is a failed Script's server message, which can echo a row.
+    expect(JSON.stringify(e.redact(line(SCRIPT_MESSAGES_OUTPUT)))).not.toContain('hunter2');
     // Any other streamed output stays readable on secureInput alone, as before.
     expect(e.redact(line('filesDeleted'))).toEqual(line('filesDeleted'));
   });

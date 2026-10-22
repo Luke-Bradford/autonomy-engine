@@ -59,6 +59,16 @@ export const DEFAULT_MAX_READ_BYTES = 10 * 1024 * 1024;
  */
 export const DEFAULT_MAX_LIST_ENTRIES = 10_000;
 
+/**
+ * The longest delay a Node timer honours: `setTimeout`, and `AbortSignal.timeout`
+ * with it, treats anything above as 1 ms and fires at once (#1799). Every `…Ms`
+ * timeout below is capped at it, so none can fail each call the moment it starts.
+ */
+export const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
+
+/** A timeout in ms: a positive integer a Node timer can hold. */
+const timeoutMsSchema = () => z.number().int().positive().max(MAX_TIMER_DELAY_MS).optional();
+
 /** libpq's default port, applied when `config.port` is absent. */
 export const DEFAULT_POSTGRES_PORT = 5432;
 /** Applied when `config.connectTimeoutMs` is absent. `pg`'s own default is 0 =
@@ -104,7 +114,7 @@ export const llmConnectionConfigSchema = z.object({
     title: 'Default model',
   }),
   /** Per-request timeout in ms (whole exchange). Defaults to `DEFAULT_LLM_TIMEOUT_MS`. */
-  timeoutMs: presented(z.number().int().positive().optional(), {
+  timeoutMs: presented(timeoutMsSchema(), {
     title: 'Timeout',
     unit: 'ms',
     description: defaultNote(DEFAULT_LLM_TIMEOUT_MS, 'ms'),
@@ -129,7 +139,7 @@ export const httpConnectionConfigSchema = z.object({
     title: 'Default headers',
   }),
   /** Per-request timeout in ms (whole exchange). Defaults to `DEFAULT_HTTP_TIMEOUT_MS`. */
-  timeoutMs: presented(z.number().int().positive().optional(), {
+  timeoutMs: presented(timeoutMsSchema(), {
     title: 'Timeout',
     unit: 'ms',
     description: defaultNote(DEFAULT_HTTP_TIMEOUT_MS, 'ms'),
@@ -305,14 +315,14 @@ export const postgresConnectionConfigSchema = z.object({
     }),
   }),
   /** How long to wait for the CONNECTION itself (`connectionTimeoutMillis`). */
-  connectTimeoutMs: presented(z.number().int().positive().optional(), {
+  connectTimeoutMs: presented(timeoutMsSchema(), {
     title: 'Connect timeout',
     unit: 'ms',
     description: defaultNote(DEFAULT_POSTGRES_CONNECT_TIMEOUT_MS, 'ms'),
   }),
   /** Server-side `statement_timeout`, in ms — the cap on one statement, and a
    * different timer from the connect budget above. */
-  statementTimeoutMs: presented(z.number().int().positive().optional(), {
+  statementTimeoutMs: presented(timeoutMsSchema(), {
     title: 'Statement timeout',
     unit: 'ms',
     description: defaultNote(DEFAULT_POSTGRES_STATEMENT_TIMEOUT_MS, 'ms'),
@@ -399,7 +409,7 @@ export const agentConnectionConfigSchema = z.object({
     description: 'Names the model in usage records. Set a real --model in Arguments.',
   }),
   /** Hard wall-clock timeout (ms). Exceeding it tree-kills the process. */
-  timeoutMs: presented(z.number().int().positive().optional(), {
+  timeoutMs: presented(timeoutMsSchema(), {
     title: 'Timeout',
     unit: 'ms',
     description: defaultNote(DEFAULT_AGENT_TIMEOUT_MS, 'ms'),

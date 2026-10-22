@@ -23,6 +23,20 @@ export type SessionLogDestination = z.infer<typeof logToSchema>;
 /** The stream name a run-log line travels under (`node.output`, folded inert). */
 export const SESSION_LOG_OUTPUT = 'sessionLog';
 
+/**
+ * #1801 — the stream a failed Script's server messages travel under, named after
+ * the `outputLogs` output they would have filled. Like a session log line, a
+ * message can carry what failed (RAISE NOTICE echoes rows and parameters), so
+ * the secure flags treat it as one (`engine/secure.ts`).
+ */
+export const SCRIPT_MESSAGES_OUTPUT = 'outputLogs';
+
+/** The run-log streams either secure flag withholds, as it does a failure. */
+export const RUN_LOG_STREAMS: ReadonlySet<string> = new Set([
+  SESSION_LOG_OUTPUT,
+  SCRIPT_MESSAGES_OUTPUT,
+]);
+
 /** The most lines kept in the run log. A folder keeps every line. */
 export const SESSION_LOG_RUN_MAX_LINES = 1000;
 

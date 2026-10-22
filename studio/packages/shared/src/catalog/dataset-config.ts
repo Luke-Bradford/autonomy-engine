@@ -3,6 +3,7 @@ import { optionTitles, presented, singleLine } from '../schemas/field-presentati
 import { isValidDateFormat } from '../datamove/coerce.js';
 import { FORMAT_TOKEN_NAMES } from '../engine/functions.js';
 import { formatZodIssues } from '../schemas/zod-issues.js';
+import { MAX_TIMER_DELAY_MS } from './connection-config.js';
 import { CONNECTION_KIND_LABELS, type ConnectionKind } from '../schemas/connection.js';
 import { DATASET_KIND_LABELS, DatasetKindSchema, type DatasetKind } from '../schemas/dataset.js';
 
@@ -94,6 +95,13 @@ export const tableDatasetConfigSchema = z.object({
 });
 
 /**
+ * The longest Query timeout (#1799): PostgreSQL's `statement_timeout`, which the
+ * last stretch of a read lowers to the time left, takes an integer of ms, and
+ * refuses anything past 2^31-1 ("Value exceeds integer range", measured on 17).
+ */
+export const MAX_QUERY_TIMEOUT_SECONDS = Math.floor(MAX_TIMER_DELAY_MS / 1000);
+
+/**
  * `query` — a literal SQL statement, with named parameters bound (§2.6, §8).
  *
  * `sql` is LITERAL: `${}` in a copy node reaches the parameter VALUES, never the
@@ -140,11 +148,14 @@ export const queryDatasetConfigSchema = z.object({
    * interrupted, so a batch already being pulled finishes, its last batch
    * included, and a one-batch read (an aggregate) is never cut short.
    */
-  queryTimeoutSeconds: presented(z.number().int().positive().optional(), {
-    title: 'Query timeout',
-    unit: 'seconds',
-    description: "The whole read's limit, checked between batches. Blank means no limit.",
-  }),
+  queryTimeoutSeconds: presented(
+    z.number().int().positive().max(MAX_QUERY_TIMEOUT_SECONDS).optional(),
+    {
+      title: 'Query timeout',
+      unit: 'seconds',
+      description: "The whole read's limit, checked between batches. Blank means no limit.",
+    },
+  ),
 });
 
 /**

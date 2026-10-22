@@ -26,6 +26,7 @@ import {
   connectionConfigSchema,
   fsConnectionConfigSchema,
   looksAbsolutePath,
+  MAX_TIMER_DELAY_MS,
   CONNECTION_NON_OVERRIDABLE_CONFIG_KEYS,
   isNonOverridableConnectionConfigKey,
   ROOT_CONFINED_CONNECTION_KINDS,
@@ -389,5 +390,26 @@ describe('server-applied defaults in the connection notes', () => {
   ] as const)('%s %s', (kind, key, note) => {
     const field = connectionConfigSchema(kind).shape[key];
     expect(fieldLabelThrough(field)?.description).toContain(note);
+  });
+});
+
+// #1799 — a Node timer above 2^31-1 ms fires after 1 ms, so a timeout past it
+// would fail every call at once. Every `…Ms` field of every kind refuses one.
+describe('millisecond timeouts fit a Node timer (#1799)', () => {
+  const msFields = Object.entries(CONNECTION_CONFIG_SCHEMAS).flatMap(([kind, schema]) =>
+    Object.keys(schema.shape)
+      .filter((key) => key.endsWith('Ms'))
+      .map((key) => [kind, key] as const),
+  );
+
+  it('finds the ms fields', () => {
+    expect(msFields.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it.each(msFields)('%s %s', (kind, key) => {
+    const field =
+      CONNECTION_CONFIG_SCHEMAS[kind as keyof typeof CONNECTION_CONFIG_SCHEMAS].shape[key];
+    expect(field?.safeParse(MAX_TIMER_DELAY_MS).success).toBe(true);
+    expect(field?.safeParse(MAX_TIMER_DELAY_MS + 1).success).toBe(false);
   });
 });

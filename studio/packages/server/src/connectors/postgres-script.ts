@@ -40,6 +40,7 @@ import {
   blockWording,
   type OutputParameters,
   scriptFailure,
+  scriptMessagesOnFailure,
   scriptSucceeded,
 } from './script.js';
 import type { ActivityContext, ActivityEvent } from './types.js';
@@ -522,8 +523,8 @@ function missingColumn(index: number, name: string, row: Record<string, unknown>
 
 /**
  * Run one `script` on a postgres connection: at most two warnings, then one
- * terminal event. The messages kept under *Capture messages* are an output, so
- * a failed script reports none of them (its failure carries the server's error).
+ * terminal event. The messages kept under *Capture messages* are an output on
+ * success, and run-log lines before the failure otherwise (#1801).
  */
 export async function* runPostgresScript(
   ctx: ActivityContext,
@@ -648,6 +649,7 @@ export async function* runPostgresScript(
   }
 
   if (result === undefined) {
+    yield* scriptMessagesOnFailure(messages);
     yield failure ?? failed('permanent', 'the script failed');
     return;
   }

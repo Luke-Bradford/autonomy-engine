@@ -4,6 +4,8 @@ import {
   DEFAULT_POSTGRES_PORT,
   SCRIPT_ACTIVITY_TYPE,
   SCRIPT_RESULT_ROW_CAP,
+  SCRIPT_MESSAGES_OUTPUT,
+  SESSION_LOG_RUN_MAX_LINES,
   WARNING_CODES,
   fieldLabelOf,
   scriptDispatchConfigSchema,
@@ -1067,6 +1069,80 @@ describe('Capture messages (C10b-2b)', () => {
     });
     expect(outputsOf(events)['outputLogs']).toBe(`NOTICE: ${lines}`);
     expect(outputsOf(events)['truncated']).toBe(true);
+  });
+
+  // #1801 — outputs come only with success, so a failed script's messages go
+  // to the run log, before the failure, where the Monitor shows them.
+  describe('on a failed script (#1801)', () => {
+    const failing = 'select 1/0';
+    const twoBlocks: Block[] = [
+      { type: 'nonQuery', sql },
+      { type: 'nonQuery', sql: failing },
+    ];
+    const logLines = (events: ActivityEvent[]): unknown[] =>
+      events
+        .filter((e) => e.type === 'output' && e.name === SCRIPT_MESSAGES_OUTPUT)
+        .map((e) => (e as { value: unknown }).value);
+
+    it('yields each kept message as a run-log line, then the failure', async () => {
+      const { events } = await runFake(scriptCtx(twoBlocks, { captureMessages: true }), {
+        [sql]: {
+          command: 'DO',
+          notices: [notice('first'), notice('second', { severity: 'WARNING', hint: 'try this' })],
+        },
+        [failing]: pgError('division by zero', '22012'),
+      });
+      expect(logLines(events)).toEqual(['NOTICE: first', 'WARNING: second\nHINT: try this']);
+      expect(terminal(events)).toMatchObject({ type: 'failed' });
+      expect(failureOf(events).error).toContain('division by zero');
+    });
+
+    it('yields none without Capture messages', async () => {
+      const { events } = await runFake(scriptCtx(twoBlocks), {
+        [sql]: { command: 'DO', notices: [notice('first')] },
+        [failing]: pgError('division by zero', '22012'),
+      });
+      expect(logLines(events)).toEqual([]);
+      expect(terminal(events)).toMatchObject({ type: 'failed' });
+    });
+
+    it('scrubs the connection secret from each line', async () => {
+      const { events } = await runFake(scriptCtx(twoBlocks, { captureMessages: true }), {
+        [sql]: { command: 'DO', notices: [notice(`password is ${SECRET}`)] },
+        [failing]: pgError('division by zero', '22012'),
+      });
+      expect(logLines(events)).toHaveLength(1);
+      expect(JSON.stringify(logLines(events))).not.toContain(SECRET);
+    });
+
+    it.each([
+      [1, '1 more message not kept in the run log'],
+      [3, '3 more messages not kept in the run log'],
+    ])('keeps the run log to its line bound and counts the rest (%i over)', async (over, last) => {
+      const many = Array.from({ length: SESSION_LOG_RUN_MAX_LINES + over }, (_, i) =>
+        notice(`m${String(i)}`),
+      );
+      const { events } = await runFake(scriptCtx(twoBlocks, { captureMessages: true }), {
+        [sql]: { command: 'DO', notices: many },
+        [failing]: pgError('division by zero', '22012'),
+      });
+      const lines = logLines(events);
+      expect(lines).toHaveLength(SESSION_LOG_RUN_MAX_LINES + 1);
+      expect(lines[0]).toBe('NOTICE: m0');
+      expect(lines.at(-1)).toBe(last);
+    });
+
+    it('warns when the byte cap left messages out', async () => {
+      const big = 'x'.repeat(400_000);
+      const { events } = await runFake(scriptCtx(twoBlocks, { captureMessages: true }), {
+        [sql]: { command: 'DO', notices: [notice(big), notice(big), notice(big)] },
+        [failing]: pgError('division by zero', '22012'),
+      });
+      expect(logLines(events)).toHaveLength(2);
+      expect(events).toContainEqual(
+        expect.objectContaining({ type: 'warned', code: WARNING_CODES.SCRIPT_MESSAGES_TRUNCATED }),
+      );
+    });
   });
 });
 
