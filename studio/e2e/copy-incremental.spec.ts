@@ -79,24 +79,28 @@ test.describe('#1600 C5a — Copy Load Incremental', () => {
       await expect(column).toHaveCount(0);
       await expect(from).toHaveCount(0);
       await expect(old).toHaveCount(0);
-      // Load leads the tab, above the partition option, and is sized to its options.
+      // Load leads the tab's settings, after the source block, above the
+      // partition option.
+      await load.scrollIntoViewIfNeeded();
       const [loadBox, partitionBox] = await Promise.all([
         load.boundingBox(),
         partition.boundingBox(),
       ]);
       expect(loadBox && partitionBox, 'each control has a box').toBeTruthy();
       expect(loadBox!.y).toBeLessThan(partitionBox!.y);
-      expect(loadBox!.width).toBeLessThanOrEqual(200);
+      // Sized by the shared select rule (its longest option), as its sibling is.
+      expect(loadBox!.width).toBeLessThanOrEqual(partitionBox!.width + 1);
       expect(loadBox!.y + loadBox!.height).toBeLessThanOrEqual(900);
 
       await load.selectOption('incremental');
       await expect(column).toBeVisible();
       await expect(from).toBeVisible();
-      await expect(from).toHaveValue('automatic');
+      // Absent is Automatic, the default (catalogue §4.1).
+      await expect(from.locator('option:checked')).toHaveText('Automatic (default)');
       await expect(old).toHaveCount(0);
       await from.selectOption('expression');
       await expect(old).toBeVisible();
-      await from.selectOption('automatic');
+      await from.selectOption({ label: 'Automatic (default)' });
       await expect(old).toHaveCount(0);
       await column.fill('modified_at');
       await pane.getByRole('button', { name: 'Apply config' }).click();
@@ -113,6 +117,7 @@ test.describe('#1600 C5a — Copy Load Incremental', () => {
         watermarkColumnName: 'modified_at',
       });
       expect(copy['config']).not.toHaveProperty('watermarkOld');
+      expect(copy['config']).not.toHaveProperty('watermarkFrom');
 
       const watermarkOf = async (runId: string) => {
         const run = await (await page.request.get(`/api/runs/${encodeURIComponent(runId)}`)).json();
