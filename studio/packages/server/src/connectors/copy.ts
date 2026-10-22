@@ -212,15 +212,20 @@ interface CopyWatermarkOutput {
  * `null` when stored (or when there is nothing to store), else why it was not.
  * The rows are committed either way, so a failure says the next run copies them
  * again rather than letting the node succeed with a watermark left behind.
+ * C5b — a Files as-is copy's too, once every file is written (`what`).
  */
-function storeWatermark(ctx: ActivityContext, watermark: CopyWatermarkOutput): string | null {
-  if (watermark.new === null || ctx.copyWatermark === undefined) return null;
+export function storeWatermark(
+  ctx: ActivityContext,
+  next: SqlParameterValue,
+  what: 'rows were committed' | 'files were copied',
+): string | null {
+  if (next === null || ctx.copyWatermark === undefined) return null;
   try {
-    ctx.copyWatermark.commit(watermark.new);
+    ctx.copyWatermark.commit(next);
     return null;
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    return `the rows were committed, but the watermark could not be stored, so the next run copies them again: ${reason}`;
+    return `the ${what}, but the watermark could not be stored, so the next run copies them again: ${reason}`;
   }
 }
 
@@ -902,7 +907,7 @@ async function* copyRows(
     // committed and the watermark behind (the next run would copy them again).
     if (outcome.ok && watermark !== undefined) {
       committed = watermark;
-      if (parsed.data.watermarkFrom === 'automatic') storeError = storeWatermark(ctx, watermark);
+      if (parsed.data.watermarkFrom === 'automatic') storeError = storeWatermark(ctx, watermark.new, 'rows were committed');
     }
     // C6f-3 — a sink that failed before pulling a row never iterated the plan.
     await partitionPlan?.close();

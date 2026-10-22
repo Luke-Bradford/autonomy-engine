@@ -27,7 +27,7 @@ import {
   type Node,
 } from '@autonomy-studio/shared';
 import { fsAdapter } from '../fs.js';
-import { runFilesCopy, unchangedSince } from '../fs-files-copy.js';
+import { COPY_FILES_SETTLE_MS, runFilesCopy, unchangedSince } from '../fs-files-copy.js';
 import { SessionLogWriter } from '../session-log-file.js';
 import { tmpPathFor } from '../fs-write.js';
 import { wildcardMatcher } from '../fs-select.js';
@@ -59,6 +59,8 @@ async function run(
     signal?: AbortSignal;
     /** #1600 OR41 C6c-1a — the session log's connection. */
     log?: { root: string; writable?: boolean; kind?: 'fs' | 'sqlite' };
+    /** #1600 OR41 C5b — the executor's lease: the stored time and its commit. */
+    copyWatermark?: ActivityContext['copyWatermark'];
   } = {},
 ): Promise<ActivityEvent[]> {
   const c: ActivityContext = {
@@ -88,6 +90,7 @@ async function run(
         },
       },
     }),
+    ...(over.copyWatermark !== undefined && { copyWatermark: over.copyWatermark }),
     signal: over.signal ?? new AbortController().signal,
   };
   const out: ActivityEvent[] = [];
@@ -121,8 +124,15 @@ const throughputOf = (out: Record<string, unknown>): number | null => {
   const ms = out['durationMs'] as number;
   return ms === 0 ? null : Math.round(((out['bytesRead'] as number) * 1000) / ms);
 };
-/** The catalog's contract, name for name and in order (C6f-1). */
-const declaredNames = () => getActivity(COPY_FILES_ACTIVITY_TYPE)!.outputs.map((o) => o.name);
+/**
+ * The catalog's contract, name for name and in order (C6f-1), under Load Full:
+ * C5b's `watermark` is Incremental's only, so a Full copy's outputs are what
+ * they were.
+ */
+const declaredNames = () =>
+  getActivity(COPY_FILES_ACTIVITY_TYPE)!
+    .outputs.map((o) => o.name)
+    .filter((n) => n !== 'watermark');
 const failure = (events: ActivityEvent[]) => {
   const ev = last(events);
   if (ev.type !== 'failed') throw new Error(`expected failed, got ${JSON.stringify(ev)}`);
@@ -1671,5 +1681,175 @@ describe('#1600 C6c-1a — session log to a folder', () => {
         expect(await tree(dst)).toEqual([]);
       },
     );
+  });
+});
+
+/**
+ * #1600 OR41 C5b — Load Incremental on a Files as-is copy: *Modified since last
+ * successful run*. The window is [stored time, cutoff), the cutoff taken before
+ * the listing and a settle margin behind the clock, and a file's time is the
+ * later of its modified and status-change times, so a file renamed or moved in
+ * keeping an old modified time is still copied. The executor's lease is the
+ * `copyWatermark` given here: `old` the stored time, `commit` its store.
+ */
+describe('#1600 OR41 C5b — Load Incremental (Modified since last successful run)', () => {
+  const PAST = new Date('2020-01-01T00:00:00Z');
+  const INC = { sourcePath: 'in', load: 'incremental' };
+  /** A lease holding `old`, recording each stored time. */
+  const lease = (old: string | number | null) => {
+    const stored: unknown[] = [];
+    return { stored, copyWatermark: { old, commit: (next: unknown) => void stored.push(next) } };
+  };
+  /**
+   * Run as if the settle margin had passed since now: the clock is set that far
+   * ahead (only `Date`), so a file written before this call is inside the window.
+   */
+  async function settled(
+    input: Record<string, unknown>,
+    over: Parameters<typeof run>[1],
+  ): Promise<{ events: ActivityEvent[]; cutoff: string }> {
+    vi.useRealTimers();
+    const now = Date.now();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(now + COPY_FILES_SETTLE_MS + 5);
+    try {
+      return { events: await run(input, over), cutoff: new Date(now + 5).toISOString() };
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+  const pause = () => new Promise((r) => setTimeout(r, 20));
+
+  it('first run copies every file and stores the cutoff; the next copies only what changed since', async () => {
+    await put('in/a.txt', 'a');
+    await put('in/sub/b.txt', 'b');
+    const one = lease(null);
+    const first = await settled(INC, { copyWatermark: one.copyWatermark });
+    expect(outputs(first.events)).toMatchObject({
+      filesWritten: 2,
+      watermark: { old: null, new: first.cutoff },
+    });
+    expect(one.stored).toEqual([first.cutoff]);
+    await rm(dst, { recursive: true });
+    await mkdir(dst);
+
+    await pause();
+    await put('in/c.txt', 'c');
+    const two = lease(first.cutoff);
+    const second = await settled(INC, { copyWatermark: two.copyWatermark });
+    expect(outputs(second.events)).toMatchObject({
+      filesRead: 1,
+      filesWritten: 1,
+      watermark: { old: first.cutoff, new: second.cutoff },
+    });
+    expect(await tree(dst)).toEqual(['c.txt']);
+    expect(two.stored).toEqual([second.cutoff]);
+  });
+
+  it('copies a file renamed in with an old modified time (its status-change time is new)', async () => {
+    const path = await put('drop.tmp', 'x');
+    await utimes(path, PAST, PAST);
+    await mkdir(join(src, 'in'));
+    const one = lease(null);
+    const first = await settled({ ...INC, wildcard: '*.csv' }, { copyWatermark: one.copyWatermark });
+    expect(outputs(first.events)).toMatchObject({ filesWritten: 0 });
+    await pause();
+    execFileSync('mv', [path, join(src, 'in', 'drop.csv')]);
+    expect((await stat(join(src, 'in', 'drop.csv'))).mtime.getTime()).toBe(PAST.getTime());
+    const second = await settled(
+      { ...INC, wildcard: '*.csv' },
+      { copyWatermark: lease(first.cutoff).copyWatermark },
+    );
+    expect(outputs(second.events)).toMatchObject({ filesWritten: 1 });
+    expect(await tree(dst)).toEqual(['drop.csv']);
+  });
+
+  it('leaves a file changed inside the settle margin to the next run', async () => {
+    await put('in/a.txt', 'a');
+    const one = lease(null);
+    // The real clock: a.txt was written less than the margin ago.
+    const events = await run(INC, { copyWatermark: one.copyWatermark });
+    expect(outputs(events)).toMatchObject({ filesWritten: 0 });
+    const stored = Date.parse(String(one.stored[0]));
+    expect(Date.now() - stored).toBeGreaterThanOrEqual(COPY_FILES_SETTLE_MS - 50);
+  });
+
+  it('stores nothing when a file fails, so the next run selects the same window again', async () => {
+    await put('in/a.txt', 'a');
+    await put('in/b.txt', 'b');
+    await put('b.txt', 'held', dst);
+    const one = lease(null);
+    const { events } = await settled(
+      { ...INC, ifExists: 'fail' },
+      { copyWatermark: one.copyWatermark },
+    );
+    expect(failure(events).kind).toBe('permanent');
+    expect(one.stored).toEqual([]);
+    // No watermark is reported for a window not finished.
+    const reported = events.filter((e) => e.type === 'output' && e.name === 'watermark');
+    expect(reported).toEqual([]);
+  });
+
+  it('advances over an empty window, and never moves back', async () => {
+    await mkdir(join(src, 'in'));
+    const one = lease(null);
+    const empty = await settled(INC, { copyWatermark: one.copyWatermark });
+    expect(outputs(empty.events)).toMatchObject({ filesWritten: 0 });
+    expect(one.stored).toEqual([empty.cutoff]);
+
+    await put('in/a.txt', 'a');
+    const ahead = '2999-01-01T00:00:00.000Z';
+    const two = lease(ahead);
+    const back = await settled(INC, { copyWatermark: two.copyWatermark });
+    expect(outputs(back.events)).toMatchObject({
+      filesWritten: 0,
+      watermark: { old: ahead, new: ahead },
+    });
+    expect(two.stored).toEqual([]);
+  });
+
+  it('fails when the time cannot be stored, after the files are copied, with the counts', async () => {
+    await put('in/a.txt', 'a');
+    const { events } = await settled(INC, {
+      copyWatermark: {
+        old: null,
+        commit: () => {
+          throw new Error('disk I/O error');
+        },
+      },
+    });
+    expect(failure(events)).toMatchObject({
+      kind: 'permanent',
+      error: expect.stringContaining('the files were copied, but the watermark could not be stored'),
+    });
+    expect(events).toContainEqual({ type: 'output', name: 'filesWritten', value: 1 });
+    expect(await tree(dst)).toEqual(['a.txt']);
+  });
+
+  it('refuses a stored value that is not a time, and a run with no lease', async () => {
+    await put('in/a.txt', 'a');
+    const bad = await settled(INC, { copyWatermark: lease(42).copyWatermark });
+    expect(failure(bad.events).error).toMatch(/stored watermark 42 is not a time/);
+    const none = await settled(INC, {});
+    expect(failure(none.events).error).toMatch(/no stored watermark to read/);
+    expect(await tree(dst)).toEqual([]);
+  });
+
+  it('under Full, reports no watermark and keeps Modified between on modified time only', async () => {
+    const path = await put('in/a.txt', 'a');
+    await utimes(path, PAST, PAST);
+    const events = await run({
+      sourcePath: 'in',
+      modifiedStart: '2026-01-01T00:00:00Z',
+    });
+    const out = outputs(events);
+    expect(out).toMatchObject({ filesWritten: 0 });
+    expect('watermark' in out).toBe(false);
+  });
+
+  it('under Incremental, yields the whole declared contract, watermark last', async () => {
+    await put('in/a.txt', 'a');
+    const { events } = await settled(INC, { copyWatermark: lease(null).copyWatermark });
+    expect(Object.keys(outputs(events))).toEqual([...declaredNames(), 'watermark']);
   });
 });
