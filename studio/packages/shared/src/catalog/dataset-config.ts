@@ -95,6 +95,13 @@ export const tableDatasetConfigSchema = z.object({
 });
 
 /**
+ * The longest Query timeout (#1799): PostgreSQL's `statement_timeout`, which the
+ * last stretch of a read lowers to the time left, takes an integer of ms, and
+ * refuses anything past 2^31-1 ("Value exceeds integer range", measured on 17).
+ */
+export const MAX_QUERY_TIMEOUT_SECONDS = Math.floor(MAX_TIMER_DELAY_MS / 1000);
+
+/**
  * `query` — a literal SQL statement, with named parameters bound (§2.6, §8).
  *
  * `sql` is LITERAL: `${}` in a copy node reaches the parameter VALUES, never the
@@ -104,13 +111,6 @@ export const tableDatasetConfigSchema = z.object({
  * statement that returns no rows (an `ATTACH`, an `UPDATE`, a `PRAGMA`) is
  * refused instead of executed.
  */
-/**
- * The longest Query timeout (#1799): PostgreSQL's `statement_timeout`, which the
- * last stretch of a read lowers to the time left, takes an integer of ms, and
- * refuses anything past 2^31-1 ("Value exceeds integer range", measured on 17).
- */
-export const MAX_QUERY_TIMEOUT_SECONDS = Math.floor(MAX_TIMER_DELAY_MS / 1000);
-
 export const queryDatasetConfigSchema = z.object({
   sql: presented(z.string().min(1), {
     title: 'SQL statement',
