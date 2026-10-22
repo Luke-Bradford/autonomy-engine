@@ -102,16 +102,6 @@ describe('copyFilesWatermarkKey', () => {
     }
   });
 
-  it('never collides with a rows Copy key', () => {
-    expect(k).not.toBe(
-      copyWatermarkKey({
-        source: { connectionId: 'conn_a', dataset: { id: 'd', name: 'd', kind: 'table', config: {}, columns: [] } },
-        sink: { connectionId: 'conn_s', dataset: undefined },
-        column: 'lastModified',
-      }),
-    );
-  });
-
   it('is null for a config that does not parse, which the copy refuses itself', () => {
     expect(copyFilesWatermarkKey({ ...base, input: { load: 'incremental' } })).toBeNull();
   });

@@ -1766,6 +1766,9 @@ describe('#1600 OR41 C5b — Load Incremental (Modified since last successful ru
 
   it('leaves a file changed inside the settle margin to the next run', async () => {
     await put('in/a.txt', 'a');
+    // Well inside the margin, and past the millisecond a.txt was written in, so
+    // a copy with no margin would select it.
+    await new Promise((r) => setTimeout(r, 50));
     const one = lease(null);
     // The real clock: a.txt was written less than the margin ago.
     const events = await run(INC, { copyWatermark: one.copyWatermark });
