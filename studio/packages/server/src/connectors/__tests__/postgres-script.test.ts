@@ -5,6 +5,7 @@ import {
   SCRIPT_ACTIVITY_TYPE,
   SCRIPT_RESULT_ROW_CAP,
   WARNING_CODES,
+  fieldLabelOf,
   scriptDispatchConfigSchema,
 } from '@autonomy-studio/shared';
 import { LOOKUP_BYTE_CAP } from '../../limits.js';
@@ -1010,6 +1011,42 @@ describe('Capture messages (C10b-2b)', () => {
       WARNING_CODES.SCRIPT_MESSAGES_TRUNCATED,
     ]);
     expect(outputsOf(events)['truncated']).toBe(true);
+  });
+
+  it('scrubs before it measures, so a long secret does not crowd out a message that fits', async () => {
+    // 1.08M characters as sent, 360k once each secret is '***'.
+    const secrets = SECRET.repeat(120_000);
+    const { events } = await runFake(scriptCtx(blocks, { captureMessages: true }), {
+      [sql]: { command: 'DO', notices: [notice(secrets)] },
+    });
+    expect(outputsOf(events)['outputLogs']).toBe(`NOTICE: ${'***'.repeat(120_000)}`);
+    expect(outputsOf(events)['truncated']).toBe(false);
+  });
+
+  it('reports a message it could not read as a truncation, never as nothing', async () => {
+    const unreadable = {
+      severity: 'NOTICE',
+      get message(): string {
+        throw new Error('unreadable');
+      },
+    };
+    const { events } = await runFake(scriptCtx(blocks, { captureMessages: true }), {
+      [sql]: { command: 'DO', notices: [notice('first'), unreadable, notice('after')] },
+    });
+    expect(terminal(events).type).toBe('succeeded');
+    expect(outputsOf(events)['outputLogs']).toBe('NOTICE: first');
+    expect(outputsOf(events)['truncated']).toBe(true);
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: 'warned', code: WARNING_CODES.SCRIPT_MESSAGES_TRUNCATED }),
+    );
+  });
+
+  it('states the cap its help gives: Capture result sets and Capture messages say 1 MiB', () => {
+    const mib = `${String(LOOKUP_BYTE_CAP / 2 ** 20)} MiB`;
+    const shape = scriptDispatchConfigSchema.shape;
+    for (const field of [shape.captureResultSets, shape.captureMessages]) {
+      expect(fieldLabelOf(field)?.description).toContain(mib);
+    }
   });
 
   it('counts a multi-byte character as its UTF-8 bytes', async () => {

@@ -241,15 +241,15 @@ export class MessageCapture {
     const lines = [`${notice.severity ?? 'NOTICE'}: ${notice.message ?? ''}`];
     if (notice.detail !== undefined) lines.push(`DETAIL: ${notice.detail}`);
     if (notice.hint !== undefined) lines.push(`HINT: ${notice.hint}`);
-    // A string's UTF-16 length never exceeds its serialised UTF-8 size, so an
-    // entry this long cannot fit and is refused before it is copied (#1224's
-    // lower bound, as `keepRowWithin` does).
-    const joined = lines.join('\n');
-    if (this.bytes + joined.length > LOOKUP_BYTE_CAP) {
+    // Scrubbed first, since the scrub can change the length. A string's UTF-16
+    // length never exceeds its serialised UTF-8 size, so an entry this long
+    // cannot fit and is refused before it is serialised (#1224's lower bound,
+    // as `keepRowWithin` does).
+    const entry = redactSecrets(lines.join('\n'), [this.secret]);
+    if (this.bytes + entry.length > LOOKUP_BYTE_CAP) {
       this.spent = true;
       return;
     }
-    const entry = redactSecrets(joined, [this.secret]);
     // The entry serialised, less its quotes, plus the escaped newline before it.
     const size = Buffer.byteLength(JSON.stringify(entry)) - 2 + (this.entries.length > 0 ? 2 : 0);
     if (this.bytes + size > LOOKUP_BYTE_CAP) {
@@ -258,6 +258,14 @@ export class MessageCapture {
     }
     this.entries.push(entry);
     this.bytes += size;
+  }
+
+  /**
+   * A message that could not be kept for any other reason: it latches as the
+   * cap does, so the loss is reported as a truncation rather than unseen.
+   */
+  abandon(): void {
+    this.spent = true;
   }
 
   get truncated(): boolean {

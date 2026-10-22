@@ -617,7 +617,8 @@ export async function* runPostgresScript(
       try {
         messages.add(notice);
       } catch {
-        // Dropped, as a message past the cap is.
+        // Dropped, and reported as a truncation, as a message past the cap is.
+        messages.abandon();
       }
     });
   }
