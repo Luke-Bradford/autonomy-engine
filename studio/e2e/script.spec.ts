@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fireAndSettle, nodeById, openSeededCanvas } from './support/seedDoc';
-import { problemsToggle, properties } from './support/panels';
+import { pickConnection, problemsToggle, properties } from './support/panels';
 import { seedConnection } from './support/seedResources';
 
 /**
@@ -149,5 +149,70 @@ test.describe('#1600 C10a — Script on SQLite', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * #1600 OR41 C10b-1 — a Script on PostgreSQL. The e2e stack has no postgres
+ * server, so the run itself is proved against a live one in
+ * `postgres-script.test.ts` (CI's service container); here the authoring path:
+ * the picker offers a postgres connection, the Problems list names one that
+ * does not allow writes, and the node saves bound to it.
+ */
+test.describe('#1600 C10b-1 — Script on PostgreSQL', () => {
+  test('binds a postgres connection, warns that a Non-query block needs writes, and saves', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const name = 'e2e 1600 c10b pg';
+    const pg = await seedConnection(page, {
+      name,
+      kind: 'postgres',
+      config: { host: '127.0.0.1', database: 'warehouse', user: 'etl', sslmode: 'disable' },
+    });
+    const pipelineId = await openSeededCanvas(page, 'e2e 1600 c10b script', {
+      nodes: [
+        {
+          id: 'script1',
+          type: 'script',
+          config: { blocks: [{ type: 'nonQuery', sql: 'DELETE FROM staging.orders' }] },
+          position: { x: 0, y: 0 },
+        },
+      ],
+    });
+
+    await nodeById(page, 'script1').click();
+    const pane = properties(page);
+    // Offered, not refused for this activity's kind.
+    await pane.getByRole('combobox', { name: 'Connection', exact: true }).click();
+    const option = page.getByRole('listbox').getByRole('option').filter({ hasText: name });
+    await expect(option).toHaveCount(1);
+    await expect(option).not.toContainText("can't use this kind");
+    await page.keyboard.press('Escape');
+    await pickConnection(page, 'Connection', { id: pg });
+
+    // A Non-query block on a connection that does not allow writes is a warning,
+    // not a refusal: the run refuses it, and Save still keeps the work.
+    const toggle = problemsToggle(page);
+    await expect(toggle.locator('.count-badge').first()).toHaveText('0');
+    await expect(toggle.locator('.count-badge--warning')).toHaveText('1 warning');
+    await toggle.click();
+    await expect(page.locator('.problems-panel')).toContainText(
+      `the connection '${name}' does not allow writes, which a Non-query block needs`,
+    );
+
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+    const versions = (await (
+      await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`)
+    ).json()) as { version: number; catalogVersion: number; nodes: Record<string, unknown>[] }[];
+    const latest = versions.sort((a, b) => b.version - a.version)[0]!;
+    expect(latest.catalogVersion).toBe(73);
+    expect(latest.nodes.find((n) => n['id'] === 'script1')).toMatchObject({
+      type: 'script',
+      connectionId: pg,
+    });
+
+    await expectQuiet(page, problems);
   });
 });
