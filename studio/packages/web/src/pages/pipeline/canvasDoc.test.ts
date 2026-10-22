@@ -450,8 +450,9 @@ describe('writeAccessWarnings (#1600 OR41 C1b)', () => {
     });
     expect(
       writeAccessWarnings(
-        [script('a', 'pg'), script('b', 'pgrw')],
-        [conn('pg', undefined, 'postgres'), conn('pgrw', true, 'postgres')],
+        // 'ro' is not a store a Script binds; the catalog's kind check names that.
+        [script('a', 'pg'), script('b', 'pgrw'), script('c', 'ro')],
+        [conn('pg', undefined, 'postgres'), conn('pgrw', true, 'postgres'), conn('ro')],
       ),
     ).toEqual([
       "node 'a': the connection 'Conn pg' does not allow writes, which a Non-query block needs",

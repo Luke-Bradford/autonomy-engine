@@ -94,8 +94,10 @@ export const SCRIPT_SQLITE_STATEMENTS: readonly string[] = [
  *   the transaction is the activity's (*Run as one transaction*);
  * - `SET` and `RESET`. LOAD-BEARING: `SET TRANSACTION READ WRITE` as the first
  *   statement of a read-only script's `BEGIN READ ONLY` would lift the
- *   read-only guarantee, and `SET statement_timeout = 0` the server's cap on
- *   every later block;
+ *   read-only guarantee. (Measured on postgres:17: `set_config` cannot, because
+ *   the SELECT that calls it has already taken the snapshot. It can lift
+ *   `statement_timeout`, so the bound a block cannot change is pg's own client
+ *   timer, `clientOptionsFor`'s `query_timeout`.);
  * - `COPY` (a `FROM STDIN` has no data to send) and `VACUUM` (refused inside a
  *   transaction).
  *
@@ -215,6 +217,27 @@ export class ResultCapture {
       ? `a result set kept its first ${SCRIPT_RESULT_ROW_CAP} rows; rowCount counts them all`
       : `the result sets reached the ${LOOKUP_BYTE_CAP}-byte cap a script may keep, so later rows were counted and not kept`;
   }
+}
+
+/**
+ * A failure after blocks outside a transaction may have changed the store, on
+ * either store. A retry would run them again, so it is refused: `permanent`, or
+ * `cancelled` for a cancel. `applied` says how many and how sure.
+ */
+export function notRetried(
+  failure: DatasetIoError | LookupValueError,
+  applied: string,
+): DatasetIoError {
+  const kind =
+    failure instanceof DatasetIoError && failure.kind === 'cancelled' ? 'cancelled' : 'permanent';
+  const message =
+    failure instanceof LookupValueError
+      ? `a Script result set cannot hold a value — ${failure.message}`
+      : failure.message;
+  return new DatasetIoError(
+    kind,
+    `${message} — ${applied}, so this is not retried. Turn on Run as one transaction to make the script all or nothing`,
+  );
 }
 
 /**
@@ -373,14 +396,9 @@ export async function executeSqliteScript(
       }
     }
     if (committedWrites > 0) {
-      // A retry would run the applied blocks again, so it is refused.
-      const kind =
-        failure instanceof DatasetIoError && failure.kind === 'cancelled'
-          ? 'cancelled'
-          : 'permanent';
-      failure = new DatasetIoError(
-        kind,
-        `${failure.message} — ${committedWrites} block(s) had already changed the store and stay applied, so this is not retried. Turn on Run as one transaction to make the script all or nothing`,
+      failure = notRetried(
+        failure,
+        `${committedWrites} block(s) had already changed the store and stay applied`,
       );
     }
     throw failure;

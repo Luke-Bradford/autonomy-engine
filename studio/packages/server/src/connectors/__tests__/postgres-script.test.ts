@@ -7,6 +7,7 @@ import {
   WARNING_CODES,
   scriptDispatchConfigSchema,
 } from '@autonomy-studio/shared';
+import { LookupValueError } from '../lookup.js';
 import { createPostgresAdapter } from '../postgres.js';
 import {
   StreamedQuery,
@@ -238,6 +239,17 @@ describe('Script on PostgreSQL, the blocks checked before any session (C10b-1)',
   });
 });
 
+describe('StreamedQuery (C10b-1)', () => {
+  it('keeps no rows even with a callback, and records that a row was described', () => {
+    const query = new StreamedQuery({ text: 'select 1' }, undefined, () => undefined);
+    query.on('row', () => undefined);
+    expect(query.described).toBe(false);
+    query.handleRowDescription({ fields: [] });
+    expect(query.described).toBe(true);
+    expect((query as unknown as { _accumulateRows: boolean })._accumulateRows).toBe(false);
+  });
+});
+
 describe('Script on PostgreSQL, the run (C10b-1)', () => {
   it('runs a script of Query blocks inside one READ ONLY transaction, even with Run as one transaction off', async () => {
     const { events, queries } = await runFake(
@@ -282,7 +294,7 @@ describe('Script on PostgreSQL, the run (C10b-1)', () => {
     expect(failureOf(events)).toMatchObject({
       kind: 'permanent',
       error:
-        'Script block 1 writes to the store, which a script with no Non-query block may not; make it a Non-query block',
+        'Script block 1 writes to the store, which a script with no Non-query block may not; make it a Non-query block: cannot execute INSERT in a read-only transaction',
     });
     expect(queries.at(-1)).toBe('ROLLBACK');
   });
@@ -380,6 +392,31 @@ describe('Script on PostgreSQL, the run (C10b-1)', () => {
       expect(failureOf(events).kind).toBe('permanent');
     });
 
+    it('EPIPE is a socket code, not a SQLSTATE, so the block may have committed', async () => {
+      const { events } = await runFake(scriptCtx(two), {
+        'insert into t values (1)': pgError('write EPIPE', 'EPIPE'),
+      });
+      const failure = failureOf(events);
+      expect(failure.kind).toBe('permanent');
+      expect(failure.error).toMatch(/1 block\(s\) had already run/);
+    });
+
+    it('a DO may have committed partway, so it is never retried', async () => {
+      const { events } = await runFake(
+        scriptCtx([{ type: 'nonQuery', sql: 'do $$ begin perform 1; end $$' }]),
+        { 'do $$ begin perform 1; end $$': pgError('deadlock detected', '40P01') },
+      );
+      expect(failureOf(events).kind).toBe('permanent');
+    });
+
+    it('a row that cannot be kept fails after its statement ran, so it counts as applied', async () => {
+      const { events } = await runFake(scriptCtx([{ type: 'query', sql: 'select v' }]), {
+        'select v': new LookupValueError('row 1 column v is not a value'),
+      });
+      expect(failureOf(events)).toMatchObject({ kind: 'permanent' });
+      expect(failureOf(events).error).toMatch(/^a Script result set cannot hold a value/);
+    });
+
     it('a cancel between blocks stays cancelled and names what stays applied', async () => {
       const controller = new AbortController();
       const { factory, queries } = recordingFactory();
@@ -432,6 +469,19 @@ describe('Script on PostgreSQL, the run (C10b-1)', () => {
       expect(queries.at(-1)).toBe('COMMIT');
     });
 
+    it('reports a COMMIT that hit a socket error (EPIPE) as of unknown outcome', async () => {
+      const { events } = await runFake(
+        scriptCtx(two, { runAsOneTransaction: true }),
+        {
+          'insert into t values (1)': { command: 'INSERT', rowCount: 1 },
+          'insert into t values (2)': { command: 'INSERT', rowCount: 1 },
+        },
+        { COMMIT: pgError('write EPIPE', 'EPIPE') },
+      );
+      expect(failureOf(events)).toMatchObject({ kind: 'permanent' });
+      expect(failureOf(events).error).toMatch(/the COMMIT's outcome is unknown/);
+    });
+
     it('reports a COMMIT whose outcome is unknown as permanent', async () => {
       const { events } = await runFake(
         scriptCtx(two, { runAsOneTransaction: true }),
@@ -445,6 +495,92 @@ describe('Script on PostgreSQL, the run (C10b-1)', () => {
       expect(failure.kind).toBe('permanent');
       expect(failure.error).toMatch(/the COMMIT's outcome is unknown/);
     });
+  });
+
+  it('fails a script whose config or connection config is invalid, before any session', async () => {
+    const bad = await runFake({ ...scriptCtx([]), input: { blocks: [] } } as ActivityContext);
+    expect(failureOf(bad.events).error).toMatch(/^invalid script activity config/);
+    const conn = await runFake(
+      scriptCtx([{ type: 'query', sql: 'select 1' }], { connection: { host: 'h' } }),
+    );
+    expect(failureOf(conn.events).error).toMatch(/^invalid postgres connection config/);
+    expect(bad.opened + conn.opened).toBe(0);
+  });
+
+  it('opens no session for a run cancelled before it starts', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const { events, opened } = await runFake(
+      scriptCtx([{ type: 'query', sql: 'select 1' }], { signal: controller.signal }),
+    );
+    expect(failureOf(events)).toEqual({
+      type: 'failed',
+      kind: 'cancelled',
+      error: 'script aborted',
+    });
+    expect(opened).toBe(0);
+  });
+
+  it('reports a server it cannot reach', async () => {
+    const events: ActivityEvent[] = [];
+    const factory: PostgresClientFactory = () => ({
+      connect: () => Promise.reject(pgError('connect ECONNREFUSED', 'ECONNREFUSED')),
+      query: () => Promise.reject(new Error('unreachable')),
+      end: () => Promise.resolve(),
+    });
+    for await (const e of runPostgresScript(scriptCtx([{ type: 'query', sql: 'select 1' }]), {
+      createClient: factory,
+      secret: SECRET,
+      types: undefined,
+      stream: fakeStream({}, []),
+    })) {
+      events.push(e);
+    }
+    expect(failureOf(events)).toMatchObject({
+      kind: 'transient',
+      error: 'cannot reach the postgres server to run the script: connect ECONNREFUSED',
+    });
+  });
+
+  it('counts every row and keeps none with Capture result sets Off', async () => {
+    const { events } = await runFake(
+      scriptCtx([{ type: 'query', sql: 'select i' }], { captureResultSets: 'off' }),
+      { 'select i': { rows: [{ i: 1 }, { i: 2 }] } },
+    );
+    expect(outputsOf(events)['resultSets']).toEqual([{ rowCount: 2, rows: [] }]);
+  });
+
+  it('a read-only script is retried after pg gives up waiting, as Lookup is', async () => {
+    const { events } = await runFake(scriptCtx([{ type: 'query', sql: 'select 1' }]), {
+      'select 1': new Error('Query read timeout'),
+    });
+    expect(failureOf(events)).toMatchObject({ kind: 'transient' });
+  });
+
+  it('a cancel during the last block of one transaction rolls it back rather than committing', async () => {
+    const controller = new AbortController();
+    const { factory, queries } = recordingFactory();
+    const events: ActivityEvent[] = [];
+    const stream: PostgresStatementStream = (_c, statement) => {
+      queries.push(statement.sql);
+      controller.abort();
+      return Promise.resolve({ hasFields: false, command: 'INSERT', rowCount: 1 });
+    };
+    for await (const e of runPostgresScript(
+      scriptCtx([{ type: 'nonQuery', sql: 'insert into t values (1)' }], {
+        runAsOneTransaction: true,
+        signal: controller.signal,
+      }),
+      { createClient: factory, secret: SECRET, types: undefined, stream },
+    )) {
+      events.push(e);
+    }
+    expect(failureOf(events)).toEqual({
+      type: 'failed',
+      kind: 'cancelled',
+      error: 'script aborted',
+    });
+    expect(queries.slice(1)).toEqual(['BEGIN', 'insert into t values (1)', 'ROLLBACK']);
   });
 
   it('never puts the secret in a failure', async () => {
@@ -584,14 +720,27 @@ describe.skipIf(LIVE_HOST === undefined)('Script on a live postgres (C10b-1)', (
     ]);
   });
 
+  it('reads a SELECT of no columns as a Query, and refuses a SELECT INTO as one', async () => {
+    await reset();
+    const ok = await runLive([{ type: 'query', sql: `select from ${schema}.t` }]);
+    expect(outputsOf(ok)['resultSets']).toEqual([{ rowCount: 3, rows: [{}, {}, {}] }]);
+    const into = await runLive([
+      { type: 'nonQuery', sql: `create table ${schema}.u (a int)` },
+      { type: 'query', sql: `select a into ${schema}.v from ${schema}.t` },
+    ]);
+    expect(failureOf(into).error).toMatch(
+      /^Script block 2 is a Query, but its statement returns no rows/,
+    );
+  });
+
   it('refuses a write in a script of Query blocks, and writes nothing', async () => {
     await reset();
     const events = await runLive(
       [{ type: 'query', sql: `insert into ${schema}.t values (7) returning a` }],
       { writable: false },
     );
-    expect(failureOf(events).error).toBe(
-      'Script block 1 writes to the store, which a script with no Non-query block may not; make it a Non-query block',
+    expect(failureOf(events).error).toMatch(
+      /^Script block 1 writes to the store, which a script with no Non-query block may not; make it a Non-query block: cannot execute INSERT in a read-only transaction/,
     );
     expect(await count()).toBe(3);
   });

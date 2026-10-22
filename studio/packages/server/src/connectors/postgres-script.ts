@@ -19,12 +19,14 @@ import {
   type PostgresClient,
   type PostgresClientFactory,
   type PostgresClientOptions,
+  type PostgresExtendedQuery,
 } from './postgres-session.js';
 import { authoredStatementRefusal } from './pre-copy-script.js';
 import { yieldToEventLoop } from './scheduling.js';
 import {
   ResultCapture,
   SCRIPT_ABORTED,
+  notRetried,
   SCRIPT_POSTGRES_STATEMENTS,
   asStatement,
   blockName,
@@ -68,7 +70,8 @@ import type { ActivityContext, ActivityEvent } from './types.js';
  * **Bounded by the connection's statement timeout.** Each block is one
  * statement under the connection's `statementTimeoutMs` (30 s by default), both
  * the server's and pg's own timer (`clientOptionsFor`). Cancel is checked
- * between blocks; a block in flight runs to completion or to that timeout.
+ * between blocks and before a COMMIT; a block in flight runs to completion or
+ * to that timeout, which it cannot lift (`SCRIPT_POSTGRES_STATEMENTS`).
  */
 
 /** What a streamed statement hands back once it completes. */
@@ -101,11 +104,19 @@ export type PostgresStatementStream = (
  * pins it: a streamed result holds no rows.
  */
 export class StreamedQuery extends pg.Query {
+  /**
+   * Whether the server described a row, even one of no columns (`SELECT FROM
+   * t`). A statement that returns no rows (an UPDATE, a `SELECT … INTO`) sends
+   * NoData instead.
+   */
+  described = false;
+
   handleRowDescription(msg: unknown): void {
     (
       pg.Query.prototype as unknown as { handleRowDescription(m: unknown): void }
     ).handleRowDescription.call(this, msg);
     (this as unknown as { _accumulateRows: boolean })._accumulateRows = false;
+    this.described = true;
   }
 }
 
@@ -120,13 +131,14 @@ export const streamPostgresStatement: PostgresStatementStream = (client, stateme
   new Promise((resolve, reject) => {
     let rowError: unknown;
     let failedRow = false;
+    const config: PostgresExtendedQuery = {
+      text: statement.sql,
+      values: statement.values,
+      queryMode: 'extended',
+    };
     const query = new StreamedQuery(
-      // `queryMode` is pg's own (`PostgresExtendedQuery`), missing from its types.
-      {
-        text: statement.sql,
-        values: [...statement.values],
-        queryMode: 'extended',
-      } as pg.QueryConfig,
+      // `queryMode` is pg's own, missing from its types.
+      config as unknown as pg.QueryConfig,
       undefined,
       (err: Error | null | undefined, result?: pg.QueryResult) => {
         if (err !== null && err !== undefined) {
@@ -138,7 +150,7 @@ export const streamPostgresStatement: PostgresStatementStream = (client, stateme
           return;
         }
         resolve({
-          hasFields: (result?.fields.length ?? 0) > 0,
+          hasFields: query.described,
           command: result?.command ?? null,
           rowCount: result?.rowCount ?? null,
         });
@@ -165,9 +177,14 @@ const MAY_COMMIT_PARTWAY: ReadonlySet<string> = new Set(['CALL', 'DO']);
 /** SQLSTATE `read_only_sql_transaction`. */
 const READ_ONLY_SQL_TRANSACTION = '25006';
 
+/**
+ * The server's SQLSTATE on a failure, or null when the failure is not the
+ * server's verdict (pg's client timeout, a socket error). Every SQLSTATE holds a
+ * digit; a socket code never does, and `EPIPE` is five letters.
+ */
 function sqlStateOf(err: unknown): string | null {
   const code = (err as { code?: unknown } | null)?.code;
-  return typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) ? code : null;
+  return typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) && /[0-9]/.test(code) ? code : null;
 }
 
 interface PreparedBlock {
@@ -257,9 +274,13 @@ export async function executePostgresScript(args: {
           applied += 1;
         }
         if (readOnly && sqlStateOf(err) === READ_ONLY_SQL_TRANSACTION) {
-          throw new DatasetIoError(
-            'permanent',
+          // The server's own words follow, for a store that is read-only itself
+          // (a hot standby), where a Non-query block would be refused too.
+          throw readFailure(
+            err,
             `${blockName(i)} writes to the store, which a script with no Non-query block may not; make it a Non-query block`,
+            secret,
+            path,
           );
         }
         throw readFailure(err, `${blockName(i)} failed`, secret, path);
@@ -281,6 +302,8 @@ export async function executePostgresScript(args: {
       }
     }
 
+    // A cancel during the last block still undoes a script in one transaction.
+    if (signal.aborted) throw new DatasetIoError('cancelled', SCRIPT_ABORTED);
     if (open) {
       // ROLLBACK, never COMMIT, for a read-only script: it has nothing to commit.
       const end = readOnly ? 'ROLLBACK' : 'COMMIT';
@@ -313,17 +336,9 @@ export async function executePostgresScript(args: {
       }
     }
     if (applied > 0) {
-      const kind =
-        failure instanceof DatasetIoError && failure.kind === 'cancelled'
-          ? 'cancelled'
-          : 'permanent';
-      const message =
-        failure instanceof LookupValueError
-          ? `a Script result set cannot hold a value — ${failure.message}`
-          : failure.message;
-      failure = new DatasetIoError(
-        kind,
-        `${message} — ${String(applied)} block(s) had already run outside a transaction and may have changed the store, so this is not retried. Turn on Run as one transaction to make the script all or nothing`,
+      failure = notRetried(
+        failure,
+        `${String(applied)} block(s) had already run outside a transaction and may have changed the store`,
       );
     }
     throw failure;
@@ -393,6 +408,10 @@ export async function* runPostgresScript(
     yield scriptFailure(err);
     return;
   }
+  // pg emits `error` when the connection drops (client.js `_handleErrorEvent`),
+  // even under a running statement, and an `error` with no listener ends the
+  // server. The statement in flight is rejected through its callback anyway.
+  client.on?.('error', () => undefined);
 
   // The outcome is decided, and the session closed, before anything is yielded.
   let result: Awaited<ReturnType<typeof executePostgresScript>> | undefined;
