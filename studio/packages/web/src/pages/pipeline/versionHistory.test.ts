@@ -3,6 +3,7 @@ import { PipelineVersionSchema, type PipelineVersion } from '@autonomy-studio/sh
 import { ApiError } from '../../api/client';
 import {
   mergeVersionLists,
+  contiguousVersionCeiling,
   activeVersionLabel,
   describePublishRefusal,
   describeRestoreConflict,
@@ -64,6 +65,30 @@ describe('mergeVersionLists (#1502)', () => {
     const v2 = version({ id: 'plv_2', version: 2 });
     // The focus read already brought v2 in; then the save's own answer arrives.
     expect(mergeVersionLists([v1, v2], [v2]).map((v) => v.id)).toEqual(['plv_1', 'plv_2']);
+  });
+});
+
+describe('contiguousVersionCeiling (#1507)', () => {
+  const at = (...ns: number[]) => ns.map((n) => version({ id: `plv_${String(n)}`, version: n }));
+
+  it('is 0 for an empty list, so the first read asks for everything', () => {
+    expect(contiguousVersionCeiling([])).toBe(0);
+  });
+
+  it('is the head when every version from 1 up is held', () => {
+    expect(contiguousVersionCeiling(at(1, 2, 3))).toBe(3);
+  });
+
+  it('stops below a gap, so the next read fetches the gap', () => {
+    // The #904 CAS keeps the list gap-free today; should a write path ever
+    // append v3 past an unseen v2, [1, 3] is complete only up to 1, and the
+    // delta read must ask for everything after it.
+    expect(contiguousVersionCeiling(at(1, 3))).toBe(1);
+    expect(contiguousVersionCeiling(at(2, 3))).toBe(0);
+  });
+
+  it('does not depend on the order the list is in', () => {
+    expect(contiguousVersionCeiling(at(3, 1, 2))).toBe(3);
   });
 });
 

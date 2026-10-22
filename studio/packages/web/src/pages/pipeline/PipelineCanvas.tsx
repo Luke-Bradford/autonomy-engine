@@ -217,6 +217,7 @@ import {
   restoreConfirmMessage,
   restoreRefusal,
   mergeVersionLists,
+  contiguousVersionCeiling,
   saveAnywayLabel,
   type ActiveVersionState,
   selectionIn,
@@ -956,6 +957,16 @@ export function PipelineCanvas({
    * replace it, so a read racing this page's own save cannot drop the version
    * it just minted.
    *
+   * #1507 — and it asks only for what is NEW: the versions after the highest
+   * number up to which the list on screen is complete
+   * (`contiguousVersionCeiling`). Each version carries its whole doc, so a
+   * full re-read downloaded a long history on every alt-tab. The delta is
+   * exact because saved versions are numbered without gaps and never deleted,
+   * and a gap in the list could only lower the ceiling, so the read would ask
+   * for more. An idle focus answers `[]` and leaves the list as it was. The
+   * open-time read and the stale-write refetches stay FULL: those take their
+   * head from the answer.
+   *
    * A failed read KEEPS what is on screen, unlike the open-time read above,
    * which has nothing to keep. Focus arrives on wake and reconnect, exactly when
    * requests fail, and blanking the pointer then would hide the badge, hold
@@ -973,15 +984,16 @@ export function PipelineCanvas({
     void refreshGlobals();
     void refreshWorkspaceSettings();
     const ticket = takeTicket(publishSeq.current);
+    const after = contiguousVersionCeiling(versions);
     void guardedFocusLoad(
       (signal) =>
         Promise.all([
-          listPipelineVersions(pipelineId, signal),
+          listPipelineVersions(pipelineId, signal, after > 0 ? after : undefined),
           readPublishState(pipelineId, signal),
         ]),
       {
         onData: ([fresh, s]) => {
-          setVersions((prev) => mergeVersionLists(prev, fresh));
+          if (fresh.length > 0) setVersions((prev) => mergeVersionLists(prev, fresh));
           if (!claimTicket(publishSeq.current, ticket)) return;
           setActive(s.active);
           setGit(s.git);
@@ -989,7 +1001,7 @@ export function PipelineCanvas({
         onError: () => {},
       },
     );
-  }, [refreshGlobals, refreshWorkspaceSettings, guardedFocusLoad, pipelineId]);
+  }, [refreshGlobals, refreshWorkspaceSettings, guardedFocusLoad, pipelineId, versions]);
   useRefreshOnFocus(refreshOnFocus);
 
   const nodes = useStore(store, (s) => s.nodes);

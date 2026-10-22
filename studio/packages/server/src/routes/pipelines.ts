@@ -94,6 +94,22 @@ const ListPipelinesQuerystringSchema = z.object({
   archived: z.enum(['true', 'false']).optional(),
 });
 
+/**
+ * #1507 — `GET /api/pipelines/:id/versions?after=N`: only the saved versions
+ * numbered above N. The editor's focus re-read sends the highest N up to which
+ * its list is complete, so an alt-tab downloads what is new rather than every
+ * version's whole doc again. Digits only, for the reason `RunEpochBoundSchema`
+ * gives: `z.coerce.number()` would read `?after=` as 0 and widen the answer to
+ * everything, where a malformed cursor should be a 400.
+ */
+const ListVersionsQuerystringSchema = z.object({
+  after: z
+    .string()
+    .regex(/^\d{1,15}$/)
+    .transform(Number)
+    .optional(),
+});
+
 export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
   const { db } = fastify;
 
@@ -685,7 +701,8 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
       'pipeline',
       request.params.id,
     );
-    return listPipelineVersions(db, pipeline.id);
+    const { after } = ListVersionsQuerystringSchema.parse(request.query);
+    return listPipelineVersions(db, pipeline.id, { after });
   });
 
   fastify.get<{ Params: { id: string; v: string } }>(

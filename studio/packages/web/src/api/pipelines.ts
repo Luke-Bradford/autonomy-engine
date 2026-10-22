@@ -133,12 +133,17 @@ export function getPipelineCost(id: string, signal?: AbortSignal): Promise<Pipel
  * newest-or-oldest order as the server returns them. The Triggers page uses
  * these to offer a version-binding dropdown; a run/trigger always binds a
  * specific version id, never "latest".
+ *
+ * `after` (#1507) asks for only the versions numbered above it — the editor's
+ * focus re-read, which already holds everything up to that number.
  */
 export function listPipelineVersions(
   pipelineId: string,
   signal?: AbortSignal,
+  after?: number,
 ): Promise<PipelineVersion[]> {
-  return apiFetch(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`, {
+  const query = after === undefined ? '' : `?after=${String(after)}`;
+  return apiFetch(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions${query}`, {
     schema: PipelineVersionListSchema,
     signal,
   });

@@ -166,6 +166,12 @@ describe('pipelines API', () => {
     expect(fetchMock.mock.calls[0]![0]).toBe('/api/pipelines/pl%2F1/versions');
   });
 
+  it('#1507 — asks only for the versions after a number when given one', async () => {
+    const fetchMock = stubFetch(200, [version]);
+    await listPipelineVersions('pl/1', undefined, 3);
+    expect(fetchMock.mock.calls[0]![0]).toBe('/api/pipelines/pl%2F1/versions?after=3');
+  });
+
   it('flattens EVERY pipeline’s versions, one versions request per pipeline (#425)', async () => {
     // Covered here rather than through a caller: both callers (the Triggers
     // page's binding dropdown and the canvas's call-node picker) now mock this

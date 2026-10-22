@@ -133,6 +133,9 @@ test('the badge names the editing state: latest, draft, overtaken, previewing', 
  * #1502 — another tab saves while this editor sits idle. The editor learns of it
  * when the window regains focus, with NO save attempt to provoke a re-read: the
  * badge names the newer version, and the history column lists it.
+ *
+ * #1507 — and that re-read asks only for what is new (`?after=1`), where the
+ * open-time read asked for every version.
  */
 test('a version saved elsewhere reaches the badge and the history on focus', async ({ page }) => {
   const problems = collectPageProblems(page);
@@ -143,7 +146,10 @@ test('a version saved elsewhere reaches the badge and the history on focus', asy
   const publishRead = page.waitForResponse((r) =>
     r.url().endsWith(`/api/pipelines/${pipelineId}/active`),
   );
+  const versionsList = new RegExp(`/api/pipelines/${pipelineId}/versions(\\?|$)`);
+  const openRead = page.waitForRequest((r) => versionsList.test(r.url()) && r.method() === 'GET');
   await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
+  expect(new URL((await openRead).url()).search).toBe('');
   await publishRead;
   await fluentRootReady(page);
   await expect(nodeById(page, 'n_b')).toBeVisible();
@@ -163,11 +169,12 @@ test('a version saved elsewhere reaches the badge and the history on focus', asy
   await expect(part(page, 'editing')).toHaveText(/^v1 \(latest\)/);
 
   const reread = page.waitForResponse(
-    (r) =>
-      r.url().endsWith(`/api/pipelines/${pipelineId}/versions`) && r.request().method() === 'GET',
+    (r) => versionsList.test(r.url()) && r.request().method() === 'GET',
   );
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await reread;
+  const delta = await reread;
+  expect(new URL(delta.url()).search).toBe('?after=1');
+  expect(((await delta.json()) as { version: number }[]).map((v) => v.version)).toEqual([2]);
   await expect(part(page, 'editing')).toHaveText(/^v1 · v2 is newer/);
   await expect(part(page, 'editing')).toHaveAttribute('data-tone', 'warning');
   await expect(history.getByRole('button', { name: /^v2\b/ })).toContainText('Latest');
