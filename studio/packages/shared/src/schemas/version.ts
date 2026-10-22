@@ -644,7 +644,12 @@
 // them and reads with one reader: the same rows on PostgreSQL, but a
 // `usedParallelCopies` of 1 where this build reports the ranges, and a SQLite or
 // file source this build refuses would copy. An outcome, not only a speed.
-export const CATALOG_VERSION = 68;
+// BUMP 68→69 for #1600 OR41 C12b: Set variable's third Operation, Pipeline
+// return value (`operation: 'return'`, `returnValues`). A pre-C12b build reads an
+// unknown Operation and ends the run `invalid_event`, so an export it imports
+// would save and never run; and its child projection lets any node's
+// `pipelineReturnValue` output through.
+export const CATALOG_VERSION = 69;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

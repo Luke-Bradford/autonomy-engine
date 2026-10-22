@@ -1,3 +1,4 @@
+import { isReturnValueNode, PIPELINE_RETURN_VALUE_OUTPUT } from '../catalog/types.js';
 import type { Node, PipelineVersion } from '../schemas/pipeline.js';
 import type { RunState } from './types.js';
 
@@ -29,6 +30,15 @@ import type { RunState } from './types.js';
  * from every call node and make the whole seam unobservable. When pipeline
  * outputs gain a real binding, THIS is the function that narrows to it.
  *
+ * #1600 OR41 C12b — `pipelineReturnValue` is RESERVED: only a *Pipeline return
+ * value* node (`isReturnValueNode`) contributes it, so an ordinary node's
+ * same-named output cannot pose as one, and a nested call's own
+ * `pipelineReturnValue` (its grandchild's) does not pass up, as in ADF. Two
+ * return nodes that both ran resolve by the same rule as every other name: the
+ * last by sorted id wins, its whole map, keys not merged (ADF says to make sure
+ * only one runs). Absent when no return node succeeded, so a parent reading a
+ * key fails its run, as ADF's does.
+ *
  * A `failure` child still projects (the findings loop — `call.returned`'s
  * schema says so): whatever the child managed to produce is real, and the
  * parent's failure edge is what decides whether it may be used.
@@ -38,11 +48,15 @@ export function projectChildRunOutputs(
   state: Pick<RunState, 'outputs'>,
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
+  const returners = new Set(doc.nodes.filter(isReturnValueNode).map((n) => n.id));
   const ids = doc.nodes.map((n: Node) => n.id).sort();
   for (const id of ids) {
     const nodeOutputs = state.outputs[id];
     if (nodeOutputs === undefined) continue;
-    for (const name of Object.keys(nodeOutputs).sort()) out[name] = nodeOutputs[name];
+    for (const name of Object.keys(nodeOutputs).sort()) {
+      if (name === PIPELINE_RETURN_VALUE_OUTPUT && !returners.has(id)) continue;
+      out[name] = nodeOutputs[name];
+    }
   }
   return out;
 }

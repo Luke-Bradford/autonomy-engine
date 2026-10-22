@@ -128,10 +128,13 @@ describe('a value that cannot be RETURNED fails the node permanently', () => {
     ['an array for an object', { key: 'k', type: 'object', value: '${createArray(1)}' }],
     ['a template for an object', { key: 'k', type: 'object', value: 'x${params.x}' }],
   ])('%s is a type mismatch naming the key', (_label, row) => {
-    const { log, finish } = driveRun(eng([ret('r', [row])]), { resolve: simpleResolve() });
+    const { log, finish } = driveRun(eng([ret('r', [row])]), {
+      resolve: simpleResolve(),
+      params: { x: 3 },
+    });
     const failed = failedOf(log, 'r');
-    expect(failed?.failure).toMatchObject({ kind: 'permanent', code: 'VARIABLE_TYPE_MISMATCH' });
-    expect(failed?.failure.message).toContain("return value 'k'");
+    expect(failed).toMatchObject({ kind: 'permanent', code: 'variable_type_mismatch' });
+    expect(failed?.error).toContain("return value 'k'");
     expect(finish?.outcome).toBe('failure');
   });
 
@@ -146,8 +149,8 @@ describe('a value that cannot be RETURNED fails the node permanently', () => {
       ]),
       { resolve: simpleResolve() },
     );
-    expect(failedOf(log, 'r')?.failure).toMatchObject({ code: 'VARIABLE_TOO_LARGE' });
-    expect(failedOf(log, 'r')?.failure.message).toContain('return value');
+    expect(failedOf(log, 'r')).toMatchObject({ code: 'variable_too_large' });
+    expect(failedOf(log, 'r')?.error).toContain('return value');
   });
 
   it('an evaluation that throws ends the run invalid_event, as for every control node', () => {
@@ -250,29 +253,29 @@ describe('save rules', () => {
   });
 
   it.each<[string, Row[] | unknown, string]>([
-    ['no rows', [], 'nodes.r.returnValues: add at least one return value'],
-    ['no table', undefined, 'nodes.r.returnValues: add at least one return value'],
-    ['an empty key', [{ key: '', type: 'string' }], "nodes.r.returnValues[0].key"],
-    ['a dotted key', [{ key: 'a.b', type: 'string' }], 'nodes.r.returnValues[0].key'],
-    ['__proto__', [{ key: '__proto__', type: 'string' }], 'nodes.r.returnValues[0].key'],
-    ['a ${} key', [{ key: '${params.x}', type: 'string' }], 'nodes.r.returnValues[0].key'],
+    ['no rows', [], 'node.r.returnValues: add at least one return value'],
+    ['no table', undefined, 'node.r.returnValues: add at least one return value'],
+    ['an empty key', [{ key: '', type: 'string' }], "node.r.returnValues[0].key"],
+    ['a dotted key', [{ key: 'a.b', type: 'string' }], 'node.r.returnValues[0].key'],
+    ['__proto__', [{ key: '__proto__', type: 'string' }], 'node.r.returnValues[0].key'],
+    ['a ${} key', [{ key: '${params.x}', type: 'string' }], 'node.r.returnValues[0].key'],
     [
       'a duplicate key',
       [
         { key: 'k', type: 'string' },
         { key: 'k', type: 'number', value: '1' },
       ],
-      "nodes.r.returnValues[1].key: 'k' is already returned",
+      "node.r.returnValues[1].key: 'k' is already returned",
     ],
-    ['an unknown type', [{ key: 'k', type: 'int', value: '1' }], 'nodes.r.returnValues[0].type'],
-    ['a number with no value', [{ key: 'k', type: 'number' }], 'nodes.r.returnValues[0].value'],
-    ['a value on Null', [{ key: 'k', type: 'null', value: 'x' }], 'nodes.r.returnValues[0].value'],
-    ['a non-text value', [{ key: 'k', type: 'number', value: 5 }], 'nodes.r.returnValues[0].value'],
-    ['a bad number literal', [{ key: 'k', type: 'number', value: 'five' }], 'nodes.r.returnValues[0].value'],
-    ['a bad array literal', [{ key: 'k', type: 'array', value: '{"a":1}' }], 'nodes.r.returnValues[0].value'],
-    ['a template object', [{ key: 'k', type: 'object', value: 'a${params.x}' }], 'nodes.r.returnValues[0].value'],
-    ['a number expression for a string', [{ key: 'k', type: 'string', value: '${params.x}' }], 'nodes.r.returnValues[0].value'],
-    ['a number expression for an object', [{ key: 'k', type: 'object', value: '${params.x}' }], 'nodes.r.returnValues[0].value'],
+    ['an unknown type', [{ key: 'k', type: 'int', value: '1' }], 'node.r.returnValues[0].type'],
+    ['a number with no value', [{ key: 'k', type: 'number' }], 'node.r.returnValues[0].value'],
+    ['a value on Null', [{ key: 'k', type: 'null', value: 'x' }], 'node.r.returnValues[0].value'],
+    ['a non-text value', [{ key: 'k', type: 'number', value: 5 }], 'node.r.returnValues[0].value'],
+    ['a bad number literal', [{ key: 'k', type: 'number', value: 'five' }], 'node.r.returnValues[0].value'],
+    ['a bad array literal', [{ key: 'k', type: 'array', value: '{"a":1}' }], 'node.r.returnValues[0].value'],
+    ['a template object', [{ key: 'k', type: 'object', value: 'a${params.x}' }], 'node.r.returnValues[0].value'],
+    ['a number expression for a string', [{ key: 'k', type: 'string', value: '${params.x}' }], 'node.r.returnValues[0].value'],
+    ['a number expression for an object', [{ key: 'k', type: 'object', value: '${params.x}' }], 'node.r.returnValues[0].value'],
   ])('refuses %s', (_label, rows, message) => {
     expect(validate([ret('r', rows)]).some((e) => e.includes(message))).toBe(true);
   });
@@ -318,12 +321,16 @@ describe('save rules', () => {
     expect(errs.some((e) => e.includes('policy.secureOutput is not supported') && e.includes('calling pipeline'))).toBe(true);
   });
 
-  it('counts a row’s variable read for the determinism guard', () => {
-    // A return node reads `vars.n` while an unordered Set writes it: the guard sees the read.
-    const errs = validate([
-      ret('r', [{ key: 'k', type: 'number', value: '${vars.n}' }]),
-      node('w', { variable: 'n', value: '1' }, 'set_variable'),
-    ]);
-    expect(errs.some((e) => e.includes("variable 'n'"))).toBe(true);
+  it('is no writer to the determinism guard, which runs beside a real one', () => {
+    // A Set makes the guard run; the return node, with no `variable`, must not be
+    // read as a writer naming none.
+    const errs = validate(
+      [
+        node('w', { variable: 'n', value: '1' }, 'set_variable'),
+        ret('r', [{ key: 'k', type: 'number', value: '${vars.n}' }]),
+      ],
+      [edge('w', 'r')],
+    );
+    expect(errs).toEqual([]);
   });
 });

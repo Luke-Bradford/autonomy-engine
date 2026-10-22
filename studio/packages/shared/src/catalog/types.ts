@@ -233,13 +233,38 @@ export const APPEND_VARIABLE_ACTIVITY_TYPE = 'append_variable';
  * variable and Append variable as one activity. An absent `operation` is Set,
  * so every `set_variable` saved before C12a keeps its meaning. `append_variable`
  * is retired from the palette and lowered to Operation Append (`retired.ts`).
- * C12b adds *Pipeline return value*.
+ * C12b adds *Pipeline return value* (`return`), which writes no variable: see
+ * `isReturnValueNode`.
  */
-export const SET_VARIABLE_OPERATIONS = ['set', 'append'] as const;
+export const SET_VARIABLE_OPERATIONS = ['set', 'append', 'return'] as const;
 export type SetVariableOperation = (typeof SET_VARIABLE_OPERATIONS)[number];
 
 /**
- * What a variable-writing node does: `set` or `append`, or `undefined` for a
+ * #1600 OR41 C12b (catalogue §4.7) — the one output a *Pipeline return value*
+ * node produces, and the name the calling pipeline reads it by:
+ * `${nodes.<call>.output.pipelineReturnValue.<key>}` (ADF's
+ * `activity('…').output.pipelineReturnValue.<key>`). Reserved in a child's
+ * projection: only a return-value node contributes it (`projectChildRunOutputs`).
+ */
+export const PIPELINE_RETURN_VALUE_OUTPUT = 'pipelineReturnValue';
+
+/**
+ * #1600 C12b — the type of one return value row. ADF's String · Int · Float ·
+ * Boolean · Array · Object · Null, with Int and Float as one `number` (studio's
+ * number type) and ADF's *Expression* dropped: every row takes a `${}` already.
+ */
+export const RETURN_VALUE_TYPES = [
+  'string',
+  'number',
+  'boolean',
+  'array',
+  'object',
+  'null',
+] as const;
+export type ReturnValueType = (typeof RETURN_VALUE_TYPES)[number];
+
+/**
+ * What a variable-writing node does: `set`, `append` or `return`, or `undefined` for a
  * node that is not a writer or a `set_variable` whose `operation` is not one
  * of `SET_VARIABLE_OPERATIONS` (the save gate refuses it, the run ends
  * `invalid_event`). Whether a node IS a writer is the type alone
@@ -259,6 +284,19 @@ export function variableWriteOp(node: {
 /** A `set_variable`/`append_variable` node type: the variable writers. */
 export function isVariableWriterType(type: string): boolean {
   return type === SET_VARIABLE_ACTIVITY_TYPE || type === APPEND_VARIABLE_ACTIVITY_TYPE;
+}
+
+/**
+ * #1600 C12b — a Set variable whose Operation is *Pipeline return value*. It
+ * writes no variable: it succeeds like a `filter`, with the one output
+ * `pipelineReturnValue`, so the determinism guard does not count it as a writer
+ * (its reads are still counted) and no `variable.*` event is ever recorded for it.
+ */
+export function isReturnValueNode(node: {
+  type: string;
+  config: Readonly<Record<string, unknown>>;
+}): boolean {
+  return node.type === SET_VARIABLE_ACTIVITY_TYPE && variableWriteOp(node) === 'return';
 }
 
 /**

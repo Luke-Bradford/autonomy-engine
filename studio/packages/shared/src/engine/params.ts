@@ -48,8 +48,11 @@ import {
   WAIT_ACTIVITY_TYPE,
   WEB_ACTIVITY_TYPE,
   WEBHOOK_ACTIVITY_TYPE,
+  isReturnValueNode,
   isVariableWriterType,
+  RETURN_VALUE_TYPES,
   variableWriteOp,
+  type ReturnValueType,
 } from '../catalog/types.js';
 import {
   findLlmMessagesRowIndex,
@@ -1136,7 +1139,8 @@ function coerce(
   value: unknown,
   // #844 V5 — `set_variable` reuses this coercion for a literal value, and its
   // errors must say "variable", not "param".
-  noun: 'param' | 'variable' = 'param',
+  // #1600 C12b — and a return value's, "return value".
+  noun: 'param' | 'variable' | 'return value' = 'param',
 ): unknown {
   switch (type) {
     case 'number': {
@@ -1292,11 +1296,13 @@ export function variableLiteralText(raw: string): string {
  * An `append` value is an untyped element and never comes here.
  */
 export function coerceVariableValue(
-  def: VariableDef,
+  def: Pick<VariableDef, 'name' | 'type'>,
   mode: 'literal' | 'whole' | 'interpolated',
   resolved: unknown,
+  // #1600 C12b — what the messages call the value (a return value reuses this).
+  kind: 'variable' | 'return value' = 'variable',
 ): { ok: true; value: unknown } | { ok: false; error: string } {
-  const noun = `variable '${def.name}'`;
+  const noun = `${kind} '${def.name}'`;
   if (mode === 'whole') {
     return matchesSig(resolved, def.type)
       ? { ok: true, value: resolved }
@@ -1319,15 +1325,193 @@ export function coerceVariableValue(
     };
   }
   try {
-    return { ok: true, value: coerce(def.name, def.type, resolved, 'variable') };
+    return { ok: true, value: coerce(def.name, def.type, resolved, kind) };
   } catch (e) {
     if (e instanceof ParamResolveError) return { ok: false, error: e.message };
     throw e;
   }
 }
 
-function articled(type: VariableDef['type']): string {
-  return `${type === 'array' ? 'an' : 'a'} ${type}`;
+function articled(type: VariableDef['type'] | ReturnValueType): string {
+  return `${type === 'array' || type === 'object' ? 'an' : 'a'} ${type}`;
+}
+
+/**
+ * #1600 OR41 C12b — a return value key: an identifier, so the calling pipeline's
+ * `${nodes.<call>.output.pipelineReturnValue.<key>}` reads it as one segment.
+ * `__proto__` matches and is refused by name (`validateReturnValueConfig`).
+ */
+const RETURN_VALUE_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * #1600 OR41 C12b — one *Pipeline return value* row's value, resolved in `mode`,
+ * as its type, or why it cannot be. ONE rule for save (literal and interpolated,
+ * decided by the text) and run (every case), like `coerceVariableValue`, which
+ * it reuses for String, Number and Boolean:
+ *  - Array and Object take a whole-value `${}` of that kind, or JSON text of
+ *    that kind (ADF types an array or an object in; a variable's array has no
+ *    literal form, but a return value is typed per row, so its text is decided);
+ *  - Null is always `null` (the save rules refuse a value on it);
+ *  - an interpolated template can only produce a String.
+ */
+export function coerceReturnValue(
+  key: string,
+  type: ReturnValueType,
+  mode: 'literal' | 'whole' | 'interpolated',
+  resolved: unknown,
+): { ok: true; value: unknown } | { ok: false; error: string } {
+  const noun = `return value '${key}'`;
+  if (type === 'null') return { ok: true, value: null };
+  if (type !== 'array' && type !== 'object') {
+    return coerceVariableValue({ name: key, type }, mode, resolved, 'return value');
+  }
+  const isKind = (v: unknown) =>
+    type === 'array' ? Array.isArray(v) : typeof v === 'object' && v !== null && !Array.isArray(v);
+  if (mode === 'whole') {
+    return isKind(resolved)
+      ? { ok: true, value: resolved }
+      : { ok: false, error: `${noun}: expected ${articled(type)}, got ${typeName(resolved)}` };
+  }
+  if (mode === 'interpolated') {
+    return {
+      ok: false,
+      error:
+        `${noun} is ${articled(type)}, but text around the \${...} makes the value a string — ` +
+        'write the value as one whole-value ${...} expression',
+    };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(String(resolved));
+  } catch {
+    parsed = undefined;
+  }
+  return isKind(parsed)
+    ? { ok: true, value: parsed }
+    : {
+        ok: false,
+        error:
+          `${noun} is ${articled(type)}: write JSON text such as ` +
+          `${type === 'array' ? '[1, 2]' : '{"a": 1}'}, or one whole-value \${...} expression`,
+      };
+}
+
+/**
+ * #1600 OR41 C12b — the save-time rules of a *Pipeline return value* node:
+ * at least one row; each key an identifier, not `__proto__`, and unique; each
+ * type one of `RETURN_VALUE_TYPES`; a value as text (absent only for Null, which
+ * takes none, and String, which is then `""`); a literal or template that can
+ * have the row's type. No Variable or Value, which it would ignore. Not inside a
+ * ForEach, at any depth: each item would replace the map, and in a parallel body
+ * the per-item outputs are dropped at the end of each item, so the caller would
+ * get nothing.
+ */
+function validateReturnValueConfig(
+  node: Node,
+  foreachOwned: boolean,
+  errors: string[],
+): void {
+  const at = `node.${node.id}`;
+  if (node.config['variable'] !== undefined) {
+    errors.push(`${at}.variable: Pipeline return value has no variable — remove it`);
+  }
+  if (node.config['value'] !== undefined) {
+    errors.push(`${at}.value: Pipeline return value has no value — its values are in Return values`);
+  }
+  if (foreachOwned) {
+    errors.push(
+      `${at}.operation: Pipeline return value cannot run inside a ForEach — each item would ` +
+        'replace it; return the values after the loop',
+    );
+  }
+  const rows = node.config['returnValues'];
+  if (!Array.isArray(rows) || rows.length === 0) {
+    errors.push(`${at}.returnValues: add at least one return value`);
+    return;
+  }
+  const seen = new Set<string>();
+  for (const [i, row] of rows.entries()) {
+    const here = `${at}.returnValues[${i}]`;
+    if (typeof row !== 'object' || row === null || Array.isArray(row)) {
+      errors.push(`${here}: must be a key, a type and a value`);
+      continue;
+    }
+    const { key, type, value } = row as Record<string, unknown>;
+    let keyOk = false;
+    if (typeof key !== 'string' || !RETURN_VALUE_KEY.test(key)) {
+      errors.push(
+        `${here}.key: must be letters, digits and _, not starting with a digit` +
+          (typeof key === 'string' ? ` (got '${key}')` : ''),
+      );
+    } else if (key === '__proto__') {
+      errors.push(`${here}.key: cannot be __proto__`);
+    } else if (seen.has(key)) {
+      errors.push(`${here}.key: '${key}' is already returned`);
+    } else {
+      seen.add(key);
+      keyOk = true;
+    }
+    const known = RETURN_VALUE_TYPES.find((t) => t === type);
+    if (known === undefined) {
+      errors.push(`${here}.type: must be one of ${RETURN_VALUE_TYPES.join(', ')}`);
+      continue;
+    }
+    if (known === 'null') {
+      if (value !== undefined) errors.push(`${here}.value: a Null return value takes no value`);
+      continue;
+    }
+    if (value === undefined) {
+      if (known !== 'string') errors.push(`${here}.value: ${articled(known)} needs a value`);
+      continue;
+    }
+    if (typeof value !== 'string') {
+      errors.push(
+        `${here}.value: must be text — a literal or a \${...} expression, got ${typeName(value)}`,
+      );
+      continue;
+    }
+    const mode = variableValueMode(value);
+    // `whole` is typed by `scanReturnValueTypes`; an unterminated `${` by `scan`.
+    if (!keyOk || (mode !== 'literal' && mode !== 'interpolated')) continue;
+    const verdict = coerceReturnValue(
+      key as string,
+      known,
+      mode,
+      mode === 'literal' ? variableLiteralText(value) : '',
+    );
+    if (!verdict.ok) errors.push(`${here}.value: ${verdict.error}`);
+  }
+}
+
+/**
+ * #1600 OR41 C12b — the static TYPE half of a return value row: a whole-value
+ * `${expr}` whose inferred type is definitely not the row's is refused at save,
+ * as `scanVariableWriteValue` does for a Set. An Object row refuses a definite
+ * scalar or array (the checker has no object type); an `any` passes, and its
+ * run-time check is `coerceReturnValue`.
+ */
+function scanReturnValueTypes(node: Node, scope: ScanScope, errors: string[]): void {
+  if (!isReturnValueNode(node)) return;
+  const rows = node.config['returnValues'];
+  if (!Array.isArray(rows)) return;
+  for (const [i, row] of rows.entries()) {
+    if (typeof row !== 'object' || row === null) continue;
+    const { key, type, value } = row as Record<string, unknown>;
+    if (typeof value !== 'string' || variableValueMode(value) !== 'whole') continue;
+    const known = RETURN_VALUE_TYPES.find((t) => t === type);
+    if (known === undefined || known === 'null') continue;
+    const mode = interpolationMode(value);
+    if (mode.mode !== 'whole') continue;
+    const typed = wholeValueType(mode.body, scope);
+    if (typed === null || typed.type === 'any') continue;
+    const wrong = known === 'object' ? true : !assignableTo(typed.type, known);
+    if (wrong) {
+      errors.push(
+        `node.${node.id}.returnValues[${i}].value: return value '${String(key)}' is ` +
+          `${articled(known)}, but this expression is ${articled(typed.type as VariableDef['type'])}`,
+      );
+    }
+  }
 }
 
 /**
@@ -1344,13 +1528,27 @@ function articled(type: VariableDef['type']): string {
 function validateVariableWriteConfig(
   node: Node,
   variables: ReadonlyMap<string, VariableDef>,
+  foreachOwned: boolean,
   errors: string[],
 ): void {
   // #1600 C12a — Set variable's Operation is a literal choice: it decides which
   // event the write is and what the guard counts, so a `${}` cannot hold it.
   const op = variableWriteOp(node);
   if (op === undefined) {
-    errors.push(`node.${node.id}.operation: must be Set or Append ('set' or 'append')`);
+    errors.push(
+      `node.${node.id}.operation: must be Set, Append or Pipeline return value ` +
+        "('set', 'append' or 'return')",
+    );
+  }
+  // #1600 C12b — a return value writes no variable: its own rules, and nothing below.
+  if (op === 'return') {
+    validateReturnValueConfig(node, foreachOwned, errors);
+    return;
+  }
+  if (node.config['returnValues'] !== undefined) {
+    errors.push(
+      `node.${node.id}.returnValues: only Pipeline return value has return values — remove it`,
+    );
   }
   const name = node.config['variable'];
   let def: VariableDef | undefined;
@@ -1612,6 +1810,8 @@ export function validateRefs(
     // #844 V5 — a `set_variable`'s whole-value value must be able to have the
     // variable's type (the MODE half is `validateDoc`'s).
     scanVariableWriteValue(node, scope, errors);
+    // #1600 C12b — and each return value row's, against the row's type.
+    scanReturnValueTypes(node, scope, errors);
     // #1600 C0d — a user property's value is resolved at dispatch against the
     // same env as `config` (the node's scope, `${item}` in a foreach body), so it
     // is scanned the same way: refs, types, secure-output reads and secret refs
@@ -3009,7 +3209,7 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
     if (node.type === FAIL_ACTIVITY_TYPE) validateFailConfig(node, errors);
     // #844 V5 — a `set_variable`/`append_variable`'s variable + value (save-time half).
     if (isVariableWriterType(node.type)) {
-      validateVariableWriteConfig(node, variables, errors);
+      validateVariableWriteConfig(node, variables, foreachOwned(node.id, containers), errors);
     }
     // #4 A8 — a `filter`'s `items`+`predicate` presence + whole-value shape.
     if (node.type === FILTER_ACTIVITY_TYPE) validateFilterConfig(node, errors);
@@ -5196,6 +5396,14 @@ function validateSecurePolicy(node: Node, errors: string[]): void {
     );
     return;
   }
+  // #1600 C12b — a return value is handed, unredacted, to the calling pipeline.
+  if (isReturnValueNode(node)) {
+    errors.push(
+      `node '${node.id}': policy.${flags} is not supported on a Pipeline return value — the ` +
+        'values it returns are handed to the calling pipeline and recorded in the run log',
+    );
+    return;
+  }
   // #844 V5 (spec V-D4/V-D8) — a variable write lands in `RunState.variables`,
   // readable everywhere through `${vars}`, and its `variable.*` event is not
   // redacted, so a "secure" write would be a leak with a padlock on it.
@@ -6494,6 +6702,22 @@ export interface ContainerMembership {
  * author wrote so edge classification stays honest (the reason the reducer reads
  * membership from raw, not `#487`-filtered, children).
  */
+/**
+ * #1600 C12b — whether `id` sits inside a `foreach`, at any depth (a stage in a
+ * loop body included), by the owners `containerMembership` resolves. Bounded by
+ * the container count, so a cyclic membership (refused elsewhere) cannot spin.
+ */
+function foreachOwned(id: string, containers: Container[]): boolean {
+  const { owner } = containerMembership(containers);
+  const kindOf = new Map(containers.map((c) => [c.id, c.kind]));
+  let at = owner.get(id);
+  for (let hops = 0; at !== undefined && hops <= containers.length; hops += 1) {
+    if (kindOf.get(at) === 'foreach') return true;
+    at = owner.get(at);
+  }
+  return false;
+}
+
 export function containerMembership(containers: Container[]): ContainerMembership {
   const owner = new Map<string, string>();
   const duplicates: ContainerChildDuplicate[] = [];
