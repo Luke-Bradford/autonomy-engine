@@ -38,6 +38,7 @@ import { startRun, type DocResolver, type ExecutorCommand, type RetryAlarms } fr
 import { refuseToArm, stubAlarms } from './stub-alarms.js';
 import { reconcileOnBoot } from '../reconcile.js';
 import { loadEngineEvents } from '../events.js';
+import { acquireCopyWatermark, copyWatermarkSourceKey } from '../copy-watermark.js';
 import { until } from '../../__tests__/poll-until.js';
 import { DatasetIoError } from '../../connectors/dataset-io-error.js';
 import { createExecutor, PREFLIGHT_STORE_CONCURRENCY } from '../executor.js';
@@ -6262,5 +6263,204 @@ describe('createExecutor — a Web Wait for callback and the public base URL (#1
       error: expect.stringContaining('AUTONOMY_PUBLIC_URL') as unknown,
     });
     expect(events.some((e) => e.type === 'activity.warned')).toBe(false);
+  });
+});
+
+describe('createExecutor — #1600 OR41 C5a: Copy Load Incremental', () => {
+  const dirs: string[] = [];
+  const rowsOfDb = (db: Db, query: string) => db.$client.prepare(query).all();
+  afterAll(async () => {
+    for (const d of dirs) await rm(d, { recursive: true, force: true });
+  });
+
+  /** `orders` with an INTEGER watermark (one NULL), and an empty sink. */
+  async function seedStores() {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'exec-incremental-')));
+    dirs.push(root);
+    const src = new Database(join(root, 'src.db'));
+    src.exec(
+      'CREATE TABLE orders (id INTEGER PRIMARY KEY, modified_at INTEGER);' +
+        'INSERT INTO orders VALUES (1, 50), (2, 150), (3, 200), (9, NULL);',
+    );
+    src.close();
+    const dst = new Database(join(root, 'dst.db'));
+    dst.exec('CREATE TABLE stage (id INTEGER, modified_at INTEGER)');
+    dst.close();
+    const db = freshDb().db;
+    const sourceConn = await seedConnection(db, 'sqlite', { roots: [root], path: 'src.db' }, null);
+    const sinkConn = await seedConnection(
+      db,
+      'sqlite',
+      { roots: [root], path: 'dst.db', writable: true },
+      null,
+    );
+    const sinkDs = createDataset(db, {
+      ownerId: 'local',
+      name: 'stage',
+      connectionId: sinkConn,
+      kind: 'table',
+      config: { table: 'stage' },
+      columns: [
+        { name: 'id', type: 'integer', nullable: true },
+        { name: 'modified_at', type: 'integer', nullable: true },
+      ],
+      parameters: [],
+    }).id;
+    const insert = (sql: string) => {
+      const s = new Database(join(root, 'src.db'));
+      s.exec(sql);
+      s.close();
+    };
+    const staged = () => rowsOf(join(root, 'dst.db'), 'SELECT id FROM stage ORDER BY id');
+    return { db, sourceConn, sinkConn, sinkDs, insert, staged };
+  }
+
+  const mapping = [
+    { source: 'id', sink: 'id', type: 'integer' },
+    { source: 'modified_at', sink: 'modified_at', type: 'integer' },
+  ];
+  const copyNode = (
+    sourceConn: string,
+    sinkConn: string,
+    sinkDs: string,
+    config: Record<string, unknown>,
+    inline: NonNullable<Node['inlineDatasets']>['source'] = {
+      kind: 'table',
+      config: { table: 'orders' },
+    },
+  ): Node => ({
+    id: 'copy1',
+    type: 'copy',
+    config: { mapping, mode: 'append', load: 'incremental', watermarkColumnName: 'modified_at', ...config },
+    connectionIds: { source: sourceConn, sink: sinkConn },
+    datasetIds: { sink: sinkDs },
+    inlineDatasets: { source: inline },
+    position: { x: 1, y: 0 },
+  });
+  const watermarkOf = (db: Db, runId: string) => {
+    const done = loadEngineEvents(db, runId).find(
+      (e) => e.type === 'node.succeeded' && e.nodeId === 'copy1',
+    );
+    return done?.type === 'node.succeeded' ? done.outputs['watermark'] : undefined;
+  };
+
+  it('Automatic: copies every row first, then only the rows above the stored watermark, never moving it back', async () => {
+    const { db, sourceConn, sinkConn, sinkDs, insert, staged } = await seedStores();
+    const pvId = seedVersion(db, [copyNode(sourceConn, sinkConn, sinkDs, {})]);
+
+    const first = seedRun(db, pvId);
+    expect((await startRun(deps(db), first)).status).toBe('success');
+    // The NULL-watermark row (9) is never copied.
+    expect(staged()).toEqual([{ id: 1 }, { id: 2 }, { id: 3 }]);
+    expect(watermarkOf(db, first.id)).toEqual({ column: 'modified_at', old: null, new: 200 });
+
+    insert('INSERT INTO orders VALUES (4, 300), (5, 120)');
+    const second = seedRun(db, pvId);
+    expect((await startRun(deps(db), second)).status).toBe('success');
+    // 5 is a late row below the watermark: the documented caveat.
+    expect(staged()).toEqual([{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }]);
+    expect(watermarkOf(db, second.id)).toEqual({ column: 'modified_at', old: 200, new: 300 });
+
+    insert('DELETE FROM orders WHERE id = 4');
+    const third = seedRun(db, pvId);
+    expect((await startRun(deps(db), third)).status).toBe('success');
+    expect(staged()).toHaveLength(4);
+    expect(watermarkOf(db, third.id)).toEqual({ column: 'modified_at', old: 300, new: 300 });
+  });
+
+  it('Automatic over a query: the statement is wrapped, a line comment and a trailing `;` included', async () => {
+    const { db, sourceConn, sinkConn, sinkDs, insert, staged } = await seedStores();
+    const pvId = seedVersion(db, [
+      copyNode(sourceConn, sinkConn, sinkDs, {}, {
+        kind: 'query',
+        config: {
+          sql: 'SELECT id, modified_at FROM orders\nWHERE id <> :skip -- not 1\n;',
+          parameters: { skip: 1 },
+        },
+      }),
+    ]);
+    const first = seedRun(db, pvId);
+    const status = (await startRun(deps(db), first)).status;
+    expect(loadEngineEvents(db, first.id).find((e) => e.type === 'node.failed')).toBeUndefined();
+    expect(status).toBe('success');
+    expect(staged()).toEqual([{ id: 2 }, { id: 3 }]);
+    insert('INSERT INTO orders VALUES (4, 300)');
+    expect((await startRun(deps(db), seedRun(db, pvId))).status).toBe('success');
+    expect(staged()).toEqual([{ id: 2 }, { id: 3 }, { id: 4 }]);
+  });
+
+  it('Expression: reads above the supplied old watermark and stores nothing', async () => {
+    const { db, sourceConn, sinkConn, sinkDs, staged } = await seedStores();
+    const pvId = seedVersion(
+      db,
+      [copyNode(sourceConn, sinkConn, sinkDs, { watermarkFrom: 'expression', watermarkOld: '${params.wm}' })],
+      [{ name: 'wm', type: 'number', required: false, default: 100 }],
+    );
+    const run = seedRun(db, pvId);
+    expect((await startRun(deps(db), run)).status).toBe('success');
+    expect(staged()).toEqual([{ id: 2 }, { id: 3 }]);
+    expect(watermarkOf(db, run.id)).toEqual({ column: 'modified_at', old: 100, new: 200 });
+    expect(rowsOfDb(db, 'SELECT count(*) AS n FROM copy_watermarks')).toEqual([{ n: 0 }]);
+  });
+
+  it('refuses a second attempt on the same source while one holds it, transient', async () => {
+    const { db, sourceConn, sinkConn, sinkDs, staged } = await seedStores();
+    const pvId = seedVersion(db, [copyNode(sourceConn, sinkConn, sinkDs, {})]);
+    const run = seedRun(db, pvId);
+    const source = {
+      id: 'inline',
+      name: 'inline',
+      kind: 'table' as const,
+      config: { table: 'orders' },
+      columns: [],
+    };
+    const held = acquireCopyWatermark(db, {
+      pipelineId: getPipelineVersion(db, pvId)!.pipelineId,
+      nodeId: 'copy1',
+      sourceKey: copyWatermarkSourceKey({ connectionId: sourceConn, dataset: source, column: 'modified_at' }),
+      column: 'modified_at',
+      runId: 'run_other',
+    });
+    expect(held).not.toBe('busy');
+    try {
+      expect((await startRun(deps(db), run)).status).toBe('failure');
+      const failed = loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed');
+      expect(failed).toMatchObject({ kind: 'transient', code: FAILURE_CODES.COPY_WATERMARK_BUSY });
+      expect(staged()).toEqual([]);
+    } finally {
+      if (held !== 'busy') held.release();
+    }
+    // Released by the failed attempt too: the next run copies.
+    expect((await startRun(deps(db), seedRun(db, pvId))).status).toBe('success');
+    expect(staged()).toHaveLength(3);
+  });
+
+  it('keys the stored watermark by source: other bind values through the same node start from nothing', async () => {
+    const { db, sourceConn, sinkConn, sinkDs, staged } = await seedStores();
+    const pvId = seedVersion(
+      db,
+      [
+        copyNode(sourceConn, sinkConn, sinkDs, {}, {
+          kind: 'query',
+          config: {
+            sql: 'SELECT id, modified_at FROM orders WHERE id >= :min',
+            parameters: { min: '${params.min}' },
+          },
+        }),
+      ],
+      [{ name: 'min', type: 'number', required: false, default: 0 }],
+    );
+    expect((await startRun(deps(db), seedRun(db, pvId))).status).toBe('success');
+    const other = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      triggerId: null,
+      parentRunId: null,
+      params: { min: 2 },
+    });
+    expect((await startRun(deps(db), other)).status).toBe('success');
+    // 1, 2, 3, then 2 and 3 again: the second source had no watermark yet.
+    expect(staged()).toHaveLength(5);
+    expect(rowsOfDb(db, 'SELECT count(*) AS n FROM copy_watermarks')).toEqual([{ n: 2 }]);
   });
 });
