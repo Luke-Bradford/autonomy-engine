@@ -209,8 +209,10 @@ export function preparePostgresBlocks(config: ScriptDispatchConfig): string | Pr
     let statement: PostgresStatement;
     try {
       statement = rewriteNamedParametersToPositional(block.sql, block.parameters);
-    } catch {
-      // The rewrite's own sentence names a query dataset; this one names the block.
+    } catch (err) {
+      // Its one refusal is a positional placeholder beside named values. Its
+      // sentence names a query dataset; this one names the block.
+      if (!(err instanceof DatasetIoError)) throw err;
       return `${blockName(i)} uses a positional placeholder ($1) as well as named Parameters; write :name for every value`;
     }
     const keyword = sqlLeadingKeyword(block.sql, 'postgres') ?? '';
