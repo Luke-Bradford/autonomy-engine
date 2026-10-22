@@ -75,28 +75,62 @@ const STORE_NAMES: Readonly<Record<SqlDialect, string>> = {
 };
 
 /**
- * Why `script` may not run on `dialect`'s sink, or `null`. Checked before the
- * script reaches the store: the leading statement, then that every `:name` the
- * store's own lexer finds has a value, so a missing one is named rather than
- * left to each driver's own wording.
+ * How a refusal names the authored statement it is about. #1600 OR41 C10a —
+ * a Script block is refused by the same two checks as a Pre-copy script, so
+ * the checks take its words rather than being copied.
  */
-export function preCopyScriptRefusal(script: PreCopyScript, dialect: SqlDialect): string | null {
-  const allowed = PRE_COPY_SCRIPT_STATEMENTS[dialect];
+export interface AuthoredStatementWording {
+  /** Starts a sentence about this statement: `the Pre-copy script`. */
+  readonly the: string;
+  /** Starts a sentence about any such statement on a store: `a Pre-copy script`. */
+  readonly any: string;
+  /** Where its bind values are given: `Pre-copy bind values`. */
+  readonly values: string;
+}
+
+const PRE_COPY_SCRIPT_WORDING: AuthoredStatementWording = {
+  the: 'the Pre-copy script',
+  any: 'a Pre-copy script',
+  values: 'Pre-copy bind values',
+};
+
+/**
+ * Why an authored statement may not run on `dialect`, or `null`. Checked
+ * before it reaches the store: the leading statement against `allowed`, then
+ * that every `:name` the store's own lexer finds has a value, so a missing one
+ * is named rather than left to each driver's own wording.
+ */
+export function authoredStatementRefusal(
+  script: PreCopyScript,
+  dialect: SqlDialect,
+  allowed: readonly string[],
+  wording: AuthoredStatementWording,
+): string | null {
   const keyword = sqlLeadingKeyword(script.sql, dialect);
   if (keyword === null) {
-    return 'the Pre-copy script must begin with its statement (a comment may come first)';
+    return `${wording.the} must begin with its statement (a comment may come first)`;
   }
   if (!allowed.includes(keyword)) {
-    return `a Pre-copy script on ${STORE_NAMES[dialect]} may not run ${keyword}; it may begin with ${allowed.join(', ')}`;
+    return `${wording.any} on ${STORE_NAMES[dialect]} may not run ${keyword}; it may begin with ${allowed.join(', ')}`;
   }
   const missing = sqlBindNames(script.sql, dialect).filter(
     (name) => !Object.prototype.hasOwnProperty.call(script.parameters, name),
   );
   if (missing.length > 0) {
     // Named without a prefix: sqlite also binds `@n`, `$n` and `?n` from the record.
-    return `the Pre-copy script binds ${missing.map((n) => `'${n}'`).join(', ')} with no value in Pre-copy bind values`;
+    return `${wording.the} binds ${missing.map((n) => `'${n}'`).join(', ')} with no value in ${wording.values}`;
   }
   return null;
+}
+
+/** Why `script` may not run on `dialect`'s sink, or `null` (`authoredStatementRefusal`). */
+export function preCopyScriptRefusal(script: PreCopyScript, dialect: SqlDialect): string | null {
+  return authoredStatementRefusal(
+    script,
+    dialect,
+    PRE_COPY_SCRIPT_STATEMENTS[dialect],
+    PRE_COPY_SCRIPT_WORDING,
+  );
 }
 
 /**

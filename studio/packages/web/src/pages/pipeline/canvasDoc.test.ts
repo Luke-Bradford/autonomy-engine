@@ -421,6 +421,27 @@ describe('writeAccessWarnings (#1600 OR41 C1b)', () => {
     conn('db', undefined, 'sqlite'),
   ];
 
+  it('#1600 OR41 C10a — names a Script with a Non-query block on a sqlite connection that does not allow writes', () => {
+    const script = (id: string, connectionId: string, type: string): Node => ({
+      ...node(id, { blocks: [{ type, sql: 'delete from t' }] }),
+      type: 'script',
+      connectionId,
+    });
+    const scripts = [...connections, conn('dbrw', true, 'sqlite')];
+    expect(
+      writeAccessWarnings(
+        [
+          script('a', 'db', 'nonQuery'),
+          script('b', 'db', 'query'),
+          script('c', 'dbrw', 'nonQuery'),
+        ],
+        scripts,
+      ),
+    ).toEqual([
+      "node 'a': the connection 'Conn db' does not allow writes, which a Non-query block needs",
+    ]);
+  });
+
   it('#1600 OR41 C6c-1a — names a folder log with no log connection, or one that does not allow writes', () => {
     const logged = (id: string, log?: string) =>
       copy(id, { source: 'rw', sink: 'rw', ...(log !== undefined && { log }) }, 'keep', {

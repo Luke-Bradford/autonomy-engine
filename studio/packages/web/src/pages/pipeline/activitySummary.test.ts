@@ -19,6 +19,7 @@ import {
   IF_ACTIVITY_TYPE,
   LLM_CALL_ACTIVITY_TYPE,
   LOOKUP_ACTIVITY_TYPE,
+  SCRIPT_ACTIVITY_TYPE,
   SET_VARIABLE_ACTIVITY_TYPE,
   SWITCH_ACTIVITY_TYPE,
   WAIT_ACTIVITY_TYPE,
@@ -138,6 +139,18 @@ const CASES: Record<string, [Node, string]> = {
       datasetIds: { source: 'ds_src', sink: 'ds_sink' },
     }),
     'orders.csv → orders table · overwrite',
+  ],
+  [SCRIPT_ACTIVITY_TYPE]: [
+    node(SCRIPT_ACTIVITY_TYPE, {
+      config: {
+        runAsOneTransaction: true,
+        blocks: [
+          { type: 'nonQuery', sql: 'delete from t' },
+          { type: 'query', sql: 'select 1' },
+        ],
+      },
+    }),
+    '2 blocks · one transaction',
   ],
   [LOOKUP_ACTIVITY_TYPE]: [
     node(LOOKUP_ACTIVITY_TYPE, { datasetIds: { source: 'ds_src' } }),

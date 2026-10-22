@@ -264,6 +264,9 @@ export const XLSX_MAX_ENTRIES = 16_384;
  * a whole batch of them. {@link LOOKUP_BATCH_ROWS} shrinks that batch; the
  * per-CELL residue is #1237, and it needs a bounded-cell read no driver offers
  * today.
+ *
+ * #1600 OR41 C10a — a Script's result sets are held to it too, across the whole
+ * script, for the same reason: they are outputs, and outputs are durable.
  */
 export const LOOKUP_BYTE_CAP = 1024 * 1024;
 

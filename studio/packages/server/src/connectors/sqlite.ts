@@ -10,6 +10,7 @@ import {
   COPY_ACTIVITY_TYPE,
   GET_METADATA_ACTIVITY_TYPE,
   LOOKUP_ACTIVITY_TYPE,
+  SCRIPT_ACTIVITY_TYPE,
   type DatasetAddress,
   type DatasetKind,
   type SqlParameterValue,
@@ -21,13 +22,14 @@ import { COPY_BATCH_ROWS, SQLITE_BUSY_TIMEOUT_MS } from '../limits.js';
 import {
   confineStorePath,
   findSqliteRelation,
+  normaliseRow,
   notASqliteKind,
+  openSqliteReadOnly,
   parseTableTarget,
   SQLITE_DATASET_KINDS,
   sqliteConnectionConfigSchema,
   storeFailure,
   type SqliteRow,
-  type SqliteValue,
 } from './sqlite-store.js';
 export {
   confineStorePath,
@@ -52,6 +54,7 @@ import { DatasetIoError } from './dataset-io-error.js';
 import { quoteIdentifier } from './sql-identifier.js';
 import { runCopyActivity } from './copy.js';
 import { runLookupActivity } from './lookup.js';
+import { runSqliteScript } from './script.js';
 import { runTableMetadata, type TableMetadataIo } from './table-metadata.js';
 import {
   emptyIncrementalPlan,
@@ -313,29 +316,6 @@ function statementFor(
 }
 
 /**
- * Normalise one column value.
- *
- * The database is opened with `defaultSafeIntegers(true)`, so every INTEGER
- * arrives as a `bigint`. That is not decoration: measured on 12.11.1, the
- * default `number` mode reads a stored `9007199254740993` back as
- * `9007199254740992` — a SILENT one-off corruption that M5's coercion matrix
- * could never recover, because by then the true value is already gone. Safe
- * integers make the store's value exact; this function then hands back a plain
- * `number` for everything inside `Number.MAX_SAFE_INTEGER` (which is every
- * ordinary id, count and timestamp) and keeps the `bigint` only where narrowing
- * would lose information. A consumer that sees a `bigint` is seeing a value a
- * `number` genuinely cannot hold.
- */
-function normaliseValue(value: unknown): SqliteValue {
-  if (typeof value === 'bigint') {
-    return value >= BigInt(Number.MIN_SAFE_INTEGER) && value <= BigInt(Number.MAX_SAFE_INTEGER)
-      ? Number(value)
-      : value;
-  }
-  return value as SqliteValue;
-}
-
-/**
  * #1221 M12 slice 2 — sqlite's half of {@link SourceIo}, built ONCE and shared
  * by the two activities that read a dataset.
  *
@@ -373,30 +353,6 @@ function sqliteSource(connectionConfig: z.infer<typeof sqliteConnectionConfigSch
         watermark,
       ),
   };
-}
-
-/**
- * The one READ-ONLY open every sqlite read uses: the path confined to the
- * connection's roots, the file required to exist (a missing store is a store
- * failure, never an empty one), and the busy timeout. Cancellation is checked
- * after the confinement's awaits and before the open.
- */
-async function openSqliteReadOnly(
-  cfg: z.infer<typeof sqliteConnectionConfigSchema>,
-  signal: AbortSignal | undefined,
-  abortMessage: string,
-): Promise<Database.Database> {
-  const dbPath = await confineStorePath(cfg.roots, cfg.path);
-  if (signal?.aborted) throw new DatasetIoError('cancelled', abortMessage);
-  try {
-    return new Database(dbPath, {
-      readonly: true,
-      fileMustExist: true,
-      timeout: SQLITE_BUSY_TIMEOUT_MS,
-    });
-  } catch (err) {
-    throw storeFailure(err, `cannot open the sqlite database at '${cfg.path}'`);
-  }
 }
 
 /**
@@ -532,10 +488,7 @@ export async function* readSqliteDatasetBatches(
             done = true;
             break;
           }
-          const row = next.value as Record<string, unknown>;
-          const normalised: SqliteRow = {};
-          for (const key of Object.keys(row)) normalised[key] = normaliseValue(row[key]);
-          batch.push(normalised);
+          batch.push(normaliseRow(next.value as Record<string, unknown>));
         }
       } catch (err) {
         throw storeFailure(err, 'the dataset statement failed mid-scan');
@@ -847,6 +800,20 @@ export const sqliteAdapter: ConnectorAdapter = {
         return;
       }
       yield* runLookupActivity(ctx, sqliteSource(cfg.data));
+      return;
+    }
+
+    // #1600 OR41 C10a — Script: authored SQL blocks, run in order on the store.
+    if (ctx.activityType === SCRIPT_ACTIVITY_TYPE) {
+      const cfg = sqliteConnectionConfigSchema.safeParse(ctx.connectionConfig);
+      if (!cfg.success) {
+        yield failed(
+          'permanent',
+          `invalid sqlite connection config: ${formatZodIssues(cfg.error.issues)}`,
+        );
+        return;
+      }
+      yield* runSqliteScript(ctx, cfg.data);
       return;
     }
 

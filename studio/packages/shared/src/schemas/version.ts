@@ -661,7 +661,9 @@
 // strict either, so a pre-C5b build strips `load` and copies EVERY selected file
 // on each run, where this build copies only the files changed since the last
 // successful one.
-export const CATALOG_VERSION = 71;
+// BUMP 71→72 for #1600 OR41 C10a: a new runnable type, `script`. A pre-C10a
+// build refuses the unknown type at import (C8a's reason).
+export const CATALOG_VERSION = 72;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

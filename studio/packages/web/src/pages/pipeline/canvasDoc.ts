@@ -2,6 +2,8 @@ import {
   COPY_ACTIVITY_TYPE,
   COPY_FILES_ACTIVITY_TYPE,
   DELETE_ACTIVITY_TYPE,
+  SCRIPT_ACTIVITY_TYPE,
+  SCRIPT_NON_QUERY_BLOCK,
   StrictNodeSchema,
   isInactive,
   validatePipelineDoc,
@@ -167,6 +169,8 @@ export function descriptionIssues(nodes: Node[]): string[] {
  * not an issue: the
  * connection is a separate, mutable row, and the run checks it at dispatch. A
  * `${}` or unknown connection id is skipped, as only the run knows it.
+ * C10a — and a Script with a Non-query block on a sqlite connection that does
+ * not allow writes.
  */
 export function writeAccessWarnings(
   nodes: Node[],
@@ -187,6 +191,23 @@ export function writeAccessWarnings(
         : [
             `node '${n.id}': the connection '${c.name}' does not allow writes, which a delete needs`,
           ];
+    }
+    // #1600 OR41 C10a — a Script with a Non-query block opens its store to
+    // write, and the run refuses a connection that does not allow it.
+    if (n.type === SCRIPT_ACTIVITY_TYPE) {
+      const c = n.connectionId === undefined ? undefined : byId.get(n.connectionId);
+      const blocks: unknown[] = Array.isArray(n.config['blocks']) ? n.config['blocks'] : [];
+      const writes = blocks.some(
+        (b) =>
+          typeof b === 'object' &&
+          b !== null &&
+          (b as { type?: unknown }).type === SCRIPT_NON_QUERY_BLOCK,
+      );
+      return writes && c?.kind === 'sqlite' && c.config['writable'] !== true
+        ? [
+            `node '${n.id}': the connection '${c.name}' does not allow writes, which a Non-query block needs`,
+          ]
+        : [];
     }
     if (n.type !== COPY_FILES_ACTIVITY_TYPE && n.type !== COPY_ACTIVITY_TYPE) return [];
     // #1600 OR41 C6c-1a — a folder log is written through its own connection,

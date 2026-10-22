@@ -45,6 +45,8 @@ describe('activity catalog', () => {
       'llm_call',
       // #1221 M12 slice 2 — `lookup`, the SOURCE-ONLY data-movement activity.
       'lookup',
+      // #1600 OR41 C10a — Script.
+      'script',
       // #844 V5 — the variable-writing control activities.
       'set_variable',
       'switch',

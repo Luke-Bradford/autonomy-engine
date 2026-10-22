@@ -39,6 +39,7 @@ import {
   FILTER_RESULT_OUTPUT,
   AGENT_TASK_ACTIVITY_TYPE,
   COPY_ACTIVITY_TYPE,
+  SCRIPT_ACTIVITY_TYPE,
   COPY_FILES_ACTIVITY_TYPE,
   IF_ACTIVITY_TYPE,
   IF_BRANCH_TRUE,
@@ -73,6 +74,7 @@ import {
   copyVerifyConsistencyIssue,
   preCopyScriptIssue,
 } from '../catalog/copy-config.js';
+import { scriptBlockIssues } from '../catalog/script-config.js';
 import type { GetMetadataField } from '../catalog/get-metadata-config.js';
 import {
   GET_METADATA_FIELD_TITLES,
@@ -3238,6 +3240,13 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
     }
     // #2 L11b — an `agent_task`'s optional structured `outputSchema` subset.
     if (node.type === AGENT_TASK_ACTIVITY_TYPE) validateAgentTaskOutput(node, errors);
+    // #1600 OR41 C10a — a Script block's SQL and Type are literal (§8). Replayed
+    // here because the schema gate drops an issue at a `${}` value.
+    if (node.type === SCRIPT_ACTIVITY_TYPE) {
+      for (const issue of scriptBlockIssues(node.config)) {
+        errors.push(`node.${node.id}.blocks[${issue.path[0]}].${issue.path[1]}: ${issue.message}`);
+      }
+    }
     // #996 §8 — a `copy`'s mapping column names must be LITERAL identifiers.
     if (node.type === COPY_ACTIVITY_TYPE) {
       validateCopyMappingIdentifiers(node, errors);

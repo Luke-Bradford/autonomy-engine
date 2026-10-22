@@ -45,6 +45,7 @@ export type ActivityCategory = (typeof ACTIVITY_CATEGORIES)[number];
  * Settings), so a Lookup opens on its Source (#1600 C7a); an activity whose
  * only or first tab is Settings is unaffected. It also follows `auth`, so Web
  * reads Request · Auth · Settings as catalogue §4.6 lists them (#1600 C11a).
+ * `script` follows `settings`, so Script reads Settings · Script (§4.5, C10a).
  *
  * Display-only metadata, like `description`: nothing persists it on a version,
  * so declaring or regrouping tabs never bumps `CATALOG_VERSION`.
@@ -56,6 +57,7 @@ export const ACTIVITY_TAB_KEYS = [
   'request',
   'auth',
   'settings',
+  'script',
   'model',
   'prompt',
   'tools',
@@ -68,6 +70,7 @@ export type ActivityTabKey = (typeof ACTIVITY_TAB_KEYS)[number];
 /** #1477 — each tab's label. The one place a tab's title is spelled. */
 export const ACTIVITY_TAB_TITLES: Readonly<Record<ActivityTabKey, string>> = {
   settings: 'Settings',
+  script: 'Script',
   source: 'Source',
   sink: 'Sink',
   mapping: 'Mapping',
@@ -186,6 +189,9 @@ export const HTTP_REQUEST_ACTIVITY_TYPE = 'http_request';
 
 /** #1600 OR41 C11a — the `web` activity type (catalogue §4.6), which `http_request` lowers to. */
 export const WEB_ACTIVITY_TYPE = 'web';
+
+/** #1600 OR41 C10a — the `script` activity type (catalogue §4.5): SQL blocks run in order. */
+export const SCRIPT_ACTIVITY_TYPE = 'script';
 
 /**
  * The `Node.type` of the `agent_task` execution activity (the agent-CLI

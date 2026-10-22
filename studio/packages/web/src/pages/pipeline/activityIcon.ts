@@ -5,6 +5,7 @@ import {
   Bot20Regular,
   BracesVariable20Regular,
   BranchFork20Regular,
+  CodeBlock20Regular,
   Clock20Regular,
   Copy20Regular,
   DatabaseArrowDown20Regular,
@@ -47,6 +48,8 @@ const BY_TYPE: Readonly<Record<string, Glyph>> = {
   http_request: Globe20Regular,
   // #1600 OR41 C11a — Web, which `http_request` lowers to (C11b): the same glyph.
   web: Globe20Regular,
+  // #1600 OR41 C10a — Script: SQL blocks.
+  script: CodeBlock20Regular,
   llm_call: Sparkle20Regular,
   agent_task: Bot20Regular,
   /* The catalog's ids are SHORTER than the titles they draw — `if`, not
