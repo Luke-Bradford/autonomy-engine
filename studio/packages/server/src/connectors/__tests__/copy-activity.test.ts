@@ -518,9 +518,7 @@ describe('copy activity — a failure is never a silent partial (§10)', () => {
     );
 
     const outputs = events.filter((e) => e.type === 'output');
-    expect(outputs.map((e) => (e.type === 'output' ? e.name : ''))).toEqual(
-      fullCopyOutputNames(),
-    );
+    expect(outputs.map((e) => (e.type === 'output' ? e.name : ''))).toEqual(fullCopyOutputNames());
     expect(events.indexOf(outputs[0] as ActivityEvent)).toBeLessThan(
       events.indexOf(terminal(events)),
     );
