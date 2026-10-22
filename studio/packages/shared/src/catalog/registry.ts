@@ -1589,8 +1589,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
     dispatchConfigSchema: lookupConfigSchema,
   },
   {
-    // #1600 OR41 C10a — catalogue §4.5, after ADF's Script activity. SQLite only
-    // so far; PostgreSQL is C10b, so the picker offers only what can run.
+    // #1600 OR41 C10a — catalogue §4.5, after ADF's Script activity, on SQLite;
+    // C10b-1 adds PostgreSQL. The picker offers only what can run.
     type: SCRIPT_ACTIVITY_TYPE,
     title: 'Script',
     description:
@@ -1608,15 +1608,15 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // A Non-query block changes the store, and a crash mid-script cannot tell
     // which blocks committed.
     idempotent: false,
-    connectionKinds: ['sqlite'],
+    connectionKinds: ['sqlite', 'postgres'],
     outputs: [
       out('resultSetCount', 'number'),
       // One `{rowCount, rows}` per Query block, in block order.
       out('resultSets', 'json'),
       // The rows the Non-query blocks changed, summed.
       out('recordsAffected', 'number'),
-      // Always `{}` on SQLite, which has no output parameters. Declared now so
-      // C10b's PostgreSQL Out parameters change no contract.
+      // Always `{}` so far: SQLite has no output parameters, and PostgreSQL's
+      // Out parameters are C10b-2. Declared now so they change no contract.
       out('outputParameters', 'json'),
       out('truncated', 'boolean'),
     ],

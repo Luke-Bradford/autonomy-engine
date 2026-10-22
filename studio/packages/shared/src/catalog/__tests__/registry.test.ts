@@ -86,6 +86,10 @@ describe('activity catalog', () => {
     }
   });
 
+  it('#1600 OR41 C10b-1 — script runs on a sqlite or a postgres connection', () => {
+    expect(getActivity('script')!.connectionKinds).toEqual(['sqlite', 'postgres']);
+  });
+
   it('http_request needs an http connection and declares its outputs', () => {
     const http = getActivity('http_request')!;
     expect(http.connectionKinds).toEqual(['http']);

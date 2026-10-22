@@ -203,7 +203,9 @@ export function writeAccessWarnings(
           b !== null &&
           (b as { type?: unknown }).type === SCRIPT_NON_QUERY_BLOCK,
       );
-      return writes && c?.kind === 'sqlite' && c.config['writable'] !== true
+      return writes &&
+        (c?.kind === 'sqlite' || c?.kind === 'postgres') &&
+        c.config['writable'] !== true
         ? [
             `node '${n.id}': the connection '${c.name}' does not allow writes, which a Non-query block needs`,
           ]
