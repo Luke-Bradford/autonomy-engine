@@ -1324,8 +1324,11 @@ const ENTRIES: ActivityCatalogEntry[] = [
       {
         key: 'source',
         bindings: ['sourceConnection'],
+        // #1600 OR41 C5b — Load leads the optional fields, as on a rows Copy's
+        // Source tab; the required Source path stays first (#1477).
         fields: [
           'sourcePath',
+          'load',
           'pathType',
           'wildcard',
           'recursive',
@@ -1368,6 +1371,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
       wildcard: [{ field: 'pathType', in: ['folder'] }],
       recursive: [{ field: 'pathType', in: ['folder'] }],
       fileListPath: [{ field: 'pathType', in: ['list'] }],
+      // C5b — Load Incremental sets the modified window itself.
+      modifiedStart: [{ field: 'load', in: ['full'] }],
+      modifiedEnd: [{ field: 'load', in: ['full'] }],
       moveTo: [{ field: 'afterCopy', in: ['move'] }],
       // C6d-2 — as in ADF, only a source of several files can skip one.
       skipMissingFiles: [{ field: 'pathType', in: ['folder', 'list'] }],
@@ -1407,12 +1413,28 @@ const ENTRIES: ActivityCatalogEntry[] = [
       ...copyMeasureOutputs(),
       // C6c-1a — the folder log's file, null when the log is not written to one.
       optionalOut('logPath', 'string'),
+      // C5b — `{old, new}` under Load Incremental, absent under Full.
+      optionalOut('watermark', 'json'),
     ],
-    // The thirteen a node saved before C6c-1a declares (C6f-2's), the twelve
-    // one saved before C6f-2 declares (C6f-1's), the nine one saved before
-    // C6f-1 declares (C1b's), and the seven one saved before C1b declares
-    // (C1a's), as written then.
+    // The fourteen a node saved before C5b declares (C6c-1a's), the thirteen
+    // one saved before C6c-1a declares (C6f-2's), the twelve one saved before
+    // C6f-2 declares (C6f-1's), the nine one saved before C6f-1 declares
+    // (C1b's), and the seven one saved before C1b declares (C1a's), as written
+    // then.
     formerOutputs: [
+      [
+        out('filesRead', 'number'),
+        out('filesWritten', 'number'),
+        out('filesSkipped', 'number'),
+        out('filesDeleted', 'number'),
+        out('filesMoved', 'number'),
+        out('bytesRead', 'number'),
+        out('bytesWritten', 'number'),
+        out('source', 'string'),
+        out('dest', 'string'),
+        ...copyMeasureOutputs(),
+        optionalOut('logPath', 'string'),
+      ],
       [
         out('filesRead', 'number'),
         out('filesWritten', 'number'),

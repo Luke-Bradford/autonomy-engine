@@ -5,7 +5,12 @@ import { interpolationMode } from '../engine/expr.js';
 import { isSet } from './config-value.js';
 import { SqlParameterValueSchema } from './dataset-config.js';
 import { nocaseFold } from '../datamove/schema-drift.js';
-import { COPY_MAX_PARALLEL_COPIES, parallelCopiesField } from './copy-files-config.js';
+import {
+  COPY_MAX_PARALLEL_COPIES,
+  copyLoadLiteralIssue,
+  copyLoadSchema,
+  parallelCopiesField,
+} from './copy-files-config.js';
 import {
   sessionLogConfigFields,
   sessionLogConnectionFolderField,
@@ -363,13 +368,6 @@ export function copyPartitionIssues(
 }
 
 /**
- * #1600 OR41 C5a — catalogue §4.1's Load: Full reads every source row,
- * Incremental only the rows above the old watermark.
- */
-export const COPY_LOAD_OPTIONS = ['full', 'incremental'] as const;
-export const copyLoadSchema = z.enum(COPY_LOAD_OPTIONS);
-
-/**
  * #1600 OR41 C5a — where an Incremental load's old watermark comes from:
  * Automatic is the value studio stored when this activity last committed a copy
  * of the same source, Expression is a value the pipeline supplies (a Lookup on a
@@ -393,11 +391,9 @@ export function copyIncrementalIssues(
   const from = config['watermarkFrom'] ?? 'automatic';
   const column = config['watermarkColumnName'];
   const old = config['watermarkOld'];
-  if (typeof load === 'string' && load.includes('${')) {
-    issues.push({
-      field: 'load',
-      message: 'Load stays literal, because it decides which fields apply',
-    });
+  const literal = copyLoadLiteralIssue(load);
+  if (literal !== undefined) {
+    issues.push(literal);
     return issues;
   }
   if (typeof from === 'string' && from.includes('${')) {

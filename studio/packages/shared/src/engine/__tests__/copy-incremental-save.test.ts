@@ -69,3 +69,37 @@ describe('Copy Load Incremental at save (C5a)', () => {
     expect(errs.some((e) => e.includes('Load Incremental needs a watermark column'))).toBe(true);
   });
 });
+
+/**
+ * #1600 OR41 C5b — a Files as-is copy's Load Incremental is always Automatic
+ * (the explicit window is Load Full with Modified between), so it has the same
+ * rule: never inside a ForEach or an Until. And Load stays literal at save,
+ * where an expression would otherwise be left for dispatch.
+ */
+describe('Copy · Files as-is Load Incremental at save (C5b)', () => {
+  const files = (config: Record<string, unknown>): Node => ({
+    id: 'c',
+    type: 'copy_files',
+    config: { sourcePath: 'in', ...config },
+    connectionIds: { source: 'src', sink: 'snk' },
+    position: { x: 0, y: 0 },
+  });
+  const FILES_REFUSAL = 'node.c.load: Load Incremental cannot run inside a ForEach or Until';
+
+  it('saves Incremental outside an iterating container, and Full inside one', () => {
+    expect(validate([files({ load: 'incremental' })])).toEqual([]);
+    expect(validate([files({})], [fe(['c'])])).toEqual([]);
+  });
+
+  it('refuses Incremental inside a ForEach or an Until', () => {
+    for (const c of [fe(['c']), until(['c'])]) {
+      const errs = validate([files({ load: 'incremental' })], [c]);
+      expect(errs.some((e) => e.startsWith(FILES_REFUSAL))).toBe(true);
+    }
+  });
+
+  it('refuses an expression in Load', () => {
+    const errs = validate([files({ load: '${pipeline().parameters.l}' })]);
+    expect(errs).toContain('node.c.load: Load stays literal, because it decides which fields apply');
+  });
+});

@@ -39,6 +39,7 @@ import {
   FILTER_RESULT_OUTPUT,
   AGENT_TASK_ACTIVITY_TYPE,
   COPY_ACTIVITY_TYPE,
+  COPY_FILES_ACTIVITY_TYPE,
   IF_ACTIVITY_TYPE,
   IF_BRANCH_TRUE,
   IF_BRANCH_FALSE,
@@ -78,6 +79,7 @@ import {
   untickedGetMetadataFields,
 } from '../catalog/get-metadata-config.js';
 import { inlineDatasetConfigIssues, inlineQuerySqlIssue } from '../catalog/dataset-config.js';
+import { copyFilesIncrementalIssues } from '../catalog/copy-files-config.js';
 import { SecretRefSchema, isSecretRef } from '../schemas/secret-ref.js';
 import type { ContainerKind, Output } from '../schemas/pipeline.js';
 import type { EvalIn, FnSpec, SigType } from './functions.js';
@@ -3263,6 +3265,24 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
           `node.${node.id}.watermarkFrom: Watermark from Automatic cannot run inside a ForEach ` +
             'or Until — an iteration does not identify what it copied; use Expression with a ' +
             'watermark per item',
+        );
+      }
+    }
+    // #1600 C5b — a Files as-is copy's Load stays literal (the dispatch schema
+    // would leave a `${}` one for dispatch), and Incremental, always Automatic
+    // there, keys its stored time by the activity and its folders, which an
+    // iteration does not identify.
+    if (node.type === COPY_FILES_ACTIVITY_TYPE) {
+      for (const found of copyFilesIncrementalIssues(node.config)) {
+        errors.push(`node.${node.id}.${found.field}: ${found.message}`);
+      }
+      if (
+        node.config['load'] === 'incremental' &&
+        ownedByKind(node.id, containers, ['foreach', 'loop'])
+      ) {
+        errors.push(
+          `node.${node.id}.load: Load Incremental cannot run inside a ForEach or Until — an ` +
+            'iteration does not identify what it copied; use Load Full with Modified between per item',
         );
       }
     }
