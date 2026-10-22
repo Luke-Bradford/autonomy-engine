@@ -107,6 +107,16 @@ async function run(ctx: ActivityContext): Promise<ActivityEvent[]> {
   return events;
 }
 
+/**
+ * The catalog's outputs a FULL copy yields, in order: every declared one but
+ * C5a's `watermark`, which a copy yields under Load Incremental only, so a copy
+ * saved before C5a reports exactly the outputs it did.
+ */
+const fullCopyOutputNames = (): string[] =>
+  getActivity('copy')!
+    .outputs.map((o) => o.name)
+    .filter((name) => name !== 'watermark');
+
 const terminal = (events: ActivityEvent[]): ActivityEvent =>
   events[events.length - 1] as ActivityEvent;
 
@@ -147,7 +157,7 @@ describe('copy activity — the happy path contract', () => {
     });
     // #1600 OR41 C6f-1 — the catalog's contract, name for name and in order:
     // an output the entry declares and the copy does not yield fails the node.
-    expect(Object.keys(outputs)).toEqual(getActivity('copy')!.outputs.map((o) => o.name));
+    expect(Object.keys(outputs)).toEqual(fullCopyOutputNames());
     // A copy whose store kept exactly what it was sent has nothing to say.
     expect(events.filter((e) => e.type === 'warned')).toEqual([]);
   });
@@ -509,7 +519,7 @@ describe('copy activity — a failure is never a silent partial (§10)', () => {
 
     const outputs = events.filter((e) => e.type === 'output');
     expect(outputs.map((e) => (e.type === 'output' ? e.name : ''))).toEqual(
-      getActivity('copy')!.outputs.map((o) => o.name),
+      fullCopyOutputNames(),
     );
     expect(events.indexOf(outputs[0] as ActivityEvent)).toBeLessThan(
       events.indexOf(terminal(events)),
@@ -1655,7 +1665,7 @@ describe('copy activity — the session log, to a folder (#1600 OR41 C6c-1b)', (
     ]);
     const outputs = outputsOf(events);
     expect(outputs['logPath']).toBe(join(await realpath(join(logs, 'runs')), (await files())[0]!));
-    expect(Object.keys(outputs)).toEqual(getActivity('copy')!.outputs.map((o) => o.name));
+    expect(Object.keys(outputs)).toEqual(fullCopyOutputNames());
   });
 
   it('keeps every line past the run log’s cap', async () => {
@@ -2479,7 +2489,7 @@ describe('copy activity — Load Incremental (#1600 OR41 C5a)', () => {
   });
 
   it.each([
-    ['an integer past 2^53', 'INSERT INTO t VALUES (9007199254740993, \'big\')', /past 2\^53/],
+    ['an integer past 2^53', "INSERT INTO t VALUES (9007199254740993, 'big')", /past 2\^53/],
     ['a blob', "UPDATE t SET name = x'00' WHERE id = 3", /holds a blob/],
   ])('refuses %s as a watermark before the sink writes', async (_label, sql, message) => {
     const s = stores();
@@ -2507,7 +2517,16 @@ describe('copy activity — Load Incremental (#1600 OR41 C5a)', () => {
   it('refuses a column the source does not have before the sink writes', async () => {
     const s = stores();
     const end = terminal(
-      await run(copyCtx({ ...s, input: incremental({ watermarkColumnName: 'nope', watermarkFrom: 'expression', watermarkOld: 1 }) })),
+      await run(
+        copyCtx({
+          ...s,
+          input: incremental({
+            watermarkColumnName: 'nope',
+            watermarkFrom: 'expression',
+            watermarkOld: 1,
+          }),
+        }),
+      ),
     );
     expect(end).toMatchObject({ type: 'failed', kind: 'permanent' });
     expect(end.type === 'failed' ? end.error : '').toMatch(/watermark column 'nope'/);

@@ -840,14 +840,22 @@ export async function planPostgresIncremental(
       );
     }
     const max = bounded(null);
-    const found = await runBound(client, `SELECT max(${column})::text AS hi FROM ${from}${max.where}`, {
-      sql: '',
-      values: max.values,
-    });
+    const found = await runBound(
+      client,
+      `SELECT max(${column})::text AS hi FROM ${from}${max.where}`,
+      {
+        sql: '',
+        values: max.values,
+      },
+    );
     hi = found.rows[0]?.['hi'] ?? null;
     await client.query('COMMIT');
   } catch (err) {
-    throw readFailure(err, `the watermark column '${watermark.column}' could not be read`, read.secret);
+    throw readFailure(
+      err,
+      `the watermark column '${watermark.column}' could not be read`,
+      read.secret,
+    );
   } finally {
     try {
       await client.end();

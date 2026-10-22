@@ -84,7 +84,11 @@ describe.skipIf(LIVE_HOST === undefined)('Load Incremental against a live postgr
     const first = await planned('table', { table: 'c5a_events' }, { column: 'at', old: null });
     expect(first.names).toEqual(['a', 'b']);
     expect(first.next).toBe('2026-10-01 10:00:00.000002+00');
-    const second = await planned('table', { table: 'c5a_events' }, { column: 'at', old: first.next });
+    const second = await planned(
+      'table',
+      { table: 'c5a_events' },
+      { column: 'at', old: first.next },
+    );
     expect(second).toEqual({ next: first.next, names: [] });
     const fromA = await planned(
       'table',

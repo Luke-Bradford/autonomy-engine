@@ -394,7 +394,10 @@ export function copyIncrementalIssues(
   const column = config['watermarkColumnName'];
   const old = config['watermarkOld'];
   if (typeof load === 'string' && load.includes('${')) {
-    issues.push({ field: 'load', message: 'Load stays literal, because it decides which fields apply' });
+    issues.push({
+      field: 'load',
+      message: 'Load stays literal, because it decides which fields apply',
+    });
     return issues;
   }
   if (typeof from === 'string' && from.includes('${')) {

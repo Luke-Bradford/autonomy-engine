@@ -12,13 +12,27 @@ describe('copyWatermarkSourceKey', () => {
     config,
     columns: [],
   });
-  const base = { connectionId: 'conn_a', dataset: dataset({ sql: 'SELECT 1', parameters: { n: 1 } }), column: 'm' };
+  const base = {
+    connectionId: 'conn_a',
+    dataset: dataset({ sql: 'SELECT 1', parameters: { n: 1 } }),
+    column: 'm',
+  };
   const key = copyWatermarkSourceKey(base);
 
   it('changes with the connection, the config, a bind value or the column', () => {
     expect(copyWatermarkSourceKey({ ...base, connectionId: 'conn_b' })).not.toBe(key);
-    expect(copyWatermarkSourceKey({ ...base, dataset: dataset({ sql: 'SELECT 2', parameters: { n: 1 } }) })).not.toBe(key);
-    expect(copyWatermarkSourceKey({ ...base, dataset: dataset({ sql: 'SELECT 1', parameters: { n: 2 } }) })).not.toBe(key);
+    expect(
+      copyWatermarkSourceKey({
+        ...base,
+        dataset: dataset({ sql: 'SELECT 2', parameters: { n: 1 } }),
+      }),
+    ).not.toBe(key);
+    expect(
+      copyWatermarkSourceKey({
+        ...base,
+        dataset: dataset({ sql: 'SELECT 1', parameters: { n: 2 } }),
+      }),
+    ).not.toBe(key);
     expect(copyWatermarkSourceKey({ ...base, column: 'other' })).not.toBe(key);
   });
 
@@ -26,7 +40,10 @@ describe('copyWatermarkSourceKey', () => {
     expect(
       copyWatermarkSourceKey({
         ...base,
-        dataset: { ...dataset({ parameters: { n: 1 }, sql: 'SELECT 1', queryTimeoutSeconds: 60 }), name: 'renamed' },
+        dataset: {
+          ...dataset({ parameters: { n: 1 }, sql: 'SELECT 1', queryTimeoutSeconds: 60 }),
+          name: 'renamed',
+        },
       }),
     ).toBe(key);
   });

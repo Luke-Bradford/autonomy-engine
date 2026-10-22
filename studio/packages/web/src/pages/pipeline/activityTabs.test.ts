@@ -35,6 +35,10 @@ describe('nodeTypeTabs (#1477)', () => {
         key: 'source',
         label: 'Source',
         fields: [
+          'load',
+          'watermarkColumnName',
+          'watermarkFrom',
+          'watermarkOld',
           'partitionOption',
           'partitionColumnName',
           'partitionLowerBound',

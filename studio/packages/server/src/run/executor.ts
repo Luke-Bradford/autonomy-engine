@@ -507,7 +507,10 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     command: Extract<ExecutorCommand, { type: 'dispatchNode' }>,
     datasets: ActivityContext['datasets'],
     runId: string,
-  ): { lease: CopyWatermarkLease } | { error: { error: string; kind: FailureKind; code?: string } } | null {
+  ):
+    | { lease: CopyWatermarkLease }
+    | { error: { error: string; kind: FailureKind; code?: string } }
+    | null {
     const input = command.preparedInput;
     const column = input['watermarkColumnName'];
     if (

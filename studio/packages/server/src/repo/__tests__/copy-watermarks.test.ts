@@ -19,8 +19,16 @@ describe('copy watermarks repo', () => {
     const { db } = freshDb();
     const p = createPipeline(db, { ownerId: 'local', name: 'p' });
     expect(getCopyWatermark(db, key(p.id))).toEqual({ found: false });
-    putCopyWatermark(db, { ...key(p.id), column: 'm', value: '2026-10-22 10:00:00+00', runId: 'run_1' });
-    expect(getCopyWatermark(db, key(p.id))).toEqual({ found: true, value: '2026-10-22 10:00:00+00' });
+    putCopyWatermark(db, {
+      ...key(p.id),
+      column: 'm',
+      value: '2026-10-22 10:00:00+00',
+      runId: 'run_1',
+    });
+    expect(getCopyWatermark(db, key(p.id))).toEqual({
+      found: true,
+      value: '2026-10-22 10:00:00+00',
+    });
   });
 
   it('replaces the value on the next commit and keeps numbers as numbers', () => {

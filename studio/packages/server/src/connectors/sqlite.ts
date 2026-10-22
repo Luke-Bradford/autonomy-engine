@@ -53,7 +53,12 @@ import { quoteIdentifier } from './sql-identifier.js';
 import { runCopyActivity } from './copy.js';
 import { runLookupActivity } from './lookup.js';
 import { runTableMetadata, type TableMetadataIo } from './table-metadata.js';
-import { emptyIncrementalPlan, type IncrementalPlan, type IncrementalRead, type SourceIo } from './source-io.js';
+import {
+  emptyIncrementalPlan,
+  type IncrementalPlan,
+  type IncrementalRead,
+  type SourceIo,
+} from './source-io.js';
 // #1165 M7 slice 2 — §9's batch-yield primitive, shared with the `delimited`
 // reader rather than duplicated (the macrotask choice is not the obvious one).
 import { yieldToEventLoop } from './scheduling.js';
@@ -146,7 +151,11 @@ export interface SqliteDatasetRead {
   /** Honoured at BATCH BOUNDARIES (§10) — a run cancel stops the next pull. */
   readonly signal?: AbortSignal;
   /** #1600 OR41 C5a — an Incremental read's bounds: `old < column <= next`. */
-  readonly range?: { readonly column: string; readonly old: SqlParameterValue; readonly next: SqlParameterValue };
+  readonly range?: {
+    readonly column: string;
+    readonly old: SqlParameterValue;
+    readonly next: SqlParameterValue;
+  };
 }
 
 /** #1600 OR41 C5a — the bind names the watermark bounds take beside a query's own. */

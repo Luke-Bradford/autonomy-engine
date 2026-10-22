@@ -20,7 +20,8 @@ const copy = (config: Record<string, unknown>): Node => ({
 const validate = (nodes: Node[], containers: Container[] = []) =>
   validatePipelineDoc({ params: [], nodes, edges: [], containers, variables: [] });
 const AUTOMATIC = { load: 'incremental', watermarkColumnName: 'm' };
-const REFUSAL = 'node.c.watermarkFrom: Watermark from Automatic cannot run inside a ForEach or Until';
+const REFUSAL =
+  'node.c.watermarkFrom: Watermark from Automatic cannot run inside a ForEach or Until';
 const fe = (children: string[]): Container => ({
   id: 'fe',
   kind: 'foreach',
@@ -46,7 +47,11 @@ describe('Copy Load Incremental at save (C5a)', () => {
       [copy(AUTOMATIC)],
       [fe(['st']), { id: 'st', kind: 'stage', children: ['c'] } as Container],
     );
-    for (const errs of [validate([copy(AUTOMATIC)], [fe(['c'])]), validate([copy(AUTOMATIC)], [until(['c'])]), nested]) {
+    for (const errs of [
+      validate([copy(AUTOMATIC)], [fe(['c'])]),
+      validate([copy(AUTOMATIC)], [until(['c'])]),
+      nested,
+    ]) {
       expect(errs.some((e) => e.startsWith(REFUSAL))).toBe(true);
     }
   });

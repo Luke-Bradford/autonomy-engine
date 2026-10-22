@@ -6332,7 +6332,13 @@ describe('createExecutor — #1600 OR41 C5a: Copy Load Incremental', () => {
   ): Node => ({
     id: 'copy1',
     type: 'copy',
-    config: { mapping, mode: 'append', load: 'incremental', watermarkColumnName: 'modified_at', ...config },
+    config: {
+      mapping,
+      mode: 'append',
+      load: 'incremental',
+      watermarkColumnName: 'modified_at',
+      ...config,
+    },
     connectionIds: { source: sourceConn, sink: sinkConn },
     datasetIds: { sink: sinkDs },
     inlineDatasets: { source: inline },
@@ -6372,13 +6378,19 @@ describe('createExecutor — #1600 OR41 C5a: Copy Load Incremental', () => {
   it('Automatic over a query: the statement is wrapped, a line comment and a trailing `;` included', async () => {
     const { db, sourceConn, sinkConn, sinkDs, insert, staged } = await seedStores();
     const pvId = seedVersion(db, [
-      copyNode(sourceConn, sinkConn, sinkDs, {}, {
-        kind: 'query',
-        config: {
-          sql: 'SELECT id, modified_at FROM orders\nWHERE id <> :skip -- not 1\n;',
-          parameters: { skip: 1 },
+      copyNode(
+        sourceConn,
+        sinkConn,
+        sinkDs,
+        {},
+        {
+          kind: 'query',
+          config: {
+            sql: 'SELECT id, modified_at FROM orders\nWHERE id <> :skip -- not 1\n;',
+            parameters: { skip: 1 },
+          },
         },
-      }),
+      ),
     ]);
     const first = seedRun(db, pvId);
     const status = (await startRun(deps(db), first)).status;
@@ -6394,7 +6406,12 @@ describe('createExecutor — #1600 OR41 C5a: Copy Load Incremental', () => {
     const { db, sourceConn, sinkConn, sinkDs, staged } = await seedStores();
     const pvId = seedVersion(
       db,
-      [copyNode(sourceConn, sinkConn, sinkDs, { watermarkFrom: 'expression', watermarkOld: '${params.wm}' })],
+      [
+        copyNode(sourceConn, sinkConn, sinkDs, {
+          watermarkFrom: 'expression',
+          watermarkOld: '${params.wm}',
+        }),
+      ],
       [{ name: 'wm', type: 'number', required: false, default: 100 }],
     );
     const run = seedRun(db, pvId);
@@ -6418,7 +6435,11 @@ describe('createExecutor — #1600 OR41 C5a: Copy Load Incremental', () => {
     const held = acquireCopyWatermark(db, {
       pipelineId: getPipelineVersion(db, pvId)!.pipelineId,
       nodeId: 'copy1',
-      sourceKey: copyWatermarkSourceKey({ connectionId: sourceConn, dataset: source, column: 'modified_at' }),
+      sourceKey: copyWatermarkSourceKey({
+        connectionId: sourceConn,
+        dataset: source,
+        column: 'modified_at',
+      }),
       column: 'modified_at',
       runId: 'run_other',
     });
@@ -6441,13 +6462,19 @@ describe('createExecutor — #1600 OR41 C5a: Copy Load Incremental', () => {
     const pvId = seedVersion(
       db,
       [
-        copyNode(sourceConn, sinkConn, sinkDs, {}, {
-          kind: 'query',
-          config: {
-            sql: 'SELECT id, modified_at FROM orders WHERE id >= :min',
-            parameters: { min: '${params.min}' },
+        copyNode(
+          sourceConn,
+          sinkConn,
+          sinkDs,
+          {},
+          {
+            kind: 'query',
+            config: {
+              sql: 'SELECT id, modified_at FROM orders WHERE id >= :min',
+              parameters: { min: '${params.min}' },
+            },
           },
-        }),
+        ),
       ],
       [{ name: 'min', type: 'number', required: false, default: 0 }],
     );

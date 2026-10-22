@@ -736,7 +736,11 @@ describe('incremental load (#1600 OR41 C5a)', () => {
   it('takes Incremental with a column, Automatic or Expression', () => {
     expect(issues(incremental)).toEqual([]);
     expect(
-      issues({ ...incremental, watermarkFrom: 'expression', watermarkOld: '${nodes.l.output.firstRow.wm}' }),
+      issues({
+        ...incremental,
+        watermarkFrom: 'expression',
+        watermarkOld: '${nodes.l.output.firstRow.wm}',
+      }),
     ).toEqual([]);
   });
 
@@ -769,7 +773,10 @@ describe('incremental load (#1600 OR41 C5a)', () => {
       { field: 'load', message: 'Load stays literal, because it decides which fields apply' },
     ]);
     expect(copyIncrementalIssues({ ...incremental, watermarkFrom: '${params.f}' })).toEqual([
-      { field: 'watermarkFrom', message: 'Watermark from stays literal, because it decides which fields apply' },
+      {
+        field: 'watermarkFrom',
+        message: 'Watermark from stays literal, because it decides which fields apply',
+      },
     ]);
     expect(issues({ ...incremental, watermarkColumnName: '${params.c}' })).toEqual([
       'watermarkColumnName: the watermark column stays literal, so a column name never comes from an expression',
