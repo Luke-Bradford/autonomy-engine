@@ -55,6 +55,15 @@ export const SCRIPT_CAPTURE_MODES = ['off', 'firstRows'] as const;
 export const scriptCaptureSchema = z.enum(SCRIPT_CAPTURE_MODES);
 export type ScriptCapture = z.infer<typeof scriptCaptureSchema>;
 
+/**
+ * #1600 OR41 C10b-2b — the longest *Block timeout* (ADF's
+ * `scriptBlockExecutionTimeout`): a day. pg's client timer is a `setTimeout`,
+ * which fires at once past 2^31-1 ms (about 24.8 days), so the bound keeps it
+ * well clear of that. The connection's Statement timeout caps it anyway: a
+ * Block timeout only ever lowers it (`postgres-script.ts`).
+ */
+export const SCRIPT_MAX_BLOCK_TIMEOUT_SECONDS = 86_400;
+
 /** The most blocks one Script may hold. ADF names none; a bound keeps one node's log bounded. */
 export const SCRIPT_MAX_BLOCKS = 50;
 
@@ -133,6 +142,23 @@ const scriptInputShape = <B extends z.ZodType>(bindValue: B) =>
           firstRows: `First ${SCRIPT_RESULT_ROW_CAP} rows`,
         }),
       }),
+      // C10b-2b — ADF's `logSettings` (absent is logging off); PostgreSQL only.
+      captureMessages: presented(z.boolean().default(false), {
+        title: 'Capture messages',
+        description:
+          "Keeps the server's notices and warnings (RAISE NOTICE) in outputLogs, up to 1 MiB, when the script succeeds.",
+      }),
+      // C10b-2b — ADF's `scriptBlockExecutionTimeout`; PostgreSQL only. Blank
+      // keeps the connection's Statement timeout, which it can only lower.
+      blockTimeoutSeconds: presented(
+        z.number().int().positive().max(SCRIPT_MAX_BLOCK_TIMEOUT_SECONDS).optional(),
+        {
+          title: 'Timeout per block',
+          unit: 'seconds',
+          description:
+            "Limits each statement the script runs: every block, and its BEGIN and COMMIT. Blank uses the connection's Statement timeout (30 s unless set there); a longer value has no effect.",
+        },
+      ),
       blocks: presented(
         z
           .array(

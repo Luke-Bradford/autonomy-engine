@@ -88,7 +88,9 @@ const HELP_LIMITS: Record<string, number> = {
   Lookup: 10,
   // #1600 OR41 C10a — Script, measured: the pane's own and General's, and
   // one on each Settings field, Script blocks, its SQL and its Parameters.
-  Script: 9,
+  // +2 for C10b-2b's Capture messages and Block timeout, drawn while no
+  // connection is bound (a postgres one keeps them, a sqlite one hides them).
+  Script: 11,
   'Write file': 7,
   'Agent task': 8,
   'LLM call': 15,

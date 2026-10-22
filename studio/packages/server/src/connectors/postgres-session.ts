@@ -103,6 +103,24 @@ export interface PostgresClient {
    * partitioned read's snapshot holder) listens. Optional, so a fake need not.
    */
   on?(event: 'error', listener: (err: Error) => void): unknown;
+  /**
+   * #1600 OR41 C10b-2b — `pg.Client` emits `notice` for each message the server
+   * sends while a statement runs (RAISE NOTICE, a WARNING, `DROP … IF EXISTS`'s
+   * "skipping"). A Script under *Capture messages* listens.
+   */
+  on?(event: 'notice', listener: (notice: PostgresNotice) => void): unknown;
+}
+
+/**
+ * The fields of a server message a Script keeps (pg-protocol 1.16's
+ * `NoticeMessage`). `severity` is the localised one (`S`); pg does not parse the
+ * untranslated `V`.
+ */
+export interface PostgresNotice {
+  readonly severity?: string | undefined;
+  readonly message?: string | undefined;
+  readonly detail?: string | undefined;
+  readonly hint?: string | undefined;
 }
 
 /**
@@ -283,6 +301,19 @@ export function isTransientPostgresCode(code: string): boolean {
  * verdict would retry the copy from row 0 into rows that are already there.
  */
 const PG_CLIENT_QUERY_TIMEOUT_MESSAGE = 'Query read timeout';
+
+/**
+ * #1600 OR41 C10b-2b — whether a `pg` throw is a statement timeout: the
+ * server's `57014` or pg's own code-less client timer. A Script names its Block
+ * timeout when it was the bound. (`57014` is also a `pg_cancel_backend`, which
+ * nothing here sends, or a lower `statement_timeout` a block set through
+ * `set_config`, which then reads as the Timeout per block.)
+ */
+export function isPostgresStatementTimeout(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (typeof code === 'string') return code === QUERY_CANCELED;
+  return err instanceof Error && err.message === PG_CLIENT_QUERY_TIMEOUT_MESSAGE;
+}
 
 /** Whether a `pg` throw is retryable: a named code, or, on a read only, pg's own
  * code-less client query timeout. */

@@ -19,6 +19,7 @@ import {
   type AuthoredStatementWording,
   type PreCopyScript,
 } from './pre-copy-script.js';
+import { redactSecrets } from './redact.js';
 import { yieldToEventLoop } from './scheduling.js';
 import { attachedDatabases, openSqliteWriter } from './sqlite-sink.js';
 import {
@@ -208,6 +209,76 @@ export class ResultCapture {
     return this.cause === 'rows'
       ? `a result set kept its first ${SCRIPT_RESULT_ROW_CAP} rows; rowCount counts them all`
       : `the result sets reached the ${LOOKUP_BYTE_CAP}-byte cap a script may keep, so later rows were counted and not kept`;
+  }
+}
+
+/**
+ * #1600 OR41 C10b-2b — the server's messages a script keeps under *Capture
+ * messages*, as `outputLogs`: one entry per message, `SEVERITY: message`, its
+ * DETAIL and HINT on the lines after it as psql prints them, the entries joined
+ * by newlines. The connection's secret is scrubbed from each.
+ *
+ * Bounded by `LOOKUP_BYTE_CAP` of its own, measured as the output will be
+ * serialised (a newline costs two bytes), since outputs are durable. The cap
+ * LATCHES, so what is kept is a prefix of whole messages. A message past it is
+ * dropped, never cut, and never fails the script (ADF: "any error caused by log
+ * won't fail the activity"). SQLite sends no messages, so its stays empty.
+ */
+export class MessageCapture {
+  private readonly entries: string[] = [];
+  private bytes = 2; // the serialised string's quotes
+  private spent = false;
+
+  constructor(private readonly secret: string | null = null) {}
+
+  add(notice: {
+    readonly severity?: string | undefined;
+    readonly message?: string | undefined;
+    readonly detail?: string | undefined;
+    readonly hint?: string | undefined;
+  }): void {
+    if (this.spent) return;
+    const lines = [`${notice.severity ?? 'NOTICE'}: ${notice.message ?? ''}`];
+    if (notice.detail !== undefined) lines.push(`DETAIL: ${notice.detail}`);
+    if (notice.hint !== undefined) lines.push(`HINT: ${notice.hint}`);
+    // Scrubbed first, since the scrub can change the length. A string's UTF-16
+    // length never exceeds its serialised UTF-8 size, so an entry this long
+    // cannot fit and is refused before it is serialised (#1224's lower bound,
+    // as `keepRowWithin` does).
+    const entry = redactSecrets(lines.join('\n'), [this.secret]);
+    if (this.bytes + entry.length > LOOKUP_BYTE_CAP) {
+      this.spent = true;
+      return;
+    }
+    // The entry serialised, less its quotes, plus the escaped newline before it.
+    const size = Buffer.byteLength(JSON.stringify(entry)) - 2 + (this.entries.length > 0 ? 2 : 0);
+    if (this.bytes + size > LOOKUP_BYTE_CAP) {
+      this.spent = true;
+      return;
+    }
+    this.entries.push(entry);
+    this.bytes += size;
+  }
+
+  /**
+   * A message that could not be kept for any other reason: it latches as the
+   * cap does, so the loss is reported as a truncation rather than unseen.
+   */
+  abandon(): void {
+    this.spent = true;
+  }
+
+  get truncated(): boolean {
+    return this.spent;
+  }
+
+  /** The prose for a truncation, naming the bound, never a message. */
+  reason(): string {
+    return `the server's messages reached the ${LOOKUP_BYTE_CAP}-byte cap outputLogs may keep, so later messages were not kept`;
+  }
+
+  toOutput(): string {
+    return this.entries.join('\n');
   }
 }
 
@@ -412,6 +483,16 @@ export async function* runSqliteScript(
   }
   const config = parsed.data;
 
+  // C10b-2b — better-sqlite3 runs a statement synchronously and this SQLite
+  // omits the progress callback, so nothing could stop a block at the limit.
+  if (config.blockTimeoutSeconds !== undefined) {
+    yield failed(
+      'permanent',
+      'SQLite cannot interrupt a running statement, so it cannot honour a Timeout per block; clear Timeout per block, or run the script on a postgres connection',
+    );
+    return;
+  }
+
   // Every block is checked before the store is opened, so nothing runs when a
   // later block is refused.
   for (const [i, block] of config.blocks.entries()) {
@@ -497,14 +578,25 @@ export async function* runSqliteScript(
 /** The `outputParameters` output: each Out and In-out value by name (C10b-2a). */
 export type OutputParameters = Record<string, unknown>;
 
-/** A finished script's events, on either store: the truncation warning, then its outputs. */
+/**
+ * A finished script's events, on either store: a warning for each truncation
+ * (result sets, then messages), then its outputs.
+ */
 export function* scriptSucceeded(
   capture: ResultCapture,
   recordsAffected: number,
   outputParameters: OutputParameters = {},
+  messages: MessageCapture = new MessageCapture(),
 ): Generator<ActivityEvent> {
   if (capture.truncated) {
     yield { type: 'warned', code: WARNING_CODES.SCRIPT_RESULT_TRUNCATED, reason: capture.reason() };
+  }
+  if (messages.truncated) {
+    yield {
+      type: 'warned',
+      code: WARNING_CODES.SCRIPT_MESSAGES_TRUNCATED,
+      reason: messages.reason(),
+    };
   }
   yield {
     type: 'succeeded',
@@ -514,7 +606,9 @@ export function* scriptSucceeded(
       recordsAffected,
       // PostgreSQL's Out and In-out parameters (C10b-2a); SQLite has none.
       outputParameters,
-      truncated: capture.truncated,
+      truncated: capture.truncated || messages.truncated,
+      // The server's messages under Capture messages (C10b-2b); SQLite has none.
+      outputLogs: messages.toOutput(),
     },
   };
 }

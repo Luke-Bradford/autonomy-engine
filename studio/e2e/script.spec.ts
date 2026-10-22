@@ -75,6 +75,12 @@ test.describe('#1600 C10a — Script on SQLite', () => {
       await expect(
         pane.getByLabel('Capture result sets', { exact: true }).locator('option:checked'),
       ).toHaveText(/First 1000 rows/);
+      // C10b-2b — SQLite sends no messages and cannot interrupt a statement, so
+      // neither setting is drawn for it.
+      await expect(pane.getByRole('checkbox', { name: 'Capture messages' })).toHaveCount(0);
+      await expect(
+        pane.getByRole('textbox', { name: 'Timeout per block (seconds)', exact: true }),
+      ).toHaveCount(0);
 
       await pane.getByRole('tab', { name: 'Script', exact: true }).click();
       await expect(pane.getByLabel('Script blocks row 1 type', { exact: true })).toHaveValue(
@@ -196,6 +202,12 @@ test.describe('#1600 C10b-1 — Script on PostgreSQL', () => {
     await page.keyboard.press('Escape');
     await pickConnection(page, 'Connection', { id: pg });
 
+    // C10b-2b — both are offered on Settings once a postgres connection is bound.
+    await pane.getByRole('checkbox', { name: 'Capture messages' }).check();
+    await pane
+      .getByRole('textbox', { name: 'Timeout per block (seconds)', exact: true })
+      .fill('60');
+
     // C10b-2a — Out is authored beside Parameters, in the block's own row.
     await pane.getByRole('tab', { name: 'Script', exact: true }).click();
     await pane
@@ -219,11 +231,13 @@ test.describe('#1600 C10b-1 — Script on PostgreSQL', () => {
       await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`)
     ).json()) as { version: number; catalogVersion: number; nodes: Record<string, unknown>[] }[];
     const latest = versions.sort((a, b) => b.version - a.version)[0]!;
-    expect(latest.catalogVersion).toBe(74);
+    expect(latest.catalogVersion).toBe(75);
     expect(latest.nodes.find((n) => n['id'] === 'script1')).toMatchObject({
       type: 'script',
       connectionId: pg,
       config: {
+        captureMessages: true,
+        blockTimeoutSeconds: 60,
         blocks: [
           {
             sql: 'CALL etl.tally(:n, :total)',

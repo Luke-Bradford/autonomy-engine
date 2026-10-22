@@ -671,7 +671,14 @@
 // (Out and In-out parameters, filling `outputParameters`). The block is strict,
 // so a pre-C10b-2a build refuses the new key at import rather than
 // half-loading the script.
-export const CATALOG_VERSION = 74;
+// BUMP 74→75 for #1600 OR41 C10b-2b: a Script's `blockTimeoutSeconds` and
+// `captureMessages`, and its `outputLogs` output. The config object is not
+// strict, so a pre-C10b-2b build strips both keys and runs the script without
+// the Block timeout its author set, and without the messages a downstream
+// `outputLogs` read expects: a silently-dropped knob that changes a run, which
+// bumps (16/18/19/20). A Script saved before keeps its five outputs
+// (`formerOutputs`).
+export const CATALOG_VERSION = 75;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

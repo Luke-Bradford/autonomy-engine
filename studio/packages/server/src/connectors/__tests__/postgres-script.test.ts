@@ -5,6 +5,7 @@ import {
   SCRIPT_ACTIVITY_TYPE,
   SCRIPT_RESULT_ROW_CAP,
   WARNING_CODES,
+  fieldLabelOf,
   scriptDispatchConfigSchema,
 } from '@autonomy-studio/shared';
 import { LOOKUP_BYTE_CAP } from '../../limits.js';
@@ -17,7 +18,12 @@ import {
   type PostgresStatementStream,
   type PostgresStreamedResult,
 } from '../postgres-script.js';
-import type { PostgresClient, PostgresClientFactory } from '../postgres-session.js';
+import type {
+  PostgresClient,
+  PostgresClientFactory,
+  PostgresClientOptions,
+  PostgresNotice,
+} from '../postgres-session.js';
 import { SCRIPT_POSTGRES_STATEMENTS } from '../script.js';
 import type { ActivityContext, ActivityEvent } from '../types.js';
 
@@ -50,6 +56,8 @@ function scriptCtx(
   over: {
     runAsOneTransaction?: boolean;
     captureResultSets?: string;
+    captureMessages?: boolean;
+    blockTimeoutSeconds?: number;
     signal?: AbortSignal;
     connection?: Record<string, unknown>;
   } = {},
@@ -66,16 +74,25 @@ function scriptCtx(
   } as unknown as ActivityContext;
 }
 
-/** A client that records every statement and answers transaction control. */
+/**
+ * A client that records every statement and answers transaction control. It
+ * keeps the options it was created with and its `notice` listeners (C10b-2b),
+ * so a stream can send the server's messages through them.
+ */
 function recordingFactory(failOn: Record<string, Error> = {}): {
   factory: PostgresClientFactory;
   queries: string[];
   opened: () => number;
+  options: PostgresClientOptions[];
+  notify: (notice: PostgresNotice) => void;
 } {
   const queries: string[] = [];
+  const options: PostgresClientOptions[] = [];
+  const noticeListeners: ((notice: PostgresNotice) => void)[] = [];
   let opened = 0;
-  const factory: PostgresClientFactory = () => {
+  const factory: PostgresClientFactory = (opts) => {
     opened += 1;
+    options.push(opts);
     return {
       connect: () => Promise.resolve(),
       query: (sql) => {
@@ -85,22 +102,39 @@ function recordingFactory(failOn: Record<string, Error> = {}): {
         return err === undefined ? Promise.resolve({ rows: [], fields: [] }) : Promise.reject(err);
       },
       end: () => Promise.resolve(),
+      on: (event: string, listener: (arg: never) => void) => {
+        if (event === 'notice') noticeListeners.push(listener as (n: PostgresNotice) => void);
+      },
     } satisfies PostgresClient;
   };
-  return { factory, queries, opened: () => opened };
+  return {
+    factory,
+    queries,
+    opened: () => opened,
+    options,
+    notify: (notice) => {
+      for (const listener of noticeListeners) listener(notice);
+    },
+  };
 }
 
-type Answer = { rows?: Record<string, unknown>[] } & Partial<PostgresStreamedResult>;
+type Answer = {
+  rows?: Record<string, unknown>[];
+  /** The server's messages, sent while the statement runs (C10b-2b). */
+  notices?: PostgresNotice[];
+} & Partial<PostgresStreamedResult>;
 
 /** A row stream answering each block's SQL from `answers`: rows, a result, or a throw. */
 function fakeStream(
   answers: Record<string, Answer | Error>,
   queries: string[],
+  notify: (notice: PostgresNotice) => void = () => undefined,
 ): PostgresStatementStream {
   return (_client, statement, onRow) => {
     queries.push(statement.sql);
     const answer = answers[statement.sql] ?? {};
     if (answer instanceof Error) return Promise.reject(answer);
+    for (const notice of answer.notices ?? []) notify(notice);
     for (const row of answer.rows ?? []) onRow(row);
     return Promise.resolve({
       hasFields: answer.hasFields ?? answer.rows !== undefined,
@@ -118,18 +152,23 @@ async function runFake(
   ctx: ActivityContext,
   answers: Record<string, Answer | Error> = {},
   failOn: Record<string, Error> = {},
-): Promise<{ events: ActivityEvent[]; queries: string[]; opened: number }> {
-  const { factory, queries, opened } = recordingFactory(failOn);
+): Promise<{
+  events: ActivityEvent[];
+  queries: string[];
+  opened: number;
+  options: PostgresClientOptions[];
+}> {
+  const { factory, queries, opened, options, notify } = recordingFactory(failOn);
   const events: ActivityEvent[] = [];
   for await (const e of runPostgresScript(ctx, {
     createClient: factory,
     secret: SECRET,
     types: undefined,
-    stream: fakeStream(answers, queries),
+    stream: fakeStream(answers, queries, notify),
   })) {
     events.push(e);
   }
-  return { events, queries, opened: opened() };
+  return { events, queries, opened: opened(), options };
 }
 
 const terminal = (events: ActivityEvent[]): ActivityEvent => events[events.length - 1]!;
@@ -277,6 +316,7 @@ describe('Script on PostgreSQL, the run (C10b-1)', () => {
       ],
       recordsAffected: 0,
       outputParameters: {},
+      outputLogs: '',
       truncated: false,
     });
     expect(queries).toEqual([
@@ -806,6 +846,230 @@ describe('Out and In-out parameters (C10b-2a)', () => {
   });
 });
 
+describe('Block timeout (C10b-2b)', () => {
+  const blocks: Block[] = [{ type: 'query', sql: 'select 1 as one' }];
+  const answers = { 'select 1 as one': { rows: [{ one: 1 }] } };
+
+  it('arms both statement timers at the Block timeout when it is below the connection’s', async () => {
+    const { events, options } = await runFake(
+      scriptCtx(blocks, {
+        blockTimeoutSeconds: 5,
+        connection: { ...CONNECTION, statementTimeoutMs: 60_000 },
+      }),
+      answers,
+    );
+    expect(terminal(events).type).toBe('succeeded');
+    expect(options[0]).toMatchObject({ statement_timeout: 5_000, query_timeout: 5_000 });
+  });
+
+  it('never raises the connection’s Statement timeout', async () => {
+    const { options } = await runFake(
+      scriptCtx(blocks, {
+        blockTimeoutSeconds: 3_600,
+        connection: { ...CONNECTION, statementTimeoutMs: 30_000 },
+      }),
+      answers,
+    );
+    expect(options[0]).toMatchObject({ statement_timeout: 30_000, query_timeout: 30_000 });
+  });
+
+  it('keeps the connection’s Statement timeout when it is blank', async () => {
+    const { options } = await runFake(
+      scriptCtx(blocks, { connection: { ...CONNECTION, statementTimeoutMs: 45_000 } }),
+      answers,
+    );
+    expect(options[0]).toMatchObject({ statement_timeout: 45_000, query_timeout: 45_000 });
+  });
+
+  it('names the Block timeout when a block runs past it, keeping the read path’s transient', async () => {
+    for (const err of [new Error('Query read timeout'), pgError('canceling statement', '57014')]) {
+      const { events } = await runFake(
+        scriptCtx([{ type: 'query', sql: 'select pg_sleep(9)' }], { blockTimeoutSeconds: 2 }),
+        { 'select pg_sleep(9)': err },
+      );
+      expect(failureOf(events)).toMatchObject({
+        kind: 'transient',
+        error: expect.stringMatching(
+          /^Script block 1 ran past the Timeout per block of 2 seconds: /,
+        ),
+      });
+    }
+  });
+
+  it('keeps the connection’s timeout, and its wording, when the Block timeout equals it', async () => {
+    const { events, options } = await runFake(
+      scriptCtx([{ type: 'query', sql: 'select pg_sleep(9)' }], {
+        blockTimeoutSeconds: 30,
+        connection: { ...CONNECTION, statementTimeoutMs: 30_000 },
+      }),
+      { 'select pg_sleep(9)': new Error('Query read timeout') },
+    );
+    expect(options[0]).toMatchObject({ statement_timeout: 30_000, query_timeout: 30_000 });
+    expect(failureOf(events).error).toMatch(/^Script block 1 failed: /);
+  });
+
+  it('names it when the COMMIT times out, still an unknown outcome on a write', async () => {
+    const { events } = await runFake(
+      scriptCtx([{ type: 'nonQuery', sql: 'delete from t' }], {
+        runAsOneTransaction: true,
+        blockTimeoutSeconds: 2,
+      }),
+      { 'delete from t': { command: 'DELETE', rowCount: 1 } },
+      { COMMIT: new Error('Query read timeout') },
+    );
+    expect(failureOf(events)).toMatchObject({
+      kind: 'permanent',
+      error: expect.stringMatching(
+        /^the script could not commit within the Timeout per block of 2 seconds: Query read timeout — the COMMIT's outcome is unknown/,
+      ),
+    });
+  });
+
+  it('says only that the block failed when the connection’s timeout was the bound', async () => {
+    const { events } = await runFake(
+      scriptCtx([{ type: 'query', sql: 'select pg_sleep(9)' }], {
+        blockTimeoutSeconds: 3_600,
+      }),
+      { 'select pg_sleep(9)': new Error('Query read timeout') },
+    );
+    expect(failureOf(events).error).toMatch(/^Script block 1 failed: /);
+  });
+});
+
+describe('Capture messages (C10b-2b)', () => {
+  const sql = 'do $$ begin raise notice $$hi$$; end $$';
+  const blocks: Block[] = [{ type: 'nonQuery', sql }];
+  const notice = (message: string, over: Partial<PostgresNotice> = {}): PostgresNotice => ({
+    severity: 'NOTICE',
+    message,
+    ...over,
+  });
+
+  it('keeps the server’s messages in outputLogs, in order, with DETAIL and HINT', async () => {
+    const { events } = await runFake(scriptCtx(blocks, { captureMessages: true }), {
+      [sql]: {
+        command: 'DO',
+        notices: [
+          notice('first'),
+          notice('second', { severity: 'WARNING', detail: 'more', hint: 'try this' }),
+        ],
+      },
+    });
+    expect(outputsOf(events)['outputLogs']).toBe(
+      'NOTICE: first\nWARNING: second\nDETAIL: more\nHINT: try this',
+    );
+    expect(outputsOf(events)['truncated']).toBe(false);
+  });
+
+  it('keeps nothing when Capture messages is off', async () => {
+    const { events } = await runFake(scriptCtx(blocks), {
+      [sql]: { command: 'DO', notices: [notice('first')] },
+    });
+    expect(outputsOf(events)['outputLogs']).toBe('');
+  });
+
+  it('scrubs the connection’s secret from a message', async () => {
+    const { events } = await runFake(scriptCtx(blocks, { captureMessages: true }), {
+      [sql]: { command: 'DO', notices: [notice(`password is ${SECRET}`)] },
+    });
+    expect(outputsOf(events)['outputLogs']).not.toContain(SECRET);
+  });
+
+  it('keeps whole messages up to 1 MiB, then truncates with a warning and never fails', async () => {
+    const big = 'x'.repeat(400_000);
+    const { events } = await runFake(scriptCtx(blocks, { captureMessages: true }), {
+      [sql]: {
+        command: 'DO',
+        notices: [notice(big), notice(big), notice(big), notice('small')],
+      },
+    });
+    expect(terminal(events).type).toBe('succeeded');
+    const logs = outputsOf(events)['outputLogs'] as string;
+    // A prefix of whole messages: the third did not fit, and the latch keeps
+    // the small one after it out too.
+    expect(logs).toBe(`NOTICE: ${big}\nNOTICE: ${big}`);
+    expect(Buffer.byteLength(JSON.stringify(logs))).toBeLessThanOrEqual(LOOKUP_BYTE_CAP);
+    expect(outputsOf(events)['truncated']).toBe(true);
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: 'warned', code: WARNING_CODES.SCRIPT_MESSAGES_TRUNCATED }),
+    );
+    expect(events).not.toContainEqual(
+      expect.objectContaining({ type: 'warned', code: WARNING_CODES.SCRIPT_RESULT_TRUNCATED }),
+    );
+  });
+
+  it('warns once for each truncation when result sets and messages are both cut', async () => {
+    const big = 'x'.repeat(600_000);
+    const rows = Array.from({ length: SCRIPT_RESULT_ROW_CAP + 1 }, (_, i) => ({ i }));
+    const { events } = await runFake(
+      scriptCtx([{ type: 'query', sql: 'select i' }], { captureMessages: true }),
+      { 'select i': { rows, notices: [notice(big), notice(big)] } },
+    );
+    const codes = events.flatMap((e) => (e.type === 'warned' ? [e.code] : []));
+    expect(codes).toEqual([
+      WARNING_CODES.SCRIPT_RESULT_TRUNCATED,
+      WARNING_CODES.SCRIPT_MESSAGES_TRUNCATED,
+    ]);
+    expect(outputsOf(events)['truncated']).toBe(true);
+  });
+
+  it('scrubs before it measures, so a long secret does not crowd out a message that fits', async () => {
+    // 1.08M characters as sent, 360k once each secret is '***'.
+    const secrets = SECRET.repeat(120_000);
+    const { events } = await runFake(scriptCtx(blocks, { captureMessages: true }), {
+      [sql]: { command: 'DO', notices: [notice(secrets)] },
+    });
+    expect(outputsOf(events)['outputLogs']).toBe(`NOTICE: ${'***'.repeat(120_000)}`);
+    expect(outputsOf(events)['truncated']).toBe(false);
+  });
+
+  it('reports a message it could not read as a truncation, never as nothing', async () => {
+    const unreadable = {
+      severity: 'NOTICE',
+      get message(): string {
+        throw new Error('unreadable');
+      },
+    };
+    const { events } = await runFake(scriptCtx(blocks, { captureMessages: true }), {
+      [sql]: { command: 'DO', notices: [notice('first'), unreadable, notice('after')] },
+    });
+    expect(terminal(events).type).toBe('succeeded');
+    expect(outputsOf(events)['outputLogs']).toBe('NOTICE: first');
+    expect(outputsOf(events)['truncated']).toBe(true);
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: 'warned', code: WARNING_CODES.SCRIPT_MESSAGES_TRUNCATED }),
+    );
+  });
+
+  it('states the cap its help gives: Capture result sets and Capture messages say 1 MiB', () => {
+    const mib = `${String(LOOKUP_BYTE_CAP / 2 ** 20)} MiB`;
+    const shape = scriptDispatchConfigSchema.shape;
+    for (const field of [shape.captureResultSets, shape.captureMessages]) {
+      expect(fieldLabelOf(field)?.description).toContain(mib);
+    }
+  });
+
+  it('counts a multi-byte character as its UTF-8 bytes', async () => {
+    // 300k 'é' are 600k bytes: the first fits, the second does not.
+    const accents = 'é'.repeat(300_000);
+    const { events } = await runFake(scriptCtx(blocks, { captureMessages: true }), {
+      [sql]: { command: 'DO', notices: [notice(accents), notice(accents)] },
+    });
+    expect(outputsOf(events)['outputLogs']).toBe(`NOTICE: ${accents}`);
+    expect(outputsOf(events)['truncated']).toBe(true);
+  });
+
+  it('counts a message as it will be serialised, escapes included', async () => {
+    // 350k newlines serialise to 700k bytes each: two do not fit in 1 MiB.
+    const lines = '\n'.repeat(350_000);
+    const { events } = await runFake(scriptCtx(blocks, { captureMessages: true }), {
+      [sql]: { command: 'DO', notices: [notice(lines), notice(lines)] },
+    });
+    expect(outputsOf(events)['outputLogs']).toBe(`NOTICE: ${lines}`);
+    expect(outputsOf(events)['truncated']).toBe(true);
+  });
+});
+
 const LIVE_HOST = process.env.STUDIO_TEST_POSTGRES_HOST;
 
 describe.skipIf(LIVE_HOST === undefined)('Script on a live postgres (C10b-1)', () => {
@@ -854,7 +1118,12 @@ describe.skipIf(LIVE_HOST === undefined)('Script on a live postgres (C10b-1)', (
 
   async function runLive(
     blocks: Block[],
-    over: { runAsOneTransaction?: boolean; writable?: boolean } = {},
+    over: {
+      runAsOneTransaction?: boolean;
+      writable?: boolean;
+      captureMessages?: boolean;
+      blockTimeoutSeconds?: number;
+    } = {},
   ): Promise<ActivityEvent[]> {
     const { writable = true, ...settings } = over;
     const events: ActivityEvent[] = [];
@@ -883,6 +1152,7 @@ describe.skipIf(LIVE_HOST === undefined)('Script on a live postgres (C10b-1)', (
       resultSets: [{ rowCount: 3, rows: [{ a: 3 }, { a: 9 }, { a: 9 }] }],
       recordsAffected: 3,
       outputParameters: {},
+      outputLogs: '',
       truncated: false,
     });
     expect(await count()).toBe(4);
@@ -1007,6 +1277,34 @@ describe.skipIf(LIVE_HOST === undefined)('Script on a live postgres (C10b-1)', (
     ]);
   });
 
+  it('keeps RAISE NOTICE and WARNING in outputLogs under Capture messages (C10b-2b)', async () => {
+    const events = await runLive(
+      [
+        {
+          type: 'nonQuery',
+          sql: `do $$ begin raise notice 'hello %', 1; raise warning 'careful' using hint = 'look'; end $$`,
+        },
+        { type: 'nonQuery', sql: `drop table if exists ${schema}.missing` },
+      ],
+      { captureMessages: true },
+    );
+    expect(outputsOf(events)['outputLogs']).toBe(
+      `NOTICE: hello 1\nWARNING: careful\nHINT: look\nNOTICE: table "missing" does not exist, skipping`,
+    );
+  });
+
+  it('cuts a block off at its Block timeout (C10b-2b)', async () => {
+    const started = Date.now();
+    const events = await runLive([{ type: 'query', sql: 'select pg_sleep(5)' }], {
+      blockTimeoutSeconds: 1,
+    });
+    expect(Date.now() - started).toBeLessThan(4_000);
+    expect(failureOf(events)).toMatchObject({
+      kind: 'transient',
+      error: expect.stringMatching(/^Script block 1 ran past the Timeout per block of 1 seconds: /),
+    });
+  });
+
   it('fills outputParameters from a procedure’s INOUT and OUT parameters (C10b-2a)', async () => {
     await reset();
     await admin((c) =>
@@ -1035,6 +1333,7 @@ describe.skipIf(LIVE_HOST === undefined)('Script on a live postgres (C10b-1)', (
       // bigint reads as text, as Lookup's does.
       outputParameters: { n: 42, total: '4', Label: 'added 5' },
       truncated: false,
+      outputLogs: '',
     });
     expect(await count()).toBe(4);
   });
