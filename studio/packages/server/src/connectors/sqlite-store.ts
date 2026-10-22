@@ -6,7 +6,9 @@ import {
   type DatasetKind,
 } from '@autonomy-studio/shared';
 import { DatasetIoError } from './dataset-io-error.js';
-import type Database from 'better-sqlite3';
+import Database from 'better-sqlite3';
+import type { z } from 'zod';
+import { SQLITE_BUSY_TIMEOUT_MS } from '../limits.js';
 import { doubleQuoted, quoteIdentifier } from './sql-identifier.js';
 import { resolveWithinRoots } from './confine.js';
 import type { ConnectorErrorKind } from './types.js';
@@ -268,4 +270,51 @@ export function findSqliteRelation(
       `SELECT name, type, sql FROM ${quoteIdentifier(schema, 'schema')}.sqlite_master WHERE name = ? COLLATE NOCASE`,
     )
     .get(table) as { name: string; type?: unknown; sql?: unknown } | undefined;
+}
+
+/**
+ * Normalise one column value.
+ *
+ * The database is opened with `defaultSafeIntegers(true)`, so every INTEGER
+ * arrives as a `bigint`. That is not decoration: measured on 12.11.1, the
+ * default `number` mode reads a stored `9007199254740993` back as
+ * `9007199254740992` — a SILENT one-off corruption that M5's coercion matrix
+ * could never recover, because by then the true value is already gone. Safe
+ * integers make the store's value exact; this function then hands back a plain
+ * `number` for everything inside `Number.MAX_SAFE_INTEGER` (which is every
+ * ordinary id, count and timestamp) and keeps the `bigint` only where narrowing
+ * would lose information. A consumer that sees a `bigint` is seeing a value a
+ * `number` genuinely cannot hold.
+ */
+export function normaliseValue(value: unknown): SqliteValue {
+  if (typeof value === 'bigint') {
+    return value >= BigInt(Number.MIN_SAFE_INTEGER) && value <= BigInt(Number.MAX_SAFE_INTEGER)
+      ? Number(value)
+      : value;
+  }
+  return value as SqliteValue;
+}
+
+/**
+ * The one READ-ONLY open every sqlite read uses: the path confined to the
+ * connection's roots, the file required to exist (a missing store is a store
+ * failure, never an empty one), and the busy timeout. Cancellation is checked
+ * after the confinement's awaits and before the open.
+ */
+export async function openSqliteReadOnly(
+  cfg: z.infer<typeof sqliteConnectionConfigSchema>,
+  signal: AbortSignal | undefined,
+  abortMessage: string,
+): Promise<Database.Database> {
+  const dbPath = await confineStorePath(cfg.roots, cfg.path);
+  if (signal?.aborted) throw new DatasetIoError('cancelled', abortMessage);
+  try {
+    return new Database(dbPath, {
+      readonly: true,
+      fileMustExist: true,
+      timeout: SQLITE_BUSY_TIMEOUT_MS,
+    });
+  } catch (err) {
+    throw storeFailure(err, `cannot open the sqlite database at '${cfg.path}'`);
+  }
 }

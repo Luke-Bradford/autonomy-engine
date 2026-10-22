@@ -305,6 +305,57 @@ async function storeLockKey(dbPath: string): Promise<string> {
   }
 }
 
+/**
+ * A read-write open of a sqlite store, holding the store's place in
+ * `storeWriteQueue` (#1423): the path confined to the connection's roots, the
+ * file required to exist, and the busy timeout. The caller closes `db` and then
+ * calls `release`, in that order, so the next writer finds SQLite's own lock
+ * already free. #1600 OR41 C10a — shared by the copy sink and Script, so the
+ * two queue on one lock.
+ */
+export async function openSqliteWriter(
+  cfg: { roots: readonly string[]; path: string },
+  signal: AbortSignal | undefined,
+  abortMessage: string,
+): Promise<{ db: Database.Database; release: () => void }> {
+  const dbPath = await confineStorePath(cfg.roots, cfg.path);
+
+  if (signal?.aborted) throw new DatasetIoError('cancelled', abortMessage);
+
+  // `acquire` rejects for one reason only — the signal aborted while queued.
+  // Checked rather than assumed, so a future rejection of another kind is not
+  // reported as a cancel.
+  let release: () => void;
+  try {
+    release = await storeWriteQueue.acquire(await storeLockKey(dbPath), signal);
+  } catch (err) {
+    if (signal?.aborted) throw new DatasetIoError('cancelled', abortMessage);
+    throw err;
+  }
+
+  try {
+    const db = new Database(dbPath, { fileMustExist: true, timeout: SQLITE_BUSY_TIMEOUT_MS });
+    return { db, release };
+  } catch (err) {
+    release();
+    throw storeFailure(err, `cannot open the sqlite database at '${cfg.path}'`);
+  }
+}
+
+/**
+ * The databases attached to `db` beyond `main` and `temp`. Authored SQL that
+ * attached one would have stepped outside the connection's roots, so the
+ * callers that run authored SQL (a Pre-copy script, a Script block) fail when
+ * this is not empty. #1600 OR41 C10a — lifted out of the Pre-copy script.
+ */
+export function attachedDatabases(db: Database.Database): string[] {
+  return db
+    .prepare('select name from pragma_database_list')
+    .all()
+    .map((r) => (r as { name: string }).name)
+    .filter((name) => name !== 'main' && name !== 'temp');
+}
+
 /** A sink table's quoted name: bare in `main`, schema-qualified otherwise. */
 function qualifiedSqliteTable(schema: string, table: string): string {
   return schema === 'main'
@@ -408,11 +459,7 @@ function runSqlitePreCopyScript(db: Database.Database, script: PreCopyScript): v
   } catch (err) {
     throw storeFailure(err, 'the Pre-copy script failed');
   }
-  const attached = db
-    .prepare('select name from pragma_database_list')
-    .all()
-    .map((r) => (r as { name: string }).name)
-    .filter((name) => name !== 'main' && name !== 'temp');
+  const attached = attachedDatabases(db);
   if (attached.length > 0) {
     throw new DatasetIoError(
       'permanent',
@@ -536,28 +583,7 @@ export async function writeSqliteDatasetRows(
   }
 
   const target = sinkTargetFor(write.datasetKind, write.datasetConfig);
-  const dbPath = await confineStorePath(cfg.data.roots, cfg.data.path);
-
-  if (write.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
-
-  // `acquire` rejects for one reason only — the signal aborted while queued.
-  // Checked rather than assumed, so a future rejection of another kind is not
-  // reported as a cancel.
-  let release: () => void;
-  try {
-    release = await storeWriteQueue.acquire(await storeLockKey(dbPath), write.signal);
-  } catch (err) {
-    if (write.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
-    throw err;
-  }
-
-  let db: Database.Database;
-  try {
-    db = new Database(dbPath, { fileMustExist: true, timeout: SQLITE_BUSY_TIMEOUT_MS });
-  } catch (err) {
-    release();
-    throw storeFailure(err, `cannot open the sqlite database at '${cfg.data.path}'`);
-  }
+  const { db, release } = await openSqliteWriter(cfg.data, write.signal, 'dataset write aborted');
 
   try {
     let rowsWritten = 0;

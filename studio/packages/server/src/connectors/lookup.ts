@@ -73,7 +73,7 @@ type TruncationCause = 'rows' | 'bytes' | 'first-row';
  * offending cell here would put row data into the run log through the one
  * channel that cannot scrub it.
  */
-class LookupValueError extends Error {
+export class LookupValueError extends Error {
   constructor(
     readonly column: string,
     readonly rowIndex: number,
@@ -245,7 +245,7 @@ function logSafe(value: unknown, column: string, rowIndex: number, depth = 0): u
  * to anything reading the run back. (`logSafe` never returns `undefined` — it
  * refuses — so this arm is about a key the READER omitted a value for.)
  */
-function logSafeRow(
+export function logSafeRow(
   raw: Record<string, unknown>,
   rowIndex: number,
   nullValue: string | undefined,
