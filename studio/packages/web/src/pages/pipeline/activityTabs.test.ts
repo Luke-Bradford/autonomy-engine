@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { getActivity, type ActivityCatalogEntry } from '@autonomy-studio/shared';
-import { applicableFieldNames, nodeTypeTabs, offeredFieldOptions } from './activityTabs';
+import {
+  applicableFieldNames,
+  issuesOfShownFields,
+  nodeTypeTabs,
+  undrawnFieldNames,
+  offeredFieldOptions,
+} from './activityTabs';
 import { deriveConfigFields, seedFieldInputs } from './configForm';
 
 const fieldsOf = (entry: ActivityCatalogEntry) => deriveConfigFields(entry.configSchema) ?? [];
@@ -397,5 +403,52 @@ describe('Get metadata on the bound connection kind (#1600 OR41 C8c)', () => {
     }
     expect(offeredFieldOptions(meta, waitUntil, 'fs', 'off')).toEqual(all);
     expect(offeredFieldOptions(meta, waitUntil, undefined, 'off')).toBeUndefined();
+  });
+});
+
+describe('#1600 C12b — issuesOfShownFields', () => {
+  const entry = getActivity('set_variable')!;
+  const fields = deriveConfigFields(entry.configSchema)!;
+  const precheck = (config: Record<string, unknown>) => {
+    const check = entry.configSchema.safeParse(config);
+    return check.success
+      ? []
+      : issuesOfShownFields(entry, fields, config, check.error.issues).map((i) => i.path.join('.'));
+  };
+
+  it('a Set still needs its Variable and Value', () => {
+    expect(precheck({})).toEqual(['variable', 'value']);
+  });
+
+  it('a Pipeline return value is not refused for the Variable and Value it does not draw', () => {
+    expect(precheck({ operation: 'return', returnValues: [{ key: 'k', type: 'null' }] })).toEqual(
+      [],
+    );
+  });
+
+  it('a field it does draw is still refused', () => {
+    // A held Variable on a return node is drawn (so it can be cleared): its issue stays.
+    expect(
+      precheck({ operation: 'return', variable: 5, returnValues: [{ key: 'k', type: 'null' }] }),
+    ).toEqual(['variable']);
+  });
+});
+
+describe('#1600 C12b — undrawnFieldNames', () => {
+  const entry = getActivity('set_variable')!;
+  const fields = deriveConfigFields(entry.configSchema)!;
+
+  it('a Pipeline return value does not draw an empty Variable or Value', () => {
+    expect(undrawnFieldNames(entry, fields, { operation: 'return' }, {})).toEqual([
+      'variable',
+      'value',
+    ]);
+  });
+
+  it('a Set draws them but not Return keys; a held value is always drawn', () => {
+    expect(undrawnFieldNames(entry, fields, { operation: 'set' }, {})).toEqual(['returnValues']);
+    expect(undrawnFieldNames(entry, fields, { operation: 'return', variable: 'x' }, {})).toEqual([
+      'value',
+    ]);
   });
 });

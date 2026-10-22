@@ -42,6 +42,8 @@ import {
   WEB_ACTIVITY_TYPE,
   WEBHOOK_ACTIVITY_TYPE,
   isVariableWriterType,
+  PIPELINE_RETURN_VALUE_OUTPUT,
+  RETURN_VALUE_TYPES,
   variableWriteOp,
 } from '../catalog/types.js';
 import {
@@ -62,6 +64,7 @@ import {
 } from '../schemas/pipeline.js';
 import {
   backEdgeResetBody,
+  coerceReturnValue,
   coerceVariableValue,
   composeFilterExpr,
   containerJoin,
@@ -613,6 +616,87 @@ export function createEngine(doc: EngineDoc): Engine {
   }
 
   /**
+   * #1600 OR41 C12b — what a ready *Pipeline return value* node does: evaluate
+   * each row's value over the scoped run state exactly as a Set's (`substitute`,
+   * the node's scope, `${item}`), coerce it to the row's type
+   * (`coerceReturnValue`, the save rules' own), and return `succeedControl` with
+   * `{ pipelineReturnValue: map }`, folded by `onSucceeded` under the contract
+   * `lowerSetVariableReturnOutputs` derives. A row that evaluates but cannot be
+   * RETURNED (wrong type, not replay-safe, the whole map over
+   * `VARIABLE_MAX_BYTES`) fails the node `permanent` with the Set's `VARIABLE_*`
+   * code. A malformed table or an evaluation that throws THROWS, the verdict a
+   * Set reaches. Called by `variableWriteCommand`, so dispatch and crash resume
+   * are one function. The map is built by defining own keys, so a stored
+   * `__proto__` key (refused at save) is a key, never a prototype write.
+   */
+  function returnValueCommand(
+    state: RunState,
+    node: Node,
+    sid: string,
+    attemptId: string,
+  ): EngineCommand {
+    const rows = node.config['returnValues'];
+    if (!Array.isArray(rows) || rows.length === 0) {
+      throw new SubstituteError(`'${node.type}' node returns no values`);
+    }
+    const fail = (code: string, error: string): EngineCommand => ({
+      type: 'failNode',
+      nodeId: sid,
+      attemptId,
+      error,
+      code,
+    });
+    const map: Record<string, unknown> = {};
+    for (const row of rows as unknown[]) {
+      const r = (typeof row === 'object' && row !== null ? row : {}) as Record<string, unknown>;
+      const key = r['key'];
+      const type = RETURN_VALUE_TYPES.find((t) => t === r['type']);
+      if (typeof key !== 'string' || key === '' || type === undefined) {
+        throw new SubstituteError(`'${node.type}' node has a malformed return value`);
+      }
+      // Null reads no content at all (the save rules refuse one), and a String
+      // with none is "".
+      if (type === 'null') {
+        defineVariable(map, key, null);
+        continue;
+      }
+      const raw = r['content'] ?? (type === 'string' ? '' : undefined);
+      if (typeof raw !== 'string') {
+        throw new SubstituteError(`return value '${key}' must be text`);
+      }
+      const mode = variableValueMode(raw);
+      if (mode === null) {
+        throw new SubstituteError(`unterminated \${...} in return value '${key}'`);
+      }
+      const resolved = substitute(
+        raw,
+        buildCtx(scopedEvalState(state, sid)),
+        0,
+        foreachItemOf(state, sid),
+      );
+      const typed = coerceReturnValue(key, type, mode, resolved);
+      if (!typed.ok) return fail(FAILURE_CODES.VARIABLE_TYPE_MISMATCH, typed.error);
+      defineVariable(map, key, typed.value);
+    }
+    const [unsafe] = jsonReplaySafetyErrors('the return value', map);
+    if (unsafe !== undefined) return fail(FAILURE_CODES.VARIABLE_NOT_REPLAY_SAFE, unsafe);
+    const bytes = utf8ByteLength(JSON.stringify(map));
+    if (bytes > VARIABLE_MAX_BYTES) {
+      return fail(
+        FAILURE_CODES.VARIABLE_TOO_LARGE,
+        `the return value would be ${bytes} bytes, over the ${VARIABLE_MAX_BYTES}-byte ` +
+          'limit — nothing was returned',
+      );
+    }
+    return {
+      type: 'succeedControl',
+      nodeId: sid,
+      attemptId,
+      outputs: { [PIPELINE_RETURN_VALUE_OUTPUT]: map },
+    };
+  }
+
+  /**
    * #844 V5 (spec V-D4) — what a ready `set_variable`/`append_variable` node
    * does: evaluate `value` over the scoped run state, check it, and return the
    * command that makes the outcome durable — `writeVariable` for a writable
@@ -647,6 +731,9 @@ export function createEngine(doc: EngineDoc): Engine {
     if (op === undefined) {
       throw new SubstituteError(`'${node.type}' node has an unknown operation`);
     }
+    // #1600 C12b — a Pipeline return value writes no variable: it succeeds, like a
+    // `filter`, with the typed map as its one output.
+    if (op === 'return') return returnValueCommand(state, node, sid, attemptId);
     const name = node.config['variable'];
     const def = typeof name === 'string' ? variableDefByName.get(name) : undefined;
     if (typeof name !== 'string' || def === undefined) {

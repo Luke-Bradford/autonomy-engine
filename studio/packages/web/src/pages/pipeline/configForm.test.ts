@@ -1966,3 +1966,14 @@ describe('a set of choices (#1600 OR41 C8a)', () => {
     expect(parseFieldInput(field, 'rowCount').ok).toBe(false);
   });
 });
+
+describe('#1600 C12b — a literal row cell', () => {
+  it('is marked literal, so it gets no ƒx', () => {
+    const returnKeys = deriveConfigFields(getActivity('set_variable')!.configSchema)!.find(
+      (f) => f.name === 'returnValues',
+    )!;
+    const cells: readonly ConfigField[] = returnKeys.elementFields ?? [];
+    expect(cells.find((c) => c.name === 'key')?.literal).toBe(true);
+    expect(cells.find((c) => c.name === 'content')?.literal).toBeUndefined();
+  });
+});

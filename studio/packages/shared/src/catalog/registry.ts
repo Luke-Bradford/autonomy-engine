@@ -24,6 +24,7 @@ import {
   LOOKUP_ACTIVITY_TYPE,
   SET_VARIABLE_ACTIVITY_TYPE,
   SET_VARIABLE_OPERATIONS,
+  RETURN_VALUE_TYPES,
   SWITCH_ACTIVITY_TYPE,
   WAIT_ACTIVITY_TYPE,
   WEBHOOK_ACTIVITY_TYPE,
@@ -130,6 +131,8 @@ export const httpRequestInputSchema = z.object({
 
 /** #1600 C12a — Set variable's Operation field. */
 const setVariableOperationSchema = z.enum(SET_VARIABLE_OPERATIONS);
+/** #1600 C12b — a return value row's Type. */
+const returnValueTypeSchema = z.enum(RETURN_VALUE_TYPES);
 
 const ENTRIES: ActivityCatalogEntry[] = [
   {
@@ -408,32 +411,103 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // variable is this activity's second operation, and `append_variable` is
     // lowered to it (`retired.ts`). Literal (an enum, so no dynamic content):
     // it decides the event and what the determinism guard counts.
+    // #1600 C12b — the third, *Pipeline return value*: a key · type · value table
+    // the calling pipeline reads as `output.pipelineReturnValue.<key>`. It writes
+    // no variable, so it has no Variable or Value; it succeeds like a `filter`
+    // with the one output `pipelineReturnValue`, its contract derived from the
+    // Operation (`lowerSetVariableReturnOutputs`).
     type: SET_VARIABLE_ACTIVITY_TYPE,
     title: 'Set variable',
-    description: 'Set a pipeline variable, or add a value to the end of an array variable.',
+    description:
+      'Set a pipeline variable, add a value to the end of an array variable, or return values to the calling pipeline.',
     kind: 'control',
     category: 'control',
-    // Operation last: it has a default, and a tab lists its required fields
-    // first (`activity-tabs.test.ts`).
-    tabs: [{ key: 'settings', fields: ['variable', 'value', 'operation'] }],
+    // Operation last, as C12a placed it: it has a default, and a tab lists its
+    // required fields first (`activity-tabs.test.ts`).
+    tabs: [{ key: 'settings', fields: ['variable', 'value', 'returnValues', 'operation'] }],
+    appliesWhen: {
+      variable: [{ field: 'operation', in: ['set', 'append'] }],
+      value: [{ field: 'operation', in: ['set', 'append'] }],
+      returnValues: [{ field: 'operation', in: ['return'] }],
+    },
     idempotent: false,
     connectionKinds: [],
     outputs: [],
-    configSchema: z.object({
-      operation: presented(setVariableOperationSchema.default('set'), {
-        title: 'Operation',
-        description:
-          'Set replaces the value. Append adds one value to the end of an array variable, as is, without converting it.',
-        options: optionTitles(setVariableOperationSchema, { set: 'Set', append: 'Append' }),
+    configSchema: z
+      .object({
+        operation: presented(setVariableOperationSchema.default('set'), {
+          title: 'Operation',
+          description:
+            'Set replaces the value. Append adds one value to the end of an array variable, as is, without converting it. Pipeline return value hands values to the pipeline that called this one.',
+          options: optionTitles(setVariableOperationSchema, {
+            set: 'Set',
+            append: 'Append',
+            return: 'Pipeline return value',
+          }),
+        }),
+        variable: presented(literalText(singleLine(z.string())).min(1), {
+          title: 'Variable name',
+          // #1600 C12a — Append variable's help, which Set variable now needs too.
+          description:
+            "The name of a variable declared on the pipeline's Variables tab. Append needs an array variable.",
+        }),
+        value: presented(singleLine(z.string()), { title: 'Value' }),
+        returnValues: presented(
+          z
+            .array(
+              z
+                .object({
+                  key: presented(literalText(singleLine(z.string())).min(1), {
+                    title: 'Key',
+                    description:
+                      'The name the calling pipeline reads: ${nodes.<call>.output.pipelineReturnValue.<key>}. Letters, digits and _, not starting with a digit.',
+                  }),
+                  type: presented(returnValueTypeSchema, {
+                    title: 'Type',
+                    options: optionTitles(returnValueTypeSchema, {
+                      string: 'String',
+                      number: 'Number',
+                      boolean: 'Boolean',
+                      array: 'Array',
+                      object: 'Object',
+                      null: 'Null',
+                    }),
+                  }),
+                  // ADF's name for a return value's payload (`{type, content}`).
+                  content: presented(singleLine(z.string()).optional(), {
+                    title: 'Content',
+                    description:
+                      'A literal or ${...}. Array and Object take JSON text or a whole-value ${...}. Null takes none, and an empty String is "".',
+                  }),
+                })
+                // Strict, so the dock draws it as a table (`deriveElementFields`).
+                .strict(),
+            )
+            .optional(),
+          {
+            title: 'Return keys',
+            description:
+              'What this pipeline hands the Execute pipeline that called it. Make sure only one return value activity runs.',
+          },
+        ),
+      })
+      .superRefine((cfg, ctx) => {
+        // The dock's pre-check only; the save rules are `validateVariableWriteConfig`.
+        // Variable and Value stay required, so a Set or Append marks them; a
+        // Pipeline return value has neither, and the dock does not draw them for
+        // it, so their absence is not its issue (`issuesOfShownFields`).
+        const issue = (field: string, message: string) =>
+          ctx.addIssue({ code: 'custom', path: [field], message });
+        if (cfg.operation !== 'return') {
+          if (cfg.returnValues !== undefined) {
+            issue('returnValues', 'only Pipeline return value has return values');
+          }
+          return;
+        }
+        if ((cfg.returnValues ?? []).length === 0) {
+          issue('returnValues', 'add at least one return value');
+        }
       }),
-      variable: presented(literalText(singleLine(z.string())).min(1), {
-        title: 'Variable name',
-        // #1600 C12a — Append variable's help, which Set variable now needs too.
-        description:
-          "The name of a variable declared on the pipeline's Variables tab. Append needs an array variable.",
-      }),
-      value: presented(singleLine(z.string()), { title: 'Value' }),
-    }),
   },
   {
     // #844 V5 — the `append_variable` CONTROL activity (spec V-D4): `set_variable`'s

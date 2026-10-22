@@ -192,6 +192,22 @@ describe('activitySummary', () => {
     expect(write('set_variable', { operation: 'prepend' })).toBeNull();
   });
 
+  it('#1600 C12b — a Pipeline return value lists its keys', () => {
+    const ret = (returnValues: unknown) =>
+      activitySummary(
+        node('set_variable', { config: { operation: 'return', returnValues } }),
+        () => undefined,
+      );
+    expect(
+      ret([
+        { key: 'total', type: 'number', content: '1' },
+        { key: 'label', type: 'null' },
+      ]),
+    ).toBe('return total, label');
+    expect(ret([])).toBeNull();
+    expect(ret('nope')).toBeNull();
+  });
+
   it('gives no line for a type the catalog does not know', () => {
     expect(activitySummary(node('custom_thing', { config: { path: 'x' } }), () => undefined)).toBe(
       null,

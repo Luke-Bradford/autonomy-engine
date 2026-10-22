@@ -467,7 +467,13 @@ function deepEquals(a: unknown, b: unknown): boolean {
   return false;
 }
 
-function isPlainObject(v: unknown): v is Record<string, unknown> {
+/**
+ * An object that is not an array or `null` — the JSON-object check. #1600 C12b
+ * exported it, folding the identical private copies in `portability/envelope.ts`
+ * and `datamove/mapping-agreement.ts` (`portability/canonical.ts`'s is a
+ * different, prototype-based test and stays).
+ */
+export function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 

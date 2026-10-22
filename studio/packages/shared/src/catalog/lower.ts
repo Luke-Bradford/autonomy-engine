@@ -10,7 +10,10 @@ import {
 } from './llm-config.js';
 import {
   AGENT_TASK_ACTIVITY_TYPE,
+  isReturnValueNode,
   LLM_CALL_ACTIVITY_TYPE,
+  PIPELINE_RETURN_VALUE_OUTPUT,
+  SET_VARIABLE_ACTIVITY_TYPE,
   type ActivityCatalogEntry,
 } from './types.js';
 
@@ -290,6 +293,48 @@ export function lowerAgentTaskStructuredOutputs(nodes: Node[]): Node[] {
   });
 }
 
+/** #1600 C12b — the contract a *Pipeline return value* node carries. */
+const RETURN_VALUE_ROW: Output = { name: PIPELINE_RETURN_VALUE_OUTPUT, type: 'json' };
+
+function isReturnValueRow(o: unknown): boolean {
+  return (
+    typeof o === 'object' &&
+    o !== null &&
+    Object.keys(o).length === 2 &&
+    (o as Output).name === RETURN_VALUE_ROW.name &&
+    (o as Output).type === RETURN_VALUE_ROW.type
+  );
+}
+
+/**
+ * #1600 OR41 C12b — DERIVE a `set_variable`'s contract from its Operation. A
+ * *Pipeline return value* node produces exactly `pipelineReturnValue` (`json`),
+ * so its `config.outputs` is OVERWRITTEN with that one row: the contract is
+ * derived, never authored, for the reason `lowerAgentTaskStructuredOutputs` gives,
+ * and without it the catalog's `[]` would make `storeOutputs` drop the map
+ * without an error. A Set or Append whose `config.outputs` is EXACTLY that row
+ * (the Operation was switched back) is healed to the catalog's `[]`, the
+ * toggle-off heal `lowerLlmEmitMessages` does for its transcript row. Any other
+ * value on a Set or Append is left for `lowerNodeOutputs` and the save rules.
+ * Run BEFORE `lowerNodeOutputs`.
+ */
+export function lowerSetVariableReturnOutputs(nodes: Node[]): Node[] {
+  return nodes.map((node) => {
+    if (node.type !== SET_VARIABLE_ACTIVITY_TYPE) return node;
+    const outputs = node.config['outputs'];
+    if (isReturnValueNode(node)) {
+      if (Array.isArray(outputs) && outputs.length === 1 && isReturnValueRow(outputs[0])) {
+        return node;
+      }
+      return { ...node, config: { ...node.config, outputs: [{ ...RETURN_VALUE_ROW }] } };
+    }
+    if (!Array.isArray(outputs) || outputs.length !== 1 || !isReturnValueRow(outputs[0])) {
+      return node;
+    }
+    return { ...node, config: { ...node.config, outputs: [] } };
+  });
+}
+
 /**
  * #526 — the ONE composition of the four lowering passes, in the one order that
  * is correct. Every caller that needs "the `config.outputs` contract this doc
@@ -302,6 +347,8 @@ export function lowerAgentTaskStructuredOutputs(nodes: Node[]): Node[] {
  *    a structured node's contract from its `outputSchema`. They must run BEFORE
  *    the catalog seed, which only ever fills an ABSENT key: seed first and a
  *    structured node keeps the text-mode `[text, stopReason]` default forever.
+ *    #1600 C12b — `lowerSetVariableReturnOutputs` derives a Set variable's
+ *    contract from its Operation, before the seed for the same reason.
  * 3. `lowerNodeOutputs` — seed the catalog default into whatever is still absent.
  * 4. `lowerLlmEmitMessages` — LAST, because the transcript row APPENDS to the
  *    seeded default rather than replacing it, so the base must already be there.
@@ -323,6 +370,10 @@ export function lowerAgentTaskStructuredOutputs(nodes: Node[]): Node[] {
  */
 export function lowerPipelineNodes(nodes: Node[]): Node[] {
   return lowerLlmEmitMessages(
-    lowerNodeOutputs(lowerAgentTaskStructuredOutputs(lowerLlmStructuredOutputs(nodes))),
+    lowerNodeOutputs(
+      lowerSetVariableReturnOutputs(
+        lowerAgentTaskStructuredOutputs(lowerLlmStructuredOutputs(nodes)),
+      ),
+    ),
   );
 }

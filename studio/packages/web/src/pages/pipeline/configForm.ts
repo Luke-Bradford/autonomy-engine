@@ -702,7 +702,7 @@ function deriveElementFields(element: unknown, waivedByIdentity = false): Config
 
   const cells: ConfigField[] = [];
   for (const [name, cellSchema] of Object.entries(shape as Record<string, unknown>)) {
-    const { inner, optional, defaultText, singleLine, label } = unwrap(cellSchema);
+    const { inner, optional, defaultText, singleLine, literal, label } = unwrap(cellSchema);
     // Classified WITHOUT recursion: a cell that is itself a row list or a
     // one-per-line list degrades the whole field to JSON rather than nesting.
     // Neither has a designed shape inside a table cell, and `stringList`'s
@@ -727,6 +727,9 @@ function deriveElementFields(element: unknown, waivedByIdentity = false): Config
       ...(numberRule && { numberRule }),
       ...(defaultText !== undefined && { defaultText }),
       ...(singleLine && kind === 'text' && { singleLine: true as const }),
+      // #1600 C12b — a literal cell (Set variable's return Key) gets no ƒx, as a
+      // literal field does not.
+      ...(literal && kind === 'text' && { literal: true as const }),
       // #1396: an enum cell's select names each value ("User", not `user`).
       ...(label !== undefined && kind === 'enum' && { label }),
     });

@@ -10,6 +10,7 @@ import {
   timeoutApplies,
   authorsCallBlob,
   lowerPipelineNodes,
+  lowerSetVariableReturnOutputs,
   lowerRetiredTypes,
   refreshFormerOutputs,
   activityModeGroup,
@@ -2442,7 +2443,12 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       updateNodeConfig(id, config) {
         if (!get().nodes.some((n) => n.id === id)) return;
         edit((s) => ({
-          nodes: s.nodes.map((n) => (n.id === id ? { ...n, config } : n)),
+          // #1600 C12b — a Set variable's contract follows its Operation now, not
+          // at the next load, so a child's own `${nodes.<ret>.output.pipelineReturnValue}`
+          // checks against the contract the server will store.
+          nodes: s.nodes.map((n) =>
+            n.id === id ? lowerSetVariableReturnOutputs([{ ...n, config }])[0]! : n,
+          ),
         }));
       },
 

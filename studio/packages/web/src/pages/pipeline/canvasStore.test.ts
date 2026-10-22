@@ -994,6 +994,36 @@ describe('canvasStore', () => {
     });
   });
 
+  it('#1600 C12b — updateNodeConfig derives a Set variable’s contract from its Operation', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        nodes: [
+          {
+            id: 'n_v',
+            type: 'set_variable',
+            config: { variable: 'x', value: '1', outputs: [] },
+            position: { x: 0, y: 0 },
+          },
+        ],
+        edges: [],
+      }),
+    );
+    const outputs = () => s.getState().nodes.find((n) => n.id === 'n_v')!.config['outputs'];
+    s.getState().updateNodeConfig('n_v', {
+      operation: 'return',
+      returnValues: [{ key: 'k', type: 'null' }],
+      outputs: [],
+    });
+    expect(outputs()).toEqual([{ name: 'pipelineReturnValue', type: 'json' }]);
+    s.getState().updateNodeConfig('n_v', {
+      variable: 'x',
+      value: '1',
+      outputs: [{ name: 'pipelineReturnValue', type: 'json' }],
+    });
+    expect(outputs()).toEqual([]);
+  });
+
   it('setNodeConnection binds and clears a connection', () => {
     const s = createCanvasStore();
     s.getState().loadVersion(version());
