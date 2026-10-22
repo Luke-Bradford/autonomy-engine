@@ -848,6 +848,136 @@ describe('Out and In-out parameters (C10b-2a)', () => {
   });
 });
 
+describe('a cancel reaches the block in flight (#1800)', () => {
+  const SLEEP = 'select pg_sleep(60)';
+  const sessionKey = { processID: 4242, secretKey: -99 };
+
+  /**
+   * A run whose SLEEP block waits until a CancelRequest is sent, then fails as
+   * the server does (57014). `abortOn` names the statement whose start aborts
+   * the run; `key` is what the client carries.
+   */
+  async function runCancelled(
+    blocks: Block[],
+    over: Parameters<typeof scriptCtx>[1] & {
+      key?: Partial<typeof sessionKey>;
+      abortOn?: string;
+    } = {},
+  ): Promise<{ events: ActivityEvent[]; queries: string[]; sent: unknown[][] }> {
+    const { key = sessionKey, abortOn = SLEEP, ...settings } = over;
+    const controller = new AbortController();
+    const { factory, queries } = recordingFactory();
+    const keyed: PostgresClientFactory = (opts) => {
+      const client = factory(opts);
+      return {
+        ...client,
+        ...key,
+        query: (sql, values) => {
+          const text = typeof sql === 'string' ? sql : sql.text;
+          if (text === abortOn) controller.abort();
+          return client.query(sql, values);
+        },
+      };
+    };
+    const sent: unknown[][] = [];
+    let cancelBlock: () => void = () => undefined;
+    const stream: PostgresStatementStream = (_c, statement) => {
+      queries.push(statement.sql);
+      if (statement.sql !== SLEEP) {
+        return Promise.resolve({ hasFields: false, command: 'INSERT', rowCount: 1 });
+      }
+      return new Promise((resolve, reject) => {
+        cancelBlock = () => reject(pgError('canceling statement due to user request', '57014'));
+        if (abortOn === SLEEP) controller.abort();
+        // A client with no session key cannot be cancelled: the block runs out.
+        if (key.processID === undefined) {
+          resolve({ hasFields: false, command: 'SELECT', rowCount: 1 });
+        }
+      });
+    };
+    const events: ActivityEvent[] = [];
+    for await (const e of runPostgresScript(
+      scriptCtx(blocks, { ...settings, signal: controller.signal }),
+      {
+        createClient: keyed,
+        secret: SECRET,
+        types: undefined,
+        stream,
+        sendCancel: (target, pid, secretKey) => {
+          sent.push([target, pid, secretKey]);
+          cancelBlock();
+          return Promise.resolve();
+        },
+      },
+    )) {
+      events.push(e);
+    }
+    return { events, queries, sent };
+  }
+
+  it('sends the server a CancelRequest for the session, and the block’s 57014 reads as cancelled', async () => {
+    const { events, queries, sent } = await runCancelled([
+      { type: 'nonQuery', sql: SLEEP },
+      { type: 'nonQuery', sql: 'insert into t values (2)' },
+    ]);
+    expect(sent).toEqual([
+      [{ host: 'db.invalid', port: DEFAULT_POSTGRES_PORT, timeoutMs: 10_000 }, 4242, -99],
+    ]);
+    expect(failureOf(events)).toEqual({ type: 'failed', kind: 'cancelled', error: 'script aborted' });
+    expect(queries).not.toContain('insert into t values (2)');
+  });
+
+  it('cancels toward the connection’s own port and connect timeout', async () => {
+    const { sent } = await runCancelled([{ type: 'nonQuery', sql: SLEEP }], {
+      connection: { ...CONNECTION, writable: true, port: 6543, connectTimeoutMs: 2_500 },
+    });
+    expect(sent).toEqual([[{ host: 'db.invalid', port: 6543, timeoutMs: 2_500 }, 4242, -99]]);
+  });
+
+  it('stays cancelled, never permanent, when a block outside a transaction had already applied', async () => {
+    // A permanent failure would hide an activity timeout behind "block 2 failed".
+    const { events } = await runCancelled([
+      { type: 'nonQuery', sql: 'insert into t values (1)' },
+      { type: 'nonQuery', sql: SLEEP },
+    ]);
+    expect(failureOf(events).kind).toBe('cancelled');
+    expect(failureOf(events).error).toMatch(/^script aborted — 1 block\(s\)/);
+  });
+
+  it('reads as cancelled, not as the Timeout per block, when a Block timeout is set', async () => {
+    const { events } = await runCancelled([{ type: 'nonQuery', sql: SLEEP }], {
+      blockTimeoutSeconds: 5,
+    });
+    expect(failureOf(events)).toEqual({ type: 'failed', kind: 'cancelled', error: 'script aborted' });
+  });
+
+  it('rolls one transaction back after the cancel', async () => {
+    const { events, queries } = await runCancelled([{ type: 'nonQuery', sql: SLEEP }], {
+      runAsOneTransaction: true,
+    });
+    expect(failureOf(events).kind).toBe('cancelled');
+    expect(queries.slice(1)).toEqual(['BEGIN', SLEEP, 'ROLLBACK']);
+  });
+
+  it('sends nothing when the client carries no session key, and the block runs out', async () => {
+    const { events, sent } = await runCancelled([{ type: 'nonQuery', sql: SLEEP }], { key: {} });
+    expect(sent).toEqual([]);
+    // The cancel is still honoured once the block ends, which by then had run.
+    expect(failureOf(events).kind).toBe('cancelled');
+    expect(failureOf(events).error).toMatch(/^script aborted — 1 block\(s\)/);
+  });
+
+  it('sends nothing for a cancel while no block is in flight (during BEGIN)', async () => {
+    const { events, sent, queries } = await runCancelled([{ type: 'nonQuery', sql: SLEEP }], {
+      runAsOneTransaction: true,
+      abortOn: 'BEGIN',
+    });
+    expect(sent).toEqual([]);
+    expect(failureOf(events).kind).toBe('cancelled');
+    expect(queries).not.toContain(SLEEP);
+  });
+});
+
 describe('Block timeout (C10b-2b)', () => {
   const blocks: Block[] = [{ type: 'query', sql: 'select 1 as one' }];
   const answers = { 'select 1 as one': { rows: [{ one: 1 }] } };
@@ -1199,12 +1329,14 @@ describe.skipIf(LIVE_HOST === undefined)('Script on a live postgres (C10b-1)', (
       writable?: boolean;
       captureMessages?: boolean;
       blockTimeoutSeconds?: number;
+      signal?: AbortSignal;
+      connection?: Record<string, unknown>;
     } = {},
   ): Promise<ActivityEvent[]> {
-    const { writable = true, ...settings } = over;
+    const { writable = true, connection, ...settings } = over;
     const events: ActivityEvent[] = [];
     for await (const e of createPostgresAdapter(realFactory).runActivity(
-      scriptCtx(blocks, { ...settings, connection: { ...live, writable } }),
+      scriptCtx(blocks, { ...settings, connection: { ...live, writable, ...connection } }),
       password,
     )) {
       events.push(e);
@@ -1232,6 +1364,32 @@ describe.skipIf(LIVE_HOST === undefined)('Script on a live postgres (C10b-1)', (
       truncated: false,
     });
     expect(await count()).toBe(4);
+  });
+
+  it('cancels the block in flight at the server, well inside a long Statement timeout (#1800)', async () => {
+    const marker = `c1800_${String(process.pid)}`;
+    const controller = new AbortController();
+    const started = Date.now();
+    setTimeout(() => controller.abort(), 500);
+    const events = await runLive(
+      [{ type: 'query', sql: `select pg_sleep(60) as ${marker}` }],
+      { signal: controller.signal, connection: { statementTimeoutMs: 120_000 } },
+    );
+    expect(failureOf(events)).toEqual({ type: 'failed', kind: 'cancelled', error: 'script aborted' });
+    expect(Date.now() - started).toBeLessThan(10_000);
+    // The server is no longer running it.
+    let running = -1;
+    for (let i = 0; i < 50 && running !== 0; i += 1) {
+      running = await admin(async (c) => {
+        const r = await c.query<{ n: string }>(
+          `select count(*) as n from pg_stat_activity where state = 'active' and query like $1 and pid <> pg_backend_pid()`,
+          [`%${marker}%`],
+        );
+        return Number(r.rows[0]!.n);
+      });
+      if (running !== 0) await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    expect(running).toBe(0);
   });
 
   it('streams a result without keeping its rows (pg 8.23 accumulates them under a callback)', async () => {
