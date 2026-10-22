@@ -177,7 +177,11 @@ function scriptFailure(err: unknown): ActivityEvent {
   return failed('permanent', err instanceof Error ? err.message : String(err));
 }
 
-function prepareBlock(db: Database.Database, block: ScriptBlock, index: number): Database.Statement {
+function prepareBlock(
+  db: Database.Database,
+  block: ScriptBlock,
+  index: number,
+): Database.Statement {
   let statement: Database.Statement;
   try {
     statement = db.prepare(block.sql);
@@ -309,7 +313,10 @@ async function executeSqliteScript(
     }
     if (committedWrites > 0) {
       // A retry would run the applied blocks again, so it is refused.
-      const kind = failure instanceof DatasetIoError && failure.kind === 'cancelled' ? 'cancelled' : 'permanent';
+      const kind =
+        failure instanceof DatasetIoError && failure.kind === 'cancelled'
+          ? 'cancelled'
+          : 'permanent';
       failure = new DatasetIoError(
         kind,
         `${failure.message} — ${committedWrites} earlier block(s) had already changed the store and stay applied, so this is not retried. Turn on Run as one transaction to make the script all or nothing`,

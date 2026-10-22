@@ -30,7 +30,6 @@ import {
   sqliteConnectionConfigSchema,
   storeFailure,
   type SqliteRow,
-  type SqliteValue,
 } from './sqlite-store.js';
 export {
   confineStorePath,
@@ -355,7 +354,6 @@ function sqliteSource(connectionConfig: z.infer<typeof sqliteConnectionConfigSch
       ),
   };
 }
-
 
 /**
  * #1600 OR41 C8c — sqlite's half of Get metadata on a table, from ONE read-only

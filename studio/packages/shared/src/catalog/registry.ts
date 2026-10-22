@@ -1598,7 +1598,11 @@ const ENTRIES: ActivityCatalogEntry[] = [
     kind: 'execution',
     category: 'general',
     tabs: [
-      { key: 'settings', bindings: ['connection'], fields: ['runAsOneTransaction', 'captureResultSets'] },
+      {
+        key: 'settings',
+        bindings: ['connection'],
+        fields: ['runAsOneTransaction', 'captureResultSets'],
+      },
       { key: 'script', fields: ['blocks'] },
     ],
     // A Non-query block changes the store, and a crash mid-script cannot tell

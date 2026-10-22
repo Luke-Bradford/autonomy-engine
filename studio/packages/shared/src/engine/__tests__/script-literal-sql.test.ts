@@ -82,7 +82,9 @@ describe('prepInput leaves a Script block’s SQL and Type unsubstituted (C10a)'
 describe('the save gate refuses a ${} in a Script block’s SQL or Type (C10a)', () => {
   it('accepts literal SQL with a ${} bind value', () => {
     const node = script({
-      blocks: [{ type: 'nonQuery', sql: 'delete from t where r = :r', parameters: { r: '${run.runId}' } }],
+      blocks: [
+        { type: 'nonQuery', sql: 'delete from t where r = :r', parameters: { r: '${run.runId}' } },
+      ],
     });
     expect(validateDoc(doc([node]))).toEqual([]);
   });
@@ -94,7 +96,9 @@ describe('the save gate refuses a ${} in a Script block’s SQL or Type (C10a)',
         { type: 'nonQuery', sql: "delete from t where r = '${run.runId}'" },
       ],
     });
-    expect(validateDoc(doc([node])).join(' ')).toMatch(/blocks\[1\]\.sql: a Script block's SQL stays literal/);
+    expect(validateDoc(doc([node])).join(' ')).toMatch(
+      /blocks\[1\]\.sql: a Script block's SQL stays literal/,
+    );
   });
 
   it('refuses a ${} as a block’s Type', () => {

@@ -68,28 +68,38 @@ test.describe('#1600 C10a — Script on SQLite', () => {
         'aria-selected',
         'true',
       );
-      await expect(pane.getByRole('checkbox', { name: 'Run as one transaction' })).not.toBeChecked();
-      await expect(pane.getByLabel('Capture result sets')).toHaveValue('firstRows');
+      await expect(
+        pane.getByRole('checkbox', { name: 'Run as one transaction' }),
+      ).not.toBeChecked();
+      // Unset, so the default is shown and nothing is written.
+      await expect(
+        pane.getByLabel('Capture result sets', { exact: true }).locator('option:checked'),
+      ).toHaveText(/First 1000 rows/);
 
       await pane.getByRole('tab', { name: 'Script', exact: true }).click();
-      await expect(pane.getByLabel('Script blocks row 1 type')).toHaveValue('nonQuery');
-      await expect(pane.getByLabel('Script blocks row 2 type')).toHaveValue('query');
-      const firstSql = pane.getByLabel('Script blocks row 1 sql');
+      await expect(pane.getByLabel('Script blocks row 1 type', { exact: true })).toHaveValue(
+        'nonQuery',
+      );
+      await expect(pane.getByLabel('Script blocks row 2 type', { exact: true })).toHaveValue(
+        'query',
+      );
+      const firstSql = pane.getByLabel('Script blocks row 1 SQL', { exact: true });
       await expect(firstSql).toHaveValue('UPDATE orders SET qty = qty + :inc');
       // The SQL is literal: no ƒx beside it.
       await expect(
-        pane.getByRole('button', { name: /^Insert reference into Script blocks row 1 sql/ }),
+        pane.getByRole('button', { name: /^Insert reference into Script blocks row 1 SQL/ }),
       ).toHaveCount(0);
       // Measured at 1440x900: the first block is on screen without scrolling.
       const box = (await firstSql.boundingBox())!;
       expect(box.y + box.height).toBeLessThanOrEqual(900);
 
       // Authored, not only seeded: the bind value becomes an expression.
-      const params = pane.getByLabel('Script blocks row 1 parameters');
+      const params = pane.getByLabel('Script blocks row 1 parameters — JSON', { exact: true });
       await params.fill('{"inc": "${string(add(2, 3))}"}');
-      await params.blur();
+      await pane.getByRole('button', { name: 'Apply config' }).click();
       await pane.getByRole('tab', { name: 'Settings', exact: true }).click();
       await pane.getByRole('checkbox', { name: 'Run as one transaction' }).check();
+      await pane.getByRole('button', { name: 'Apply config' }).click();
       await expect(card).toContainText('2 blocks · one transaction');
       await expect(problemsToggle(page)).not.toHaveText(/[1-9]/);
 
@@ -140,5 +150,4 @@ test.describe('#1600 C10a — Script on SQLite', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
-
 });

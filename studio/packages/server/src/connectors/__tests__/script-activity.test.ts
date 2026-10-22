@@ -73,9 +73,17 @@ describe('Script on SQLite (C10a)', () => {
     const { root, path } = store(3);
     const events = await run(
       scriptCtx(writableConfig(root, path), [
-        { type: 'nonQuery', sql: 'insert into t (id, name) values (:id, :name)', parameters: { id: 10, name: 'ten' } },
+        {
+          type: 'nonQuery',
+          sql: 'insert into t (id, name) values (:id, :name)',
+          parameters: { id: 10, name: 'ten' },
+        },
         { type: 'nonQuery', sql: "update t set name = 'x' where id <= 2" },
-        { type: 'query', sql: 'select id, name from t where id >= :min order by id', parameters: { min: 3 } },
+        {
+          type: 'query',
+          sql: 'select id, name from t where id >= :min order by id',
+          parameters: { min: 3 },
+        },
         { type: 'query', sql: 'select count(*) as n from t' },
       ]),
     );
@@ -100,8 +108,12 @@ describe('Script on SQLite (C10a)', () => {
 
   it('runs a script of Query blocks only on a connection that is not writable', async () => {
     const { root, path } = store(2);
-    const events = await run(scriptCtx({ roots: [root], path }, [{ type: 'query', sql: 'select id from t' }]));
-    expect(outputsOf(events)['resultSets']).toEqual([{ rowCount: 2, rows: [{ id: 1 }, { id: 2 }] }]);
+    const events = await run(
+      scriptCtx({ roots: [root], path }, [{ type: 'query', sql: 'select id from t' }]),
+    );
+    expect(outputsOf(events)['resultSets']).toEqual([
+      { rowCount: 2, rows: [{ id: 1 }, { id: 2 }] },
+    ]);
   });
 
   it('refuses a Non-query block on a connection that is not writable, before anything runs', async () => {
@@ -157,9 +169,13 @@ describe('Script on SQLite (C10a)', () => {
   it('refuses a :name with no value, naming the block', async () => {
     const { root, path } = store(1);
     const events = await run(
-      scriptCtx(writableConfig(root, path), [{ type: 'query', sql: 'select * from t where id = :id' }]),
+      scriptCtx(writableConfig(root, path), [
+        { type: 'query', sql: 'select * from t where id = :id' },
+      ]),
     );
-    expect(failureOf(events).error).toBe("Script block 1 binds 'id' with no value in its Parameters");
+    expect(failureOf(events).error).toBe(
+      "Script block 1 binds 'id' with no value in its Parameters",
+    );
   });
 
   it('refuses a Query whose statement returns no rows', async () => {
@@ -167,15 +183,21 @@ describe('Script on SQLite (C10a)', () => {
     const events = await run(
       scriptCtx(writableConfig(root, path), [{ type: 'query', sql: 'create table u (a)' }]),
     );
-    expect(failureOf(events).error).toMatch(/Script block 1 is a Query, but its statement returns no rows/);
+    expect(failureOf(events).error).toMatch(
+      /Script block 1 is a Query, but its statement returns no rows/,
+    );
   });
 
   it('refuses two statements in one block', async () => {
     const { root, path } = store(1);
     const events = await run(
-      scriptCtx(writableConfig(root, path), [{ type: 'nonQuery', sql: 'delete from t; delete from t' }]),
+      scriptCtx(writableConfig(root, path), [
+        { type: 'nonQuery', sql: 'delete from t; delete from t' },
+      ]),
     );
-    expect(failureOf(events).error).toMatch(/Script block 1 could not be prepared: .*more than one statement/);
+    expect(failureOf(events).error).toMatch(
+      /Script block 1 could not be prepared: .*more than one statement/,
+    );
     expect(count(path)).toBe(1);
   });
 
@@ -193,7 +215,9 @@ describe('Script on SQLite (C10a)', () => {
     );
     expect(failureOf(events)).toMatchObject({
       kind: 'permanent',
-      error: expect.stringMatching(/^Script block 2 could not be prepared: no such table: missing$/),
+      error: expect.stringMatching(
+        /^Script block 2 could not be prepared: no such table: missing$/,
+      ),
     });
     expect(count(path)).toBe(2);
   });
@@ -239,7 +263,9 @@ describe('Script on SQLite (C10a)', () => {
 
   it('keeps the first 1000 rows of a result set, counts them all, and warns', async () => {
     const { root, path } = store(LOOKUP_ROW_CAP + 5);
-    const events = await run(scriptCtx({ roots: [root], path }, [{ type: 'query', sql: 'select id from t' }]));
+    const events = await run(
+      scriptCtx({ roots: [root], path }, [{ type: 'query', sql: 'select id from t' }]),
+    );
     const outputs = outputsOf(events);
     const [set] = outputs['resultSets'] as { rowCount: number; rows: unknown[] }[];
     expect(set!.rowCount).toBe(LOOKUP_ROW_CAP + 5);
@@ -265,7 +291,9 @@ describe('Script on SQLite (C10a)', () => {
   it('keeps integers past 2^53 exact', async () => {
     const { root, path } = store(0);
     const events = await run(
-      scriptCtx({ roots: [root], path }, [{ type: 'query', sql: 'select 9007199254740993 as big' }]),
+      scriptCtx({ roots: [root], path }, [
+        { type: 'query', sql: 'select 9007199254740993 as big' },
+      ]),
     );
     const [set] = outputsOf(events)['resultSets'] as { rows: { big: unknown }[] }[];
     expect(String(set!.rows[0]!.big)).toBe('9007199254740993');

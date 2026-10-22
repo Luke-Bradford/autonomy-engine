@@ -86,8 +86,9 @@ const HELP_LIMITS: Record<string, number> = {
   // the output it writes, Max rows its ceiling, When over the limit both bounds.
   // +1 for C7b's Read as, which says what each mode reads.
   Lookup: 10,
-  // #1600 OR41 C10a — Script, measured.
-  Script: 0,
+  // #1600 OR41 C10a — Script, measured: the pane's own and General's, and
+  // one on each Settings field, Script blocks, its SQL and its Parameters.
+  Script: 9,
   'Write file': 7,
   'Agent task': 8,
   'LLM call': 15,
@@ -403,8 +404,9 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   'Lookup (inline table)': 13,
   // +1 for C7c's When over the limit, whose `?` names the limit and the default.
   'Lookup (whole file as text)': 9,
-  // #1600 OR41 C10a — Script, measured.
-  Script: 0,
+  // #1600 OR41 C10a — Script, measured: the pane's own and General's, and
+  // one on each Settings field, Script blocks, its SQL and its Parameters.
+  Script: 9,
   'Write file': 7,
   'Agent task': 8,
   'LLM call': 15,
@@ -440,6 +442,7 @@ const SHOWS: Record<string, string[]> = {
   Delete: ['/tmp/e2e/in', '*.csv', '2026-10-01T00:00:00Z', '4', '/tmp/e2e/logs', 'E2E-1'],
   'Get metadata': ['/tmp/e2e', '*.csv', '2026-10-01T00:00:00Z', '1024', '3600', '2048', 'E2E-1'],
   'Lookup (whole file as text)': ['/tmp/e2e/in.txt', '2048', 'E2E-1'],
+  Script: ['DELETE FROM stage WHERE load = :load', 'SELECT count(*) AS n FROM stage', 'E2E-1'],
   'Write file': ['/tmp/e2e/out.txt', '2048', 'E2E-1'],
   Web: ['/v1/orders', 'X-Trace', '45', '2048', '120', 'E2E-1'],
   Lookup: ['orders_2026.csv', '4096', 'E2E-1'],
