@@ -1080,7 +1080,13 @@ const ENTRIES: ActivityCatalogEntry[] = [
         key: 'source',
         bindings: ['sourceConnection', 'sourceDataset'],
         // #1600 OR41 C6f-3 — ADF draws the partition option on the Source tab.
+        // C5a — Load and its watermark come first: catalogue §4.1 puts the Load
+        // toggle at the top of Source.
         fields: [
+          'load',
+          'watermarkColumnName',
+          'watermarkFrom',
+          'watermarkOld',
           'partitionOption',
           'partitionColumnName',
           'partitionLowerBound',
@@ -1146,6 +1152,11 @@ const ENTRIES: ActivityCatalogEntry[] = [
       partitionLowerBound: [{ field: 'partitionOption', in: ['dynamicRange'] }],
       partitionUpperBound: [{ field: 'partitionOption', in: ['dynamicRange'] }],
       parallelCopies: [{ field: 'partitionOption', in: ['dynamicRange'] }],
+      // C5a — the watermark under Incremental, its old value under Expression;
+      // save refuses them elsewhere (`copyIncrementalIssues`).
+      watermarkColumnName: [{ field: 'load', in: ['incremental'] }],
+      watermarkFrom: [{ field: 'load', in: ['incremental'] }],
+      watermarkOld: [{ field: 'watermarkFrom', in: ['expression'] }],
     },
     idempotent: false,
     // #1190 (M10 slice 2) — `postgres` joins the SOURCE allowlist, because the
@@ -1224,12 +1235,24 @@ const ENTRIES: ActivityCatalogEntry[] = [
       ...copyMeasureOutputs(),
       // C6c-1b — the folder log's file, null when the log is not written to one.
       optionalOut('logPath', 'string'),
+      // C5a — `{column, old, new}` under Load Incremental, absent under Full.
+      optionalOut('watermark', 'json'),
     ],
-    // The ten a node saved before C6c-1b declares (C6f-2's), the nine one saved
-    // before C6f-2 declares, and the five one saved before C6f-1 declares.
-    // Written out, not derived from `outputs`: each is a snapshot of an old
-    // default.
+    // The eleven a node saved before C5a declares (C6c-1b's), the ten one saved
+    // before C6c-1b declares (C6f-2's), the nine one saved before C6f-2
+    // declares, and the five one saved before C6f-1 declares. Written out, not
+    // derived from `outputs`: each is a snapshot of an old default.
     formerOutputs: [
+      [
+        out('rowsRead', 'number'),
+        out('rowsWritten', 'number'),
+        out('rowsSkipped', 'number'),
+        out('rowsFailed', 'number'),
+        out('bytesRead', 'number'),
+        out('truncated', 'boolean'),
+        ...copyMeasureOutputs(),
+        optionalOut('logPath', 'string'),
+      ],
       [
         out('rowsRead', 'number'),
         out('rowsWritten', 'number'),

@@ -363,6 +363,102 @@ export function copyPartitionIssues(
 }
 
 /**
+ * #1600 OR41 C5a — catalogue §4.1's Load: Full reads every source row,
+ * Incremental only the rows above the old watermark.
+ */
+export const COPY_LOAD_OPTIONS = ['full', 'incremental'] as const;
+export const copyLoadSchema = z.enum(COPY_LOAD_OPTIONS);
+
+/**
+ * #1600 OR41 C5a — where an Incremental load's old watermark comes from:
+ * Automatic is the value studio stored when this activity last committed a copy
+ * of the same source, Expression is a value the pipeline supplies (a Lookup on a
+ * control table, a parameter).
+ */
+export const COPY_WATERMARK_FROM = ['automatic', 'expression'] as const;
+export const copyWatermarkFromSchema = z.enum(COPY_WATERMARK_FROM);
+
+/**
+ * #1600 OR41 C5a — the incremental settings that would do something other than
+ * what they say. Load and Watermark from stay literal, because they decide
+ * which other fields are required and whether studio stores a watermark, and
+ * the column stays literal (§8). Incremental reads with one reader: a
+ * partitioned incremental read is not built.
+ */
+export function copyIncrementalIssues(
+  config: Record<string, unknown>,
+): readonly { readonly field: string; readonly message: string }[] {
+  const issues: { field: string; message: string }[] = [];
+  const load = config['load'] ?? 'full';
+  const from = config['watermarkFrom'] ?? 'automatic';
+  const column = config['watermarkColumnName'];
+  const old = config['watermarkOld'];
+  if (typeof load === 'string' && load.includes('${')) {
+    issues.push({ field: 'load', message: 'Load stays literal, because it decides which fields apply' });
+    return issues;
+  }
+  if (typeof from === 'string' && from.includes('${')) {
+    issues.push({
+      field: 'watermarkFrom',
+      message: 'Watermark from stays literal, because it decides which fields apply',
+    });
+    return issues;
+  }
+  if (typeof column === 'string' && column.includes('${')) {
+    issues.push({
+      field: 'watermarkColumnName',
+      message:
+        'the watermark column stays literal, so a column name never comes from an expression',
+    });
+  }
+  if (load !== 'incremental') {
+    if (column !== undefined) {
+      issues.push({
+        field: 'watermarkColumnName',
+        message: 'a watermark column needs Load Incremental',
+      });
+    }
+    if (from === 'expression') {
+      issues.push({
+        field: 'watermarkFrom',
+        message: 'Watermark from Expression needs Load Incremental',
+      });
+    }
+    if (old !== undefined && from !== 'expression') {
+      issues.push({ field: 'watermarkOld', message: 'an old watermark needs Load Incremental' });
+    }
+    return issues;
+  }
+  if (column === undefined) {
+    issues.push({
+      field: 'watermarkColumnName',
+      message: 'Load Incremental needs a watermark column',
+    });
+  }
+  if (from === 'expression') {
+    if (old === undefined || (typeof old === 'string' && old.trim() === '')) {
+      issues.push({
+        field: 'watermarkOld',
+        message: 'Watermark from Expression needs an old watermark',
+      });
+    }
+  } else if (old !== undefined) {
+    issues.push({
+      field: 'watermarkOld',
+      message:
+        'an old watermark is read only with Watermark from Expression; Automatic stores its own',
+    });
+  }
+  if ((config['partitionOption'] ?? 'none') === 'dynamicRange') {
+    issues.push({
+      field: 'load',
+      message: 'Load Incremental reads with one reader, so set Partition option to None',
+    });
+  }
+  return issues;
+}
+
+/**
  * #1600 OR41 C6d-1 — why Skip incompatible rows cannot apply, or `null`. ADF's
  * `enableSkipIncompatibleRow` "doesn't apply" with Upsert, and studio's
  * PostgreSQL Upsert writes each chunk as one set statement, so a rejected row
@@ -623,6 +719,43 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
           "column cannot hold) instead of failing. A trigger's rejection still fails. Not with " +
           'Upsert. Slower when on.',
       }),
+      // #1600 OR41 C5a — catalogue §4.1's Load toggle and its watermark, first
+      // on the Source tab. ADF builds incremental copy from a Lookup, a Copy
+      // and a Stored procedure
+      // (https://learn.microsoft.com/azure/data-factory/tutorial-incremental-copy-overview);
+      // studio folds the pattern into the Copy, and Expression keeps ADF's.
+      load: presented(copyLoadSchema.default('full'), {
+        title: 'Load',
+        description:
+          'Incremental copies only the rows whose watermark column is above the old ' +
+          'watermark, up to the highest value the source holds now.',
+        options: optionTitles(copyLoadSchema, { full: 'Full', incremental: 'Incremental' }),
+      }),
+      // Literal, as the partition column is: §8 keeps an identifier out of expressions.
+      watermarkColumnName: presented(literalText(singleLine(z.string().min(1))).optional(), {
+        title: 'Watermark column',
+        description:
+          'A column that only grows, such as a last-modified time or an increasing ID. Rows ' +
+          'whose value is NULL are never copied, and a row committed late with a value at or ' +
+          'below the last watermark is never copied.',
+      }),
+      watermarkFrom: presented(copyWatermarkFromSchema.default('automatic'), {
+        title: 'Watermark from',
+        description:
+          'Automatic stores the highest value each committed copy read, per activity and ' +
+          'source, and the next run starts above it. Expression takes the old watermark from ' +
+          'the pipeline, for example a Lookup on a control table.',
+        options: optionTitles(copyWatermarkFromSchema, {
+          automatic: 'Automatic',
+          expression: 'Expression',
+        }),
+      }),
+      watermarkOld: presented(bindValue.optional(), {
+        title: 'Old watermark',
+        description:
+          'The copy reads rows above this value. It is compared in the source store, in the ' +
+          "column's type. A null value copies every row up to the highest value.",
+      }),
       // #1600 OR41 C6f-3 — ADF's `partitionOption` on a database source
       // (https://learn.microsoft.com/azure/data-factory/connector-azure-database-for-postgresql#parallel-copy-from-azure-database-for-postgresql).
       // Dynamic range only: Physical partitions, a Query source's partition hook,
@@ -697,6 +830,9 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
       const verifyIssue = copyVerifyConsistencyIssue(cfg);
       if (verifyIssue !== null) {
         ctx.addIssue({ code: 'custom', path: ['validateDataConsistency'], message: verifyIssue });
+      }
+      for (const issue of copyIncrementalIssues(cfg)) {
+        ctx.addIssue({ code: 'custom', path: [issue.field], message: issue.message });
       }
       for (const issue of copyPartitionIssues(cfg)) {
         ctx.addIssue({ code: 'custom', path: [issue.field], message: issue.message });

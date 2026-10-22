@@ -3252,6 +3252,19 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
       if (verifyIssue !== null) {
         errors.push(`node.${node.id}.validateDataConsistency: ${verifyIssue}`);
       }
+      // #1600 C5a — Automatic keys its stored watermark by the activity and its
+      // source, and an iteration does not identify what it copied.
+      if (
+        node.config['load'] === 'incremental' &&
+        (node.config['watermarkFrom'] ?? 'automatic') === 'automatic' &&
+        ownedByKind(node.id, containers, ['foreach', 'loop'])
+      ) {
+        errors.push(
+          `node.${node.id}.watermarkFrom: Watermark from Automatic cannot run inside a ForEach ` +
+            'or Until — an iteration does not identify what it copied; use Expression with a ' +
+            'watermark per item',
+        );
+      }
     }
     // #1480 — an unknown `type`, or a literal config the adapter would refuse
     // at dispatch, is refused here: a version that saves must be one that runs.
@@ -6698,11 +6711,24 @@ export interface ContainerMembership {
  * the container count, so a cyclic membership (refused elsewhere) cannot spin.
  */
 function foreachOwned(id: string, containers: Container[]): boolean {
+  return ownedByKind(id, containers, ['foreach']);
+}
+
+/**
+ * Whether `id` sits inside a container of one of `kinds`, at any depth: C12b's
+ * walk, which #1600 C5a widened to an Until (`loop`) as well.
+ */
+function ownedByKind(
+  id: string,
+  containers: Container[],
+  kinds: readonly Container['kind'][],
+): boolean {
   const { owner } = containerMembership(containers);
   const kindOf = new Map(containers.map((c) => [c.id, c.kind]));
   let at = owner.get(id);
   for (let hops = 0; at !== undefined && hops <= containers.length; hops += 1) {
-    if (kindOf.get(at) === 'foreach') return true;
+    const kind = kindOf.get(at);
+    if (kind !== undefined && kinds.includes(kind)) return true;
     at = owner.get(at);
   }
   return false;
