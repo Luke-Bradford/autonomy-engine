@@ -39,7 +39,12 @@ import { startRun, type DocResolver, type ExecutorCommand, type RetryAlarms } fr
 import { refuseToArm, stubAlarms } from './stub-alarms.js';
 import { reconcileOnBoot } from '../reconcile.js';
 import { loadEngineEvents } from '../events.js';
-import { acquireCopyWatermark, copyWatermarkKey } from '../copy-watermark.js';
+import {
+  acquireCopyWatermark,
+  copyFilesWatermarkKey,
+  copyWatermarkKey,
+} from '../copy-watermark.js';
+import { COPY_FILES_SETTLE_MS } from '../../connectors/fs-files-copy.js';
 import { until } from '../../__tests__/poll-until.js';
 import { DatasetIoError } from '../../connectors/dataset-io-error.js';
 import { createExecutor, PREFLIGHT_STORE_CONCURRENCY } from '../executor.js';
@@ -6500,5 +6505,100 @@ describe('createExecutor — #1600 OR41 C5a: Copy Load Incremental', () => {
     // 1, 2, 3, then 2 and 3 again: the second source had no watermark yet.
     expect(staged()).toHaveLength(5);
     expect(rowsOfDb(db, 'SELECT count(*) AS n FROM copy_watermarks')).toEqual([{ n: 2 }]);
+  });
+});
+
+/**
+ * #1600 OR41 C5b — a Files as-is copy's Load Incremental through the executor:
+ * the lease keyed by its folders, the stored time read as `old`, and stored
+ * again once every file is written. Real files on a real clock, so it waits out
+ * the settle margin before each run.
+ */
+describe('createExecutor — #1600 OR41 C5b: Copy · Files as-is Load Incremental', () => {
+  const dirs: string[] = [];
+  afterAll(async () => {
+    for (const d of dirs) await rm(d, { recursive: true, force: true });
+  });
+  const dir = async (prefix: string) => {
+    const d = await realpath(await mkdtemp(join(tmpdir(), prefix)));
+    dirs.push(d);
+    return d;
+  };
+  const settle = () => new Promise((r) => setTimeout(r, COPY_FILES_SETTLE_MS + 100));
+
+  async function seed() {
+    const src = await dir('exec-c5b-src-');
+    const dst = await dir('exec-c5b-dst-');
+    const db = freshDb().db;
+    const sourceId = await seedConnection(db, 'fs', { roots: [src] }, null);
+    const sinkId = await seedConnection(db, 'fs', { roots: [dst], writable: true }, null);
+    const node: Node = {
+      id: 'n1',
+      type: 'copy_files',
+      config: { sourcePath: '.', load: 'incremental' },
+      connectionIds: { source: sourceId, sink: sinkId },
+      position: { x: 0, y: 0 },
+    };
+    const pvId = seedVersion(db, [node]);
+    return { src, dst, db, sourceId, sinkId, pvId };
+  }
+  const outputsOf = (db: Db, runId: string) => {
+    const done = loadEngineEvents(db, runId).find((e) => e.type === 'node.succeeded');
+    return done?.type === 'node.succeeded' ? done.outputs : undefined;
+  };
+
+  it('copies every file first, then only the files written since, through the stored time', async () => {
+    const { src, dst, db, pvId } = await seed();
+    await writeFile(join(src, 'a.txt'), 'a');
+    await settle();
+    const first = seedRun(db, pvId);
+    expect((await startRun(deps(db), first)).status).toBe('success');
+    const one = outputsOf(db, first.id)!;
+    expect(one).toMatchObject({ filesWritten: 1, watermark: { old: null } });
+
+    await writeFile(join(src, 'b.txt'), 'b');
+    await rm(join(dst, 'a.txt'));
+    await settle();
+    const second = seedRun(db, pvId);
+    expect((await startRun(deps(db), second)).status).toBe('success');
+    const two = outputsOf(db, second.id)!;
+    expect(two).toMatchObject({
+      filesWritten: 1,
+      watermark: { old: (one['watermark'] as { new: string }).new },
+    });
+    expect(await readdir(dst)).toEqual(['b.txt']);
+    expect(
+      db.all(sql.raw('SELECT column_name AS c, value_json AS v FROM copy_watermarks')),
+    ).toEqual([
+      { c: 'lastModified', v: JSON.stringify((two['watermark'] as { new: string }).new) },
+    ]);
+  }, 15_000);
+
+  it('refuses a second attempt on the same folders while one holds it, transient', async () => {
+    const { db, sourceId, sinkId, pvId } = await seed();
+    const held = acquireCopyWatermark(db, {
+      pipelineId: getPipelineVersion(db, pvId)!.pipelineId,
+      nodeId: 'n1',
+      copyKey: copyFilesWatermarkKey({
+        sourceConnectionId: sourceId,
+        sinkConnectionId: sinkId,
+        input: { sourcePath: '.', load: 'incremental' },
+      })!,
+      column: 'lastModified',
+      runId: 'run_other',
+    });
+    expect(held).not.toBe('busy');
+    try {
+      const run = seedRun(db, pvId);
+      expect((await startRun(deps(db), run)).status).toBe('failure');
+      const failed = loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed');
+      expect(failed).toMatchObject({
+        kind: 'transient',
+        code: FAILURE_CODES.COPY_WATERMARK_BUSY,
+        error: expect.stringContaining('the same files'),
+      });
+    } finally {
+      if (held !== 'busy') held.release();
+    }
   });
 });

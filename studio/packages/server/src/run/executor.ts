@@ -21,6 +21,7 @@ import {
   LLM_CALL_ACTIVITY_TYPE,
   LOOKUP_ACTIVITY_TYPE,
   COPY_ACTIVITY_TYPE,
+  COPY_FILES_ACTIVITY_TYPE,
   llmCallConfigSchema,
   llmCaptureModeSchema,
   normalizeLlmRequest,
@@ -46,6 +47,8 @@ import { ACTIVITY_TIMEOUT_REASON, activityTimeoutFailure, armDeadline } from './
 import { getRun } from '../repo/runs.js';
 import {
   acquireCopyWatermark,
+  COPY_FILES_WATERMARK_COLUMN,
+  copyFilesWatermarkKey,
   copyWatermarkKey,
   type CopyWatermarkLease,
 } from './copy-watermark.js';
@@ -500,7 +503,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
    * its lease and stored watermark (`copy-watermark.ts`), `null` for every other
    * node, or the failure when another attempt holds the lease or the store
    * cannot be read. Keyed by the pipeline (across its versions, since every save
-   * mints one), the doc node and the resolved source and sink.
+   * mints one), the doc node and the resolved source and sink. C5b — a Files as-is
+   * copy with Load Incremental too, keyed by its folders.
    */
   function copyWatermarkFor(
     node: Node,
@@ -512,28 +516,48 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     | { error: { error: string; kind: FailureKind; code?: string } }
     | null {
     const input = command.preparedInput;
-    const column = input['watermarkColumnName'];
-    if (
-      node.type !== COPY_ACTIVITY_TYPE ||
-      datasets === undefined ||
-      input['load'] !== 'incremental' ||
-      (input['watermarkFrom'] ?? 'automatic') !== 'automatic' ||
-      typeof column !== 'string'
-    ) {
-      return null;
+    if (input['load'] !== 'incremental') return null;
+    let target: { copyKey: string; column: string; what: string } | null = null;
+    if (node.type === COPY_FILES_ACTIVITY_TYPE) {
+      const copyKey = copyFilesWatermarkKey({
+        sourceConnectionId: command.resolvedConnectionIds?.source,
+        sinkConnectionId: command.resolvedConnectionIds?.sink,
+        input,
+      });
+      if (copyKey !== null) {
+        target = { copyKey, column: COPY_FILES_WATERMARK_COLUMN, what: 'files' };
+      }
+    } else {
+      const column = input['watermarkColumnName'];
+      if (
+        node.type === COPY_ACTIVITY_TYPE &&
+        datasets !== undefined &&
+        (input['watermarkFrom'] ?? 'automatic') === 'automatic' &&
+        typeof column === 'string'
+      ) {
+        target = {
+          copyKey: copyWatermarkKey({
+            source: {
+              connectionId: command.resolvedConnectionIds?.source,
+              dataset: datasets.source,
+            },
+            sink: { connectionId: command.resolvedConnectionIds?.sink, dataset: datasets.sink },
+            column,
+          }),
+          column,
+          what: 'rows',
+        };
+      }
     }
+    if (target === null) return null;
     const run = getRun(deps.db, runId);
     if (run === null) return null;
     try {
       const lease = acquireCopyWatermark(deps.db, {
         pipelineId: deps.resolveDoc(run.pipelineVersionId).pipelineId,
         nodeId: node.id,
-        copyKey: copyWatermarkKey({
-          source: { connectionId: command.resolvedConnectionIds?.source, dataset: datasets.source },
-          sink: { connectionId: command.resolvedConnectionIds?.sink, dataset: datasets.sink },
-          column,
-        }),
-        column,
+        copyKey: target.copyKey,
+        column: target.column,
         runId,
       });
       if (lease === 'busy') {
@@ -541,7 +565,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           error: {
             error:
               'another run is copying this source with Load Incremental, and both would copy ' +
-              'the same rows; it is copied once that run ends',
+              `the same ${target.what}; it is copied once that run ends`,
             kind: 'transient',
             code: FAILURE_CODES.COPY_WATERMARK_BUSY,
           },

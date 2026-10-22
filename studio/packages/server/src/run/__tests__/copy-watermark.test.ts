@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { acquireCopyWatermark, copyWatermarkKey } from '../copy-watermark.js';
+import {
+  acquireCopyWatermark,
+  copyFilesWatermarkKey,
+  copyWatermarkKey,
+} from '../copy-watermark.js';
 import { createPipeline } from '../../repo/pipelines.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
 
@@ -58,6 +62,58 @@ describe('copyWatermarkKey', () => {
         },
       }),
     ).toBe(key);
+  });
+});
+
+/**
+ * #1600 OR41 C5b — a Files as-is copy's key: the source connection and what it
+ * selects, and the sink connection and where it writes, read from the parsed
+ * config so a default written out keys as one left absent.
+ */
+describe('copyFilesWatermarkKey', () => {
+  const base = { sourceConnectionId: 'conn_a', sinkConnectionId: 'conn_s' };
+  const key = (input: Record<string, unknown>, over: Partial<typeof base> = {}) =>
+    copyFilesWatermarkKey({ ...base, ...over, input: { sourcePath: 'in', load: 'incremental', ...input } });
+  const k = key({});
+
+  it('changes with what is selected, where it is written and either connection', () => {
+    for (const changed of [
+      key({ sourcePath: 'other' }),
+      key({ wildcard: '*.csv' }),
+      key({ recursive: false }),
+      key({ pathType: 'list', fileListPath: 'l.txt' }),
+      key({ sinkFolder: 'out' }),
+      key({ copyBehavior: 'flatten' }),
+      key({}, { sourceConnectionId: 'conn_b' }),
+      key({}, { sinkConnectionId: 'conn_t' }),
+    ]) {
+      expect(changed).not.toBe(k);
+    }
+  });
+
+  it('keeps one key across how the copy runs, and across a default written out', () => {
+    for (const same of [
+      key({ recursive: true, wildcard: '*' }),
+      key({ ifExists: 'skip' }),
+      key({ afterCopy: 'move', moveTo: 'done' }),
+      key({ parallelCopies: 4, logLevel: 'info' }),
+    ]) {
+      expect(same).toBe(k);
+    }
+  });
+
+  it('never collides with a rows Copy key', () => {
+    expect(k).not.toBe(
+      copyWatermarkKey({
+        source: { connectionId: 'conn_a', dataset: { id: 'd', name: 'd', kind: 'table', config: {}, columns: [] } },
+        sink: { connectionId: 'conn_s', dataset: undefined },
+        column: 'lastModified',
+      }),
+    );
+  });
+
+  it('is null for a config that does not parse, which the copy refuses itself', () => {
+    expect(copyFilesWatermarkKey({ ...base, input: { load: 'incremental' } })).toBeNull();
   });
 });
 
