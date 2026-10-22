@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, max } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, max } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   GlobalReadSchema,
@@ -439,12 +439,28 @@ export function isDebugVersion(db: Db, id: string): boolean | null {
  * excluded here, and so from every caller built on this: the versions list, the
  * latest version a trigger binds, the workspace-git working copy and drift,
  * export and import. A debug version is reachable only by its id.
+ *
+ * `after` (#1507) keeps only the versions numbered above it. That is a complete
+ * delta: saved versions are numbered `max()+1` inside one synchronous
+ * transaction and are never deleted, so every version at or below a list's
+ * head was already in that list.
  */
-export function listPipelineVersions(db: Db, pipelineId: string): PipelineVersion[] {
+export function listPipelineVersions(
+  db: Db,
+  pipelineId: string,
+  opts?: { after?: number },
+): PipelineVersion[] {
+  const after = opts?.after;
   const rows = db
     .select()
     .from(pipelineVersions)
-    .where(and(eq(pipelineVersions.pipelineId, pipelineId), eq(pipelineVersions.debug, false)))
+    .where(
+      and(
+        eq(pipelineVersions.pipelineId, pipelineId),
+        eq(pipelineVersions.debug, false),
+        after === undefined ? undefined : gt(pipelineVersions.version, after),
+      ),
+    )
     .orderBy(asc(pipelineVersions.version))
     .all();
   return rows.map((row) => PipelineVersionSchema.parse(row));

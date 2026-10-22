@@ -245,6 +245,50 @@ describe('pipelines routes', () => {
     expect([404, 405]).toContain(deleteAttempt.statusCode);
   });
 
+  it('#1507 — GET versions?after=N returns only the saved versions numbered above N', async () => {
+    const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'Delta read' });
+    const doc = {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    };
+    const v1 = createPipelineVersion(app.db, doc);
+    const v2 = createPipelineVersion(app.db, doc);
+    const v3 = createPipelineVersion(app.db, doc);
+    // A debug version is numbered in its own sequence, so its `version` sits
+    // above `after` here — and it must still never come back on this list.
+    createPipelineVersion(app.db, doc, { debug: true });
+    createPipelineVersion(app.db, doc, { debug: true });
+    createPipelineVersion(app.db, doc, { debug: true });
+    createPipelineVersion(app.db, doc, { debug: true });
+
+    const list = async (query: string) => {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/pipelines/${pipeline.id}/versions${query}`,
+      });
+      return { status: res.statusCode, ids: (res.json() as { id: string }[]).map((v) => v.id) };
+    };
+
+    expect(await list('')).toEqual({ status: 200, ids: [v1.id, v2.id, v3.id] });
+    expect(await list('?after=0')).toEqual({ status: 200, ids: [v1.id, v2.id, v3.id] });
+    expect(await list('?after=1')).toEqual({ status: 200, ids: [v2.id, v3.id] });
+    expect(await list('?after=3')).toEqual({ status: 200, ids: [] });
+    expect(await list('?after=99')).toEqual({ status: 200, ids: [] });
+
+    // Digits only: `?after=` must not read as 0, and nothing is clamped.
+    for (const bad of ['', '-1', 'abc', '1.5', '1e2', ' 1']) {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/pipelines/${pipeline.id}/versions?after=${encodeURIComponent(bad)}`,
+      });
+      expect(res.statusCode, `after=${JSON.stringify(bad)}`).toBe(400);
+    }
+  });
+
   it('deleting a pipeline that has run history is a 409 conflict', async () => {
     const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'HasRuns' });
     const versionRes = await app.inject({

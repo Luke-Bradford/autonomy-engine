@@ -44,6 +44,25 @@ export function mergeVersionLists(
   return [...byId.values()].sort((a, b) => a.version - b.version);
 }
 
+/**
+ * #1507 — the highest version number up to which `list` is known to be
+ * complete: the end of its unbroken run from v1.
+ *
+ * Saved versions are numbered 1, 2, 3… with no gaps and are never deleted, so a
+ * list holding every number up to N holds every version up to N, and a re-read
+ * need only ask for what comes after it. The head alone is not that number: a
+ * save appends the version it minted from the server's answer, so after another
+ * tab's v2 and this page's v3 the list is [1, 3], complete only up to 1. Read
+ * from the list rather than tracked beside it, so every way a version reaches
+ * the list keeps it right, and a gap only ever makes the next read ask for more.
+ */
+export function contiguousVersionCeiling(list: readonly PipelineVersion[]): number {
+  const held = new Set(list.map((v) => v.version));
+  let n = 0;
+  while (held.has(n + 1)) n += 1;
+  return n;
+}
+
 /** One row of the history list — a version summarised, never its whole doc. */
 export interface VersionEntry {
   id: string;
