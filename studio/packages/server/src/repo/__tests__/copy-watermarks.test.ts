@@ -9,10 +9,10 @@ import { freshDb } from './helpers.js';
  * run, pruning debug runs or a secure output's redaction cannot lose it.
  */
 describe('copy watermarks repo', () => {
-  const key = (pipelineId: string, sourceKey = 'src-a') => ({
+  const key = (pipelineId: string, copyKey = 'src-a') => ({
     pipelineId,
     nodeId: 'copy1',
-    sourceKey,
+    copyKey,
   });
 
   it('reads nothing before a copy committed, then the value it stored', () => {

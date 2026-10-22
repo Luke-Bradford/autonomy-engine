@@ -251,7 +251,15 @@ export async function planSqliteIncremental(
       );
     }
     next = Number(hi);
-  } else if (typeof hi === 'number' || typeof hi === 'string') {
+  } else if (typeof hi === 'number') {
+    if (!Number.isFinite(hi)) {
+      throw new DatasetIoError(
+        'permanent',
+        `the watermark column '${watermark.column}' holds ${hi}, which a watermark cannot carry`,
+      );
+    }
+    next = hi;
+  } else if (typeof hi === 'string') {
     next = hi;
   } else {
     throw new DatasetIoError(

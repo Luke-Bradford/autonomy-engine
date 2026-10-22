@@ -199,7 +199,7 @@ function copyOutputs(
 /**
  * #1600 OR41 C5a — an Incremental copy's `watermark` output: the column, the
  * old watermark it read above, and the new one it read up to (the old one when
- * nothing was above it). Reported on failure too, so a partial is legible.
+ * nothing was above it). Reported on a failure only when the sink committed.
  */
 interface CopyWatermarkOutput {
   readonly column: string;
@@ -883,6 +883,10 @@ async function* copyRows(
     )
     .finally(() => ticks.close());
   let outcome: Awaited<typeof write>;
+  // #1600 OR41 C5a — the watermark of a copy whose sink committed, and why
+  // Automatic's could not be stored (null when it was, or when there is none).
+  let committed: CopyWatermarkOutput | undefined;
+  let storeError: string | null = null;
   try {
     for await (const progress of ticks) {
       yield { type: 'output', name: COPY_PROGRESS_OUTPUT, value: progress };
@@ -893,6 +897,13 @@ async function* copyRows(
     // store — running under nobody. Closing waits for it, as the executor waits
     // for its adapter; only a normal exit goes on to read the outcome.
     outcome = await write;
+    // C5a — stored here, the moment the sink has committed: a consumer that
+    // closes this generator once the write is done must not leave the rows
+    // committed and the watermark behind (the next run would copy them again).
+    if (outcome.ok && watermark !== undefined) {
+      committed = watermark;
+      if (parsed.data.watermarkFrom === 'automatic') storeError = storeWatermark(ctx, watermark);
+    }
     // C6f-3 — a sink that failed before pulling a row never iterated the plan.
     await partitionPlan?.close();
   }
@@ -901,20 +912,17 @@ async function* copyRows(
     if (!outcome.ok) throw outcome.error;
     const { result } = outcome;
     counters.rowsWritten = result.rowsWritten;
-    // #1600 OR41 C5a — the sink has committed, so Automatic's watermark moves
-    // now, before anything after the commit (the folder log's close) can fail.
-    if (watermark !== undefined && parsed.data.watermarkFrom === 'automatic') {
-      const stored = storeWatermark(ctx, watermark);
-      if (stored !== null) {
-        yield* endLog(stored);
-        for (const [name, value] of Object.entries(
-          copyOutputs(counters, measured(), logPath, usedParallelCopies, watermark),
-        )) {
-          yield { type: 'output', name, value };
-        }
-        yield failed('permanent', stored);
-        return;
+    // #1600 OR41 C5a — Automatic's watermark was stored as the sink committed
+    // (above); one that could not be fails the node, with the rows committed.
+    if (storeError !== null) {
+      yield* endLog(storeError);
+      for (const [name, value] of Object.entries(
+        copyOutputs(counters, measured(), logPath, usedParallelCopies, committed),
+      )) {
+        yield { type: 'output', name, value };
       }
+      yield failed('permanent', storeError);
+      return;
     }
     // `close` reports a failure rather than throwing it, so the committed count
     // is never zeroed by the catch below.
@@ -943,7 +951,7 @@ async function* copyRows(
         // so only closing the file is left to fail, and the rows are committed.
         // The counts are reported, then the failure (Files as-is's rule, C6c-1a).
         for (const [name, value] of Object.entries(
-          copyOutputs(counters, measured(), null, usedParallelCopies, watermark),
+          copyOutputs(counters, measured(), null, usedParallelCopies, committed),
         )) {
           yield { type: 'output', name, value };
         }
@@ -989,8 +997,10 @@ async function* copyRows(
     // keeps its own error, whatever the folder log's close reports.
     const terminal = copyFailure(err);
     yield* endLog(terminal.type === 'failed' ? terminal.error : undefined);
+    // C5a — a watermark only when the sink committed: a rolled-back copy's
+    // `new` would read as copied up to a value nothing landed for.
     for (const [name, value] of Object.entries(
-      copyOutputs(counters, measured(), logPath, usedParallelCopies, watermark),
+      copyOutputs(counters, measured(), logPath, usedParallelCopies, committed),
     )) {
       yield { type: 'output', name, value };
     }

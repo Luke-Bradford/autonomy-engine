@@ -2487,14 +2487,19 @@ describe('copy activity — Load Incremental (#1600 OR41 C5a)', () => {
   });
 
   it.each([
-    ['an integer past 2^53', "INSERT INTO t VALUES (9007199254740993, 'big')", /past 2\^53/],
-    ['a blob', "UPDATE t SET name = x'00' WHERE id = 3", /holds a blob/],
-  ])('refuses %s as a watermark before the sink writes', async (_label, sql, message) => {
+    ['an integer past 2^53', "INSERT INTO t VALUES (9007199254740993, 'big')", 'id', /past 2\^53/],
+    ['a blob', "UPDATE t SET name = x'00' WHERE id = 3", 'name', /holds a blob/],
+    [
+      'an infinite real',
+      'ALTER TABLE t ADD COLUMN v REAL; UPDATE t SET v = 9e999 WHERE id = 3',
+      'v',
+      /holds Infinity/,
+    ],
+  ])('refuses %s as a watermark before the sink writes', async (_label, sql, column, message) => {
     const s = stores();
     const db = new Database(s.sourcePath);
     db.exec(sql);
     db.close();
-    const column = sql.includes('blob') || sql.includes("x'00'") ? 'name' : 'id';
     const end = terminal(
       await run(
         copyCtx({
@@ -2529,6 +2534,49 @@ describe('copy activity — Load Incremental (#1600 OR41 C5a)', () => {
     expect(end).toMatchObject({ type: 'failed', kind: 'permanent' });
     expect(end.type === 'failed' ? end.error : '').toMatch(/watermark column 'nope'/);
     expect(rowsOf(s.sinkPath)).toEqual([]);
+  });
+
+  it('a copy whose sink rolls back stores no watermark and reports none', async () => {
+    const committed: unknown[] = [];
+    const io: CopyIo = {
+      describeSource: () => Promise.resolve(['id', 'name']),
+      sourceCoercion: () => ({}),
+      readBatches: () => {
+        throw new Error('the incremental plan must be read, not the whole source');
+      },
+      planIncremental: () =>
+        Promise.resolve({
+          next: 9,
+          batches: (async function* () {
+            yield [{ id: 9, name: 'z' }];
+          })(),
+        }),
+      writeRows: async ({ batches }) => {
+        // Read every row, then fail as a sink whose COMMIT is refused does.
+        let rows = 0;
+        for await (const batch of batches) rows += batch.length;
+        expect(rows).toBe(1);
+        throw new DatasetIoError('permanent', 'commit refused', { partialWritePossible: false });
+      },
+    };
+    const ctx = withWatermark(
+      copyCtx({
+        root: tempRoot(),
+        sourcePath: 'unused.db',
+        sinkPath: 'unused-dst.db',
+        input: incremental({}),
+      }),
+      1,
+      (next) => committed.push(next),
+    );
+    const events: ActivityEvent[] = [];
+    for await (const e of runCopyActivity(ctx, io)) events.push(e);
+    expect(terminal(events)).toMatchObject({
+      type: 'failed',
+      error: expect.stringMatching(/commit refused/),
+    });
+    expect(committed).toEqual([]);
+    expect('watermark' in outputsOf(events)).toBe(false);
   });
 
   it('refuses Load Incremental on a source with no incremental read (a file)', async () => {

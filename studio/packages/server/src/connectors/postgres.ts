@@ -752,10 +752,6 @@ export async function planPostgresPartitions(
 }
 
 /**
- * The alias the describe wrap gives the operator's statement. Fixed and quoted:
- * it is this module's own spelling, never anything authored.
- */
-/**
  * #1600 OR41 C5a — the watermark column types an Incremental read accepts: the
  * ones whose text form (under `DateStyle` ISO) reads back as the same value and
  * whose order is the value's. `money` (locale-formatted), `boolean`, `uuid`,
@@ -824,6 +820,8 @@ export async function planPostgresIncremental(
   try {
     await client.query('BEGIN READ ONLY');
     await client.query("SET LOCAL DateStyle = 'ISO, YMD'");
+    // A float's text is exact (the default from postgres 12, not before).
+    await client.query('SET LOCAL extra_float_digits = 3');
     if (timeoutSeconds !== null) {
       await client.query(`SET LOCAL statement_timeout = ${Math.trunc(timeoutSeconds * 1000)}`);
     }
@@ -880,6 +878,10 @@ export async function planPostgresIncremental(
   };
 }
 
+/**
+ * The alias the describe wrap gives the operator's statement. Fixed and quoted:
+ * it is this module's own spelling, never anything authored.
+ */
 const SOURCE_ALIAS = '"__studio_src"';
 /** The cursor's name. Same provenance, same treatment. */
 const CURSOR_NAME = '"__studio_copy"';

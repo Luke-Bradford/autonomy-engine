@@ -29,7 +29,7 @@ import { insertLegacyVersion } from '../../__tests__/legacy-version.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createRun, getRun } from '../../repo/runs.js';
 import { createConnection } from '../../repo/connections.js';
-import { createDataset } from '../../repo/datasets.js';
+import { createDataset, getDataset } from '../../repo/datasets.js';
 import { putWorkspaceSettings } from '../../repo/workspace-settings.js';
 import { rowsOf } from '../../connectors/__tests__/sqlite-fixtures.js';
 import { createSecret } from '../../repo/secrets.js';
@@ -39,7 +39,7 @@ import { startRun, type DocResolver, type ExecutorCommand, type RetryAlarms } fr
 import { refuseToArm, stubAlarms } from './stub-alarms.js';
 import { reconcileOnBoot } from '../reconcile.js';
 import { loadEngineEvents } from '../events.js';
-import { acquireCopyWatermark, copyWatermarkSourceKey } from '../copy-watermark.js';
+import { acquireCopyWatermark, copyWatermarkKey } from '../copy-watermark.js';
 import { until } from '../../__tests__/poll-until.js';
 import { DatasetIoError } from '../../connectors/dataset-io-error.js';
 import { createExecutor, PREFLIGHT_STORE_CONCURRENCY } from '../executor.js';
@@ -6432,12 +6432,22 @@ describe('createExecutor — #1600 OR41 C5a: Copy Load Incremental', () => {
       config: { table: 'orders' },
       columns: [],
     };
+    const sinkDataset = getDataset(db, sinkDs)!;
     const held = acquireCopyWatermark(db, {
       pipelineId: getPipelineVersion(db, pvId)!.pipelineId,
       nodeId: 'copy1',
-      sourceKey: copyWatermarkSourceKey({
-        connectionId: sourceConn,
-        dataset: source,
+      copyKey: copyWatermarkKey({
+        source: { connectionId: sourceConn, dataset: source },
+        sink: {
+          connectionId: sinkConn,
+          dataset: {
+            id: sinkDataset.id,
+            name: sinkDataset.name,
+            kind: sinkDataset.kind,
+            config: sinkDataset.config,
+            columns: sinkDataset.columns,
+          },
+        },
         column: 'modified_at',
       }),
       column: 'modified_at',

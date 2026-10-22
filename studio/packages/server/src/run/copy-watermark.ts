@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { canonicalStringify, type SqlParameterValue } from '@autonomy-studio/shared';
 import type { ResolvedDataset } from '../connectors/types.js';
 import {
@@ -7,6 +6,7 @@ import {
   type CopyWatermarkKey,
 } from '../repo/copy-watermarks.js';
 import type { Db } from '../repo/types.js';
+import { sha256Hex } from '../util/hash.js';
 
 /**
  * #1600 OR41 C5a — Watermark from Automatic, the executor's half: which stored
@@ -16,31 +16,36 @@ import type { Db } from '../repo/types.js';
  */
 
 /**
- * The source a watermark belongs to: the resolved connection, the dataset's
- * kind and resolved config (a query's bind values included) and the column, as
- * a hash. One node that reads different sources (a `${}` connection, a
- * parameterised query, a child pipeline called with other parameters) so keeps a
- * watermark per source instead of advancing one past rows it never read. The
- * query timeout is left out: it changes how long a read may take, not what it
- * reads.
+ * The copy a watermark belongs to, as a hash: the resolved source (connection,
+ * dataset kind and config, a query's bind values included), the watermark
+ * column and the resolved sink (connection, dataset kind and config). One node
+ * that reads different sources (a `${}` connection, a parameterised query, a
+ * child pipeline called with other parameters) so keeps a watermark per source
+ * instead of advancing one past rows it never read, and pointing it at another
+ * sink table starts that table from nothing. The query timeout is left out: it
+ * changes how long a read may take, not what it reads.
  */
-export function copyWatermarkSourceKey(input: {
-  readonly connectionId: string | undefined;
-  readonly dataset: ResolvedDataset;
+export function copyWatermarkKey(input: {
+  readonly source: { readonly connectionId: string | undefined; readonly dataset: ResolvedDataset };
+  readonly sink: {
+    readonly connectionId: string | undefined;
+    readonly dataset: ResolvedDataset | undefined;
+  };
   readonly column: string;
 }): string {
-  const config: Record<string, unknown> = { ...input.dataset.config };
-  delete config['queryTimeoutSeconds'];
-  return createHash('sha256')
-    .update(
-      canonicalStringify({
-        connectionId: input.connectionId ?? null,
-        kind: input.dataset.kind,
-        config,
-        column: input.column,
-      }),
-    )
-    .digest('hex');
+  const end = (connectionId: string | undefined, dataset: ResolvedDataset | undefined) => {
+    if (dataset === undefined) return { connectionId: connectionId ?? null };
+    const config: Record<string, unknown> = { ...dataset.config };
+    delete config['queryTimeoutSeconds'];
+    return { connectionId: connectionId ?? null, kind: dataset.kind, config };
+  };
+  return sha256Hex(
+    canonicalStringify({
+      source: end(input.source.connectionId, input.source.dataset),
+      column: input.column,
+      sink: end(input.sink.connectionId, input.sink.dataset),
+    }),
+  );
 }
 
 /**
@@ -66,7 +71,7 @@ export function acquireCopyWatermark(
   db: Db,
   key: CopyWatermarkKey & { readonly column: string; readonly runId: string },
 ): CopyWatermarkLease | 'busy' {
-  const id = canonicalStringify([key.pipelineId, key.nodeId, key.sourceKey]);
+  const id = canonicalStringify([key.pipelineId, key.nodeId, key.copyKey]);
   if (held.has(id)) return 'busy';
   held.add(id);
   let released = false;

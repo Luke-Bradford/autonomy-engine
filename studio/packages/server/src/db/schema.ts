@@ -542,7 +542,8 @@ export const workspaceSettings = sqliteTable('workspace_settings', {
 /**
  * #1600 OR41 C5a (migration 0050) — a Copy's stored watermark for Load
  * Incremental with Watermark from Automatic: one value per pipeline, activity and
- * source (`sourceKey`, a hash of the resolved source). See `repo/copy-watermarks.ts`.
+ * copy (`copyKey`, a hash of the resolved source, column and sink). See
+ * `repo/copy-watermarks.ts`.
  */
 export const copyWatermarks = sqliteTable(
   'copy_watermarks',
@@ -551,13 +552,13 @@ export const copyWatermarks = sqliteTable(
       .notNull()
       .references(() => pipelines.id, { onDelete: 'cascade' }),
     nodeId: text('node_id').notNull(),
-    sourceKey: text('source_key').notNull(),
+    copyKey: text('copy_key').notNull(),
     columnName: text('column_name').notNull(),
     valueJson: text('value_json').notNull(),
     runId: text('run_id').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },
-  (table) => [primaryKey({ columns: [table.pipelineId, table.nodeId, table.sourceKey] })],
+  (table) => [primaryKey({ columns: [table.pipelineId, table.nodeId, table.copyKey] })],
 );
 
 /**

@@ -12,8 +12,8 @@ import type { Db } from './types.js';
 export interface CopyWatermarkKey {
   readonly pipelineId: string;
   readonly nodeId: string;
-  /** A hash of the resolved source: `copyWatermarkSourceKey`. */
-  readonly sourceKey: string;
+  /** A hash of the resolved source, column and sink: `copyWatermarkKey`. */
+  readonly copyKey: string;
 }
 
 /** A watermark as the source store compared it: its text, or a safe number. */
@@ -30,7 +30,7 @@ export function getCopyWatermark(
       and(
         eq(copyWatermarks.pipelineId, key.pipelineId),
         eq(copyWatermarks.nodeId, key.nodeId),
-        eq(copyWatermarks.sourceKey, key.sourceKey),
+        eq(copyWatermarks.copyKey, key.copyKey),
       ),
     )
     .get();
@@ -63,11 +63,11 @@ export function putCopyWatermark(
     .values({
       pipelineId: input.pipelineId,
       nodeId: input.nodeId,
-      sourceKey: input.sourceKey,
+      copyKey: input.copyKey,
       ...set,
     })
     .onConflictDoUpdate({
-      target: [copyWatermarks.pipelineId, copyWatermarks.nodeId, copyWatermarks.sourceKey],
+      target: [copyWatermarks.pipelineId, copyWatermarks.nodeId, copyWatermarks.copyKey],
       set,
     })
     .run();

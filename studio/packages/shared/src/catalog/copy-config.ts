@@ -731,7 +731,8 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
         title: 'Load',
         description:
           'Incremental copies only the rows whose watermark column is above the old ' +
-          'watermark, up to the highest value the source holds now.',
+          'watermark, up to the highest value the source holds now. With Overwrite or ' +
+          'Truncate then insert, the sink then holds only those rows.',
         options: optionTitles(copyLoadSchema, { full: 'Full', incremental: 'Incremental' }),
       }),
       // Literal, as the partition column is: §8 keeps an identifier out of expressions.
@@ -739,8 +740,8 @@ const copyInputShape = <T extends z.ZodType, B extends z.ZodType>(mapping: T, bi
         title: 'Watermark column',
         description:
           'A column that only grows, such as a last-modified time or an increasing ID. Rows ' +
-          'whose value is NULL are never copied, and a row committed late with a value at or ' +
-          'below the last watermark is never copied.',
+          'whose value is NULL, a row committed late with a value at or below the last ' +
+          'watermark, and a row Skip incompatible rows skips are never copied.',
       }),
       watermarkFrom: presented(copyWatermarkFromSchema.default('automatic'), {
         title: 'Watermark from',

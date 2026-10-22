@@ -46,7 +46,7 @@ import { ACTIVITY_TIMEOUT_REASON, activityTimeoutFailure, armDeadline } from './
 import { getRun } from '../repo/runs.js';
 import {
   acquireCopyWatermark,
-  copyWatermarkSourceKey,
+  copyWatermarkKey,
   type CopyWatermarkLease,
 } from './copy-watermark.js';
 import { markExternalWaitExpired, recordExternalWait } from '../repo/external-waits.js';
@@ -500,7 +500,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
    * its lease and stored watermark (`copy-watermark.ts`), `null` for every other
    * node, or the failure when another attempt holds the lease or the store
    * cannot be read. Keyed by the pipeline (across its versions, since every save
-   * mints one), the doc node and the resolved source.
+   * mints one), the doc node and the resolved source and sink.
    */
   function copyWatermarkFor(
     node: Node,
@@ -528,9 +528,9 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       const lease = acquireCopyWatermark(deps.db, {
         pipelineId: deps.resolveDoc(run.pipelineVersionId).pipelineId,
         nodeId: node.id,
-        sourceKey: copyWatermarkSourceKey({
-          connectionId: command.resolvedConnectionIds?.source,
-          dataset: datasets.source,
+        copyKey: copyWatermarkKey({
+          source: { connectionId: command.resolvedConnectionIds?.source, dataset: datasets.source },
+          sink: { connectionId: command.resolvedConnectionIds?.sink, dataset: datasets.sink },
           column,
         }),
         column,
