@@ -176,3 +176,29 @@ export function offeredFieldOptions(
   const ticked = new Set(typeof input === 'string' ? input.split('\n') : []);
   return (field.enumOptions ?? []).filter((o) => own.includes(o) || ticked.has(o));
 }
+
+/**
+ * #1600 OR41 C12b — the dock's schema pre-check, less the issue of a field the
+ * panel does not draw: one that `appliesWhen` hides for the config's current
+ * choices and that is absent. A Set variable's Variable is required, so a Set
+ * marks it; a Pipeline return value has none, and is not refused for it. The
+ * pre-check is never the gate — the save rules judge both.
+ */
+export function issuesOfShownFields<I extends { path: readonly PropertyKey[] }>(
+  entry: Pick<ActivityCatalogEntry, 'appliesWhen'> | undefined,
+  fields: readonly ConfigField[],
+  candidate: Readonly<Record<string, unknown>>,
+  issues: readonly I[],
+): I[] {
+  const inputs: Record<string, FieldInput> = {};
+  for (const [k, v] of Object.entries(candidate)) {
+    if (typeof v === 'string' || typeof v === 'boolean') inputs[k] = v;
+  }
+  return issues.filter((issue) => {
+    const [name] = issue.path;
+    if (issue.path.length !== 1 || typeof name !== 'string' || candidate[name] !== undefined) {
+      return true;
+    }
+    return applicableFieldNames(entry, [name], fields, inputs, candidate).length > 0;
+  });
+}

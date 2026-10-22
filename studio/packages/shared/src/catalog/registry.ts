@@ -415,15 +415,16 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // the calling pipeline reads as `output.pipelineReturnValue.<key>`. It writes
     // no variable, so it has no Variable or Value; it succeeds like a `filter`
     // with the one output `pipelineReturnValue`, its contract derived from the
-    // Operation (`lowerSetVariableReturnOutputs`). Operation now comes first, as
-    // in ADF, because it decides which fields the tab has.
+    // Operation (`lowerSetVariableReturnOutputs`).
     type: SET_VARIABLE_ACTIVITY_TYPE,
     title: 'Set variable',
     description:
       'Set a pipeline variable, add a value to the end of an array variable, or return values to the calling pipeline.',
     kind: 'control',
     category: 'control',
-    tabs: [{ key: 'settings', fields: ['operation', 'variable', 'value', 'returnValues'] }],
+    // Operation last, as C12a placed it: it has a default, and a tab lists its
+    // required fields first (`activity-tabs.test.ts`).
+    tabs: [{ key: 'settings', fields: ['variable', 'value', 'returnValues', 'operation'] }],
     appliesWhen: {
       variable: [{ field: 'operation', in: ['set', 'append'] }],
       value: [{ field: 'operation', in: ['set', 'append'] }],
@@ -444,13 +445,13 @@ const ENTRIES: ActivityCatalogEntry[] = [
             return: 'Pipeline return value',
           }),
         }),
-        variable: presented(literalText(singleLine(z.string())).min(1).optional(), {
+        variable: presented(literalText(singleLine(z.string())).min(1), {
           title: 'Variable name',
           // #1600 C12a — Append variable's help, which Set variable now needs too.
           description:
             "The name of a variable declared on the pipeline's Variables tab. Append needs an array variable.",
         }),
-        value: presented(singleLine(z.string()).optional(), { title: 'Value' }),
+        value: presented(singleLine(z.string()), { title: 'Value' }),
         returnValues: presented(
           z
             .array(
@@ -492,21 +493,19 @@ const ENTRIES: ActivityCatalogEntry[] = [
       })
       .superRefine((cfg, ctx) => {
         // The dock's pre-check only; the save rules are `validateVariableWriteConfig`.
+        // Variable and Value stay required, so a Set or Append marks them; a
+        // Pipeline return value has neither, and the dock does not draw them for
+        // it, so their absence is not its issue (`issuesOfShownFields`).
         const issue = (field: string, message: string) =>
           ctx.addIssue({ code: 'custom', path: [field], message });
-        if (cfg.operation === 'return') {
-          if (cfg.variable !== undefined)
-            issue('variable', 'Pipeline return value has no variable');
-          if (cfg.value !== undefined) issue('value', 'Pipeline return value has no value');
-          if ((cfg.returnValues ?? []).length === 0) {
-            issue('returnValues', 'add at least one return value');
+        if (cfg.operation !== 'return') {
+          if (cfg.returnValues !== undefined) {
+            issue('returnValues', 'only Pipeline return value has return values');
           }
           return;
         }
-        if (cfg.variable === undefined) issue('variable', 'required');
-        if (cfg.value === undefined) issue('value', 'required');
-        if (cfg.returnValues !== undefined) {
-          issue('returnValues', 'only Pipeline return value has return values');
+        if ((cfg.returnValues ?? []).length === 0) {
+          issue('returnValues', 'add at least one return value');
         }
       }),
   },

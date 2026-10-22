@@ -150,7 +150,12 @@ import {
   type ConfigDraft,
   type ConfigField,
 } from './configForm';
-import { applicableFieldNames, nodeTypeTabs, offeredFieldOptions } from './activityTabs';
+import {
+  applicableFieldNames,
+  issuesOfShownFields,
+  nodeTypeTabs,
+  offeredFieldOptions,
+} from './activityTabs';
 import { activityModeTitle } from './activityModes';
 import { containerLabels, issuesBySubject, readableIssue, sameAttribution } from './containerRules';
 import { nameIssues, propertyIssues } from './paramRules';
@@ -3739,9 +3744,12 @@ export function NodePanel({
       return null;
     const check = entry.configSchema.safeParse(schemaPrecheckCandidate(candidate, fields));
     if (check.success) return null;
+    // #1600 C12b — a required field the panel does not draw is not refused here.
+    const issues = issuesOfShownFields(entry, fields ?? [], candidate, check.error.issues);
+    if (issues.length === 0) return null;
     return {
-      message: formatZodIssues(check.error.issues),
-      paths: check.error.issues.map((i) => i.path),
+      message: formatZodIssues(issues),
+      paths: issues.map((i) => i.path),
     };
   }
 
