@@ -1751,7 +1751,10 @@ describe('#1600 OR41 C5b — Load Incremental (Modified since last successful ru
     await utimes(path, PAST, PAST);
     await mkdir(join(src, 'in'));
     const one = lease(null);
-    const first = await settled({ ...INC, wildcard: '*.csv' }, { copyWatermark: one.copyWatermark });
+    const first = await settled(
+      { ...INC, wildcard: '*.csv' },
+      { copyWatermark: one.copyWatermark },
+    );
     expect(outputs(first.events)).toMatchObject({ filesWritten: 0 });
     await pause();
     execFileSync('mv', [path, join(src, 'in', 'drop.csv')]);
@@ -1823,7 +1826,9 @@ describe('#1600 OR41 C5b — Load Incremental (Modified since last successful ru
     });
     expect(failure(events)).toMatchObject({
       kind: 'permanent',
-      error: expect.stringContaining('the files were copied, but the watermark could not be stored'),
+      error: expect.stringContaining(
+        'the files were copied, but the watermark could not be stored',
+      ),
     });
     expect(events).toContainEqual({ type: 'output', name: 'filesWritten', value: 1 });
     expect(await tree(dst)).toEqual(['a.txt']);

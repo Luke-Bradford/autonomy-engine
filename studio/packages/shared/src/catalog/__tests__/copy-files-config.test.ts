@@ -451,7 +451,10 @@ describe('copy_files Load Incremental (C5b)', () => {
   });
 
   it('keeps Load literal at save', () => {
-    const errs = copyFilesIncrementalIssues({ sourcePath: 'in', load: '${pipeline().parameters.l}' });
+    const errs = copyFilesIncrementalIssues({
+      sourcePath: 'in',
+      load: '${pipeline().parameters.l}',
+    });
     expect(errs).toEqual([
       { field: 'load', message: 'Load stays literal, because it decides which fields apply' },
     ]);

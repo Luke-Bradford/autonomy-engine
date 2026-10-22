@@ -100,6 +100,8 @@ describe('Copy · Files as-is Load Incremental at save (C5b)', () => {
 
   it('refuses an expression in Load', () => {
     const errs = validate([files({ load: '${pipeline().parameters.l}' })]);
-    expect(errs).toContain('node.c.load: Load stays literal, because it decides which fields apply');
+    expect(errs).toContain(
+      'node.c.load: Load stays literal, because it decides which fields apply',
+    );
   });
 });

@@ -73,7 +73,11 @@ describe('copyWatermarkKey', () => {
 describe('copyFilesWatermarkKey', () => {
   const base = { sourceConnectionId: 'conn_a', sinkConnectionId: 'conn_s' };
   const key = (input: Record<string, unknown>, over: Partial<typeof base> = {}) =>
-    copyFilesWatermarkKey({ ...base, ...over, input: { sourcePath: 'in', load: 'incremental', ...input } });
+    copyFilesWatermarkKey({
+      ...base,
+      ...over,
+      input: { sourcePath: 'in', load: 'incremental', ...input },
+    });
   const k = key({});
 
   it('changes with what is selected, where it is written and either connection', () => {

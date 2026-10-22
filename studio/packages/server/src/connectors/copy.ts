@@ -907,7 +907,8 @@ async function* copyRows(
     // committed and the watermark behind (the next run would copy them again).
     if (outcome.ok && watermark !== undefined) {
       committed = watermark;
-      if (parsed.data.watermarkFrom === 'automatic') storeError = storeWatermark(ctx, watermark.new, 'rows were committed');
+      if (parsed.data.watermarkFrom === 'automatic')
+        storeError = storeWatermark(ctx, watermark.new, 'rows were committed');
     }
     // C6f-3 — a sink that failed before pulling a row never iterated the plan.
     await partitionPlan?.close();

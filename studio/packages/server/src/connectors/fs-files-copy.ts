@@ -1123,14 +1123,7 @@ export async function* runFilesCopy(
   let where: CopyPaths | undefined;
   try {
     // ── Plan ────────────────────────────────────────────────────────────
-    const { root, files } = await selectSources(
-      cfg,
-      source,
-      selects,
-      signal,
-      skips,
-      onSkip,
-    );
+    const { root, files } = await selectSources(cfg, source, selects, signal, skips, onSkip);
     const sinkDir = await planDir(sink.roots, cfg.sinkFolder);
     const targets = planTargets(cfg, sinkDir.path, files);
     // Named as `planTargets` names them, so `dest` is known when nothing is selected too.
@@ -1223,7 +1216,10 @@ export async function* runFilesCopy(
         );
         return;
       }
-      yield { type: 'succeeded', outputs: outputsOf(c, where, measured(), width, logPath, watermark) };
+      yield {
+        type: 'succeeded',
+        outputs: outputsOf(c, where, measured(), width, logPath, watermark),
+      };
       return;
     }
 
@@ -1426,7 +1422,9 @@ export async function* runFilesCopy(
     const logError = yield* endLog();
     if (logError !== undefined && !(yield* logErrorWarned(logError))) {
       // The files are copied: the counts are reported, then the failure.
-      for (const [name, value] of Object.entries(outputsOf(c, where, measured(), width, null, watermark)))
+      for (const [name, value] of Object.entries(
+        outputsOf(c, where, measured(), width, null, watermark),
+      ))
         yield { type: 'output', name, value };
       yield failed(
         'permanent',
@@ -1434,7 +1432,10 @@ export async function* runFilesCopy(
       );
       return;
     }
-    yield { type: 'succeeded', outputs: outputsOf(c, where, measured(), width, logPath, watermark) };
+    yield {
+      type: 'succeeded',
+      outputs: outputsOf(c, where, measured(), width, logPath, watermark),
+    };
   } catch (err) {
     // Whatever unwound the copy once it was aborted, the outcome is the abort.
     const terminal = signal.aborted
@@ -1454,7 +1455,9 @@ export async function* runFilesCopy(
     yield* endLog();
     // A skip made while selecting is counted, so its line has its counter.
     if (started || c.filesSkipped > 0) {
-      for (const [name, value] of Object.entries(outputsOf(c, where, measured(), width, logPath, watermark)))
+      for (const [name, value] of Object.entries(
+        outputsOf(c, where, measured(), width, logPath, watermark),
+      ))
         yield { type: 'output', name, value };
     }
     yield terminal;
