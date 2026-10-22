@@ -167,8 +167,10 @@ const WATERMARK_NEXT = '__studio_wm_next';
  * outside it: `old < column <= next` (no lower bound when `old` is null), or the
  * new watermark's `max(column)` above `old`. Wrapping a table read too keeps one
  * shape; a plain column keeps its affinity through the subquery, so a bound
- * compares in the column's type. A trailing `;` is dropped (it cannot sit inside
- * the parentheses) and the newline before `)` ends a trailing line comment.
+ * compares in the column's type. A `;` that ends the statement is dropped (it
+ * cannot sit inside the parentheses); one followed by a comment is not, so that
+ * statement fails as a syntax error. The newline before `)` ends a trailing line
+ * comment.
  */
 function watermarkStatement(
   base: { sql: string; parameters: Record<string, unknown> | null },
