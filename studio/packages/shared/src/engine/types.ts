@@ -1164,6 +1164,14 @@ export const WARNING_CODES = {
    */
   WEB_RESPONSE_TRUNCATED: 'web_response_truncated',
   /**
+   * #1600 OR41 C10a — a Script's result sets kept fewer rows than its Query
+   * blocks returned: a result set reached its 1000 rows, or the script reached
+   * the 1 MiB it may keep across them. The node succeeds with `truncated: true`
+   * and every `rowCount` still counts every row. The `reason` names the bound,
+   * never a row value.
+   */
+  SCRIPT_RESULT_TRUNCATED: 'script_result_truncated',
+  /**
    * #1761 — a Web *Wait for callback* sent a `callBackUri` on a loopback host
    * (`127.0.0.0/8`, `::1`, `localhost`). That is the default when
    * `AUTONOMY_PUBLIC_URL` is unset, and a remote endpoint can never reach it, so

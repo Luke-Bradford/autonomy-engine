@@ -20,6 +20,7 @@ import {
   IF_ACTIVITY_TYPE,
   HTTP_REQUEST_ACTIVITY_TYPE,
   WEB_ACTIVITY_TYPE,
+  SCRIPT_ACTIVITY_TYPE,
   LLM_CALL_ACTIVITY_TYPE,
   LOOKUP_ACTIVITY_TYPE,
   SET_VARIABLE_ACTIVITY_TYPE,
@@ -47,6 +48,7 @@ import {
   getMetadataConfigSchema,
 } from './get-metadata-config.js';
 import { lookupConfigSchema } from './lookup-config.js';
+import { scriptConfigSchema, scriptDispatchConfigSchema } from './script-config.js';
 import { llmCallConfigSchema } from './llm-config.js';
 import {
   fileCopyConfigSchema,
@@ -1585,6 +1587,37 @@ const ENTRIES: ActivityCatalogEntry[] = [
     rowsReadOutputs: ['count', 'rowCount'],
     configSchema: lookupConfigSchema,
     dispatchConfigSchema: lookupConfigSchema,
+  },
+  {
+    // #1600 OR41 C10a — catalogue §4.5, after ADF's Script activity. SQLite only
+    // so far; PostgreSQL is C10b, so the picker offers only what can run.
+    type: SCRIPT_ACTIVITY_TYPE,
+    title: 'Script',
+    description:
+      'Run SQL blocks in order on a database connection: queries that return rows, and statements that change data or schema.',
+    kind: 'execution',
+    category: 'general',
+    tabs: [
+      { key: 'settings', bindings: ['connection'], fields: ['runAsOneTransaction', 'captureResultSets'] },
+      { key: 'script', fields: ['blocks'] },
+    ],
+    // A Non-query block changes the store, and a crash mid-script cannot tell
+    // which blocks committed.
+    idempotent: false,
+    connectionKinds: ['sqlite'],
+    outputs: [
+      out('resultSetCount', 'number'),
+      // One `{rowCount, rows}` per Query block, in block order.
+      out('resultSets', 'json'),
+      // The rows the Non-query blocks changed, summed.
+      out('recordsAffected', 'number'),
+      // Always `{}` on SQLite, which has no output parameters. Declared now so
+      // C10b's PostgreSQL Out parameters change no contract.
+      out('outputParameters', 'json'),
+      out('truncated', 'boolean'),
+    ],
+    configSchema: scriptConfigSchema,
+    dispatchConfigSchema: scriptDispatchConfigSchema,
   },
 ];
 

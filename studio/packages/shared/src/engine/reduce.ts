@@ -35,6 +35,7 @@ import {
   IF_BRANCH_TRUE,
   IF_BRANCH_FALSE,
   COPY_ACTIVITY_TYPE,
+  SCRIPT_ACTIVITY_TYPE,
   LLM_CALL_ACTIVITY_TYPE,
   SWITCH_ACTIVITY_TYPE,
   SWITCH_DEFAULT_BRANCH,
@@ -1532,6 +1533,27 @@ export function createEngine(doc: EngineDoc): Engine {
       const { preCopyScript, ...rest } = node.config;
       const prepared = substitute(rest, buildCtx(state), 0, item) as Record<string, unknown>;
       prepared['preCopyScript'] = preCopyScript;
+      return prepared;
+    }
+    // #1600 OR41 C10a — a Script block's SQL and Type are literal for the same
+    // reason: only each block's `parameters` is the value half. A `blocks` that
+    // is not an array of objects is handed over raw, for the dispatch schema to
+    // refuse rather than for this to guess at.
+    if (node.type === SCRIPT_ACTIVITY_TYPE && node.config['blocks'] !== undefined) {
+      const { blocks, ...rest } = node.config;
+      const env = buildCtx(state);
+      const prepared = substitute(rest, env, 0, item) as Record<string, unknown>;
+      if (!Array.isArray(blocks)) {
+        prepared['blocks'] = blocks;
+        return prepared;
+      }
+      prepared['blocks'] = (blocks as unknown[]).map((block) => {
+        if (block === null || typeof block !== 'object' || Array.isArray(block)) return block;
+        const { parameters, ...literal } = block as Record<string, unknown>;
+        return parameters === undefined
+          ? literal
+          : { ...literal, parameters: substitute(parameters, env, 0, item) };
+      });
       return prepared;
     }
     return substitute(node.config, buildCtx(state), 0, item) as Record<string, unknown>;

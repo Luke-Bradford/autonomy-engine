@@ -22,3 +22,4 @@ export * from './web-config.js';
 export * from './counted.js';
 export * from './session-log.js';
 export * from './lookup-config.js';
+export * from './script-config.js';
