@@ -22,6 +22,7 @@ import {
   IF_ACTIVITY_TYPE,
   LLM_CALL_ACTIVITY_TYPE,
   LOOKUP_ACTIVITY_TYPE,
+  SCRIPT_ACTIVITY_TYPE,
   SET_VARIABLE_ACTIVITY_TYPE,
   SWITCH_ACTIVITY_TYPE,
   WAIT_ACTIVITY_TYPE,
@@ -171,6 +172,14 @@ export function activitySummary(
       const after =
         c.afterCopy === 'delete' ? 'delete source' : c.afterCopy === 'move' ? 'move source' : null;
       return line !== null && after !== null ? `${line} · ${after}` : line;
+    }
+    case SCRIPT_ACTIVITY_TYPE: {
+      // #1600 OR41 C10a — how many blocks, and whether they are all or nothing.
+      // The SQL is too long for a card; the Script tab shows it.
+      const blocks = Array.isArray(c.blocks) ? c.blocks.length : 0;
+      if (blocks === 0) return null;
+      const line = `${blocks} ${blocks === 1 ? 'block' : 'blocks'}`;
+      return c.runAsOneTransaction === true ? `${line} · one transaction` : line;
     }
     case LOOKUP_ACTIVITY_TYPE:
       return prefixed(

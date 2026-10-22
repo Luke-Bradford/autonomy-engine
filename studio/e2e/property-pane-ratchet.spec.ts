@@ -86,6 +86,8 @@ const HELP_LIMITS: Record<string, number> = {
   // the output it writes, Max rows its ceiling, When over the limit both bounds.
   // +1 for C7b's Read as, which says what each mode reads.
   Lookup: 10,
+  // #1600 OR41 C10a — Script, measured.
+  Script: 0,
   'Write file': 7,
   'Agent task': 8,
   'LLM call': 15,
@@ -401,6 +403,8 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   'Lookup (inline table)': 13,
   // +1 for C7c's When over the limit, whose `?` names the limit and the default.
   'Lookup (whole file as text)': 9,
+  // #1600 OR41 C10a — Script, measured.
+  Script: 0,
   'Write file': 7,
   'Agent task': 8,
   'LLM call': 15,
@@ -647,6 +651,26 @@ function seeds(ids: SeedIds): Record<string, Seed> {
         datasetIds: { source: ids.source },
         datasetParams: { source: { path: 'orders_2026.csv' } },
         config: {},
+      },
+    },
+    // #1600 OR41 C10a — both block types, bind values, every setting changed.
+    Script: {
+      node: {
+        ...exec,
+        type: 'script',
+        connectionId: ids.sql,
+        config: {
+          runAsOneTransaction: true,
+          captureResultSets: 'off',
+          blocks: [
+            {
+              type: 'nonQuery',
+              sql: 'DELETE FROM stage WHERE load = :load',
+              parameters: { load: '${run.runId}' },
+            },
+            { type: 'query', sql: 'SELECT count(*) AS n FROM stage' },
+          ],
+        },
       },
     },
     'Agent task': {
