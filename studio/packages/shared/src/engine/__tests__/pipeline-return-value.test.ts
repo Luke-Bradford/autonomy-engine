@@ -49,8 +49,7 @@ const started = (params: Record<string, unknown> = {}): EngineEvent => ({
 });
 const failedOf = (log: EngineEvent[], id: string) =>
   log.find((e) => e.type === 'node.failed' && e.nodeId === id) as
-    | Extract<EngineEvent, { type: 'node.failed' }>
-    | undefined;
+    Extract<EngineEvent, { type: 'node.failed' }> | undefined;
 
 describe('a Pipeline return value node succeeds with the typed map as its output', () => {
   it('coerces each row to its type, writes no variable, and is never dispatched', () => {
@@ -100,7 +99,11 @@ describe('a Pipeline return value node succeeds with the typed map as its output
     const e = eng(
       [
         ret('r', [{ key: 'total', type: 'number', value: '7' }]),
-        node('w', { variable: 'n', value: '${nodes.r.output.pipelineReturnValue.total}' }, 'set_variable'),
+        node(
+          'w',
+          { variable: 'n', value: '${nodes.r.output.pipelineReturnValue.total}' },
+          'set_variable',
+        ),
       ],
       [edge('r', 'w')],
     );
@@ -190,7 +193,10 @@ describe('the child projection hands the parent its return value', () => {
   it('pipelineReturnValue comes only from a return node; another node’s same-named output is dropped', () => {
     const out = projectChildRunOutputs(
       docOf(node('a'), ret('m', [])),
-      stateOf({ a: { pipelineReturnValue: 'stray', rows: 2 }, m: { pipelineReturnValue: { k: 1 } } }),
+      stateOf({
+        a: { pipelineReturnValue: 'stray', rows: 2 },
+        m: { pipelineReturnValue: { k: 1 } },
+      }),
     );
     expect(out).toEqual({ rows: 2, pipelineReturnValue: { k: 1 } });
   });
@@ -218,11 +224,15 @@ describe('the contract is derived from the Operation', () => {
 
   it('a return node declares pipelineReturnValue, over whatever it held', () => {
     expect(outputsOf(ret('r', []))).toEqual(ROW);
-    expect(outputsOf({ ...ret('r', []), config: { operation: 'return', outputs: [] } })).toEqual(ROW);
+    expect(outputsOf({ ...ret('r', []), config: { operation: 'return', outputs: [] } })).toEqual(
+      ROW,
+    );
   });
 
   it('switching back to Set heals the derived row to the catalog default', () => {
-    expect(outputsOf(node('w', { variable: 'n', value: '1', outputs: ROW }, 'set_variable'))).toEqual([]);
+    expect(
+      outputsOf(node('w', { variable: 'n', value: '1', outputs: ROW }, 'set_variable')),
+    ).toEqual([]);
     expect(outputsOf(node('w', { variable: 'n', value: '1' }, 'set_variable'))).toEqual([]);
   });
 });
@@ -255,7 +265,7 @@ describe('save rules', () => {
   it.each<[string, Row[] | unknown, string]>([
     ['no rows', [], 'node.r.returnValues: add at least one return value'],
     ['no table', undefined, 'node.r.returnValues: add at least one return value'],
-    ['an empty key', [{ key: '', type: 'string' }], "node.r.returnValues[0].key"],
+    ['an empty key', [{ key: '', type: 'string' }], 'node.r.returnValues[0].key'],
     ['a dotted key', [{ key: 'a.b', type: 'string' }], 'node.r.returnValues[0].key'],
     ['__proto__', [{ key: '__proto__', type: 'string' }], 'node.r.returnValues[0].key'],
     ['a ${} key', [{ key: '${params.x}', type: 'string' }], 'node.r.returnValues[0].key'],
@@ -271,27 +281,69 @@ describe('save rules', () => {
     ['a number with no value', [{ key: 'k', type: 'number' }], 'node.r.returnValues[0].value'],
     ['a value on Null', [{ key: 'k', type: 'null', value: 'x' }], 'node.r.returnValues[0].value'],
     ['a non-text value', [{ key: 'k', type: 'number', value: 5 }], 'node.r.returnValues[0].value'],
-    ['a bad number literal', [{ key: 'k', type: 'number', value: 'five' }], 'node.r.returnValues[0].value'],
-    ['a bad array literal', [{ key: 'k', type: 'array', value: '{"a":1}' }], 'node.r.returnValues[0].value'],
-    ['a template object', [{ key: 'k', type: 'object', value: 'a${params.x}' }], 'node.r.returnValues[0].value'],
-    ['a number expression for a string', [{ key: 'k', type: 'string', value: '${params.x}' }], 'node.r.returnValues[0].value'],
-    ['a number expression for an object', [{ key: 'k', type: 'object', value: '${params.x}' }], 'node.r.returnValues[0].value'],
+    [
+      'a bad number literal',
+      [{ key: 'k', type: 'number', value: 'five' }],
+      'node.r.returnValues[0].value',
+    ],
+    [
+      'a bad array literal',
+      [{ key: 'k', type: 'array', value: '{"a":1}' }],
+      'node.r.returnValues[0].value',
+    ],
+    [
+      'a template object',
+      [{ key: 'k', type: 'object', value: 'a${params.x}' }],
+      'node.r.returnValues[0].value',
+    ],
+    [
+      'a number expression for a string',
+      [{ key: 'k', type: 'string', value: '${params.x}' }],
+      'node.r.returnValues[0].value',
+    ],
+    [
+      'a number expression for an object',
+      [{ key: 'k', type: 'object', value: '${params.x}' }],
+      'node.r.returnValues[0].value',
+    ],
   ])('refuses %s', (_label, rows, message) => {
     expect(validate([ret('r', rows)]).some((e) => e.includes(message))).toBe(true);
   });
 
   it('refuses a variable or value on a return node, and a table on a Set', () => {
-    const errs = validate([
-      node('r', { operation: 'return', variable: 'n', value: '1', returnValues: [{ key: 'k', type: 'null' }] }, 'set_variable'),
-      node('w', { variable: 'n', value: '1', returnValues: [{ key: 'k', type: 'null' }] }, 'set_variable'),
-    ], [edge('r', 'w')]);
+    const errs = validate(
+      [
+        node(
+          'r',
+          {
+            operation: 'return',
+            variable: 'n',
+            value: '1',
+            returnValues: [{ key: 'k', type: 'null' }],
+          },
+          'set_variable',
+        ),
+        node(
+          'w',
+          { variable: 'n', value: '1', returnValues: [{ key: 'k', type: 'null' }] },
+          'set_variable',
+        ),
+      ],
+      [edge('r', 'w')],
+    );
     expect(errs).toContain('node.r.variable: Pipeline return value has no variable — remove it');
-    expect(errs).toContain('node.r.value: Pipeline return value has no value — its values are in Return keys');
-    expect(errs).toContain('node.w.returnValues: only Pipeline return value has return values — remove it');
+    expect(errs).toContain(
+      'node.r.value: Pipeline return value has no value — its values are in Return keys',
+    );
+    expect(errs).toContain(
+      'node.w.returnValues: only Pipeline return value has return values — remove it',
+    );
   });
 
   it('names the third operation when the Operation is unknown', () => {
-    const errs = validate([node('w', { variable: 'n', value: '1', operation: 'prepend' }, 'set_variable')]);
+    const errs = validate([
+      node('w', { variable: 'n', value: '1', operation: 'prepend' }, 'set_variable'),
+    ]);
     expect(errs).toContain(
       "node.w.operation: must be Set, Append or Pipeline return value ('set', 'append' or 'return')",
     );
@@ -312,13 +364,23 @@ describe('save rules', () => {
       [fe(['st']), { id: 'st', kind: 'stage', children: ['r'] } as Container],
     );
     for (const errs of [direct, nested]) {
-      expect(errs.some((e) => e.includes('node.r.operation: Pipeline return value cannot run inside a ForEach'))).toBe(true);
+      expect(
+        errs.some((e) =>
+          e.includes('node.r.operation: Pipeline return value cannot run inside a ForEach'),
+        ),
+      ).toBe(true);
     }
   });
 
   it('refuses the secure flags, in return-value terms', () => {
-    const errs = validate([{ ...ret('r', [{ key: 'k', type: 'null' }]), policy: { secureOutput: true } }]);
-    expect(errs.some((e) => e.includes('policy.secureOutput is not supported') && e.includes('calling pipeline'))).toBe(true);
+    const errs = validate([
+      { ...ret('r', [{ key: 'k', type: 'null' }]), policy: { secureOutput: true } },
+    ]);
+    expect(
+      errs.some(
+        (e) => e.includes('policy.secureOutput is not supported') && e.includes('calling pipeline'),
+      ),
+    ).toBe(true);
   });
 
   it('is no writer to the determinism guard, which runs beside a real one', () => {

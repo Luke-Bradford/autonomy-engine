@@ -108,7 +108,8 @@ export function activitySummary(
       if (op === 'return') {
         const rows: unknown[] = Array.isArray(c.returnValues) ? c.returnValues : [];
         const keys = rows.flatMap((r) => {
-          const key = typeof r === 'object' && r !== null ? text((r as { key?: unknown }).key) : undefined;
+          const key =
+            typeof r === 'object' && r !== null ? text((r as { key?: unknown }).key) : undefined;
           return key === undefined ? [] : [key];
         });
         return keys.length === 0 ? null : `return ${keys.join(', ')}`;

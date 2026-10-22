@@ -454,31 +454,32 @@ const ENTRIES: ActivityCatalogEntry[] = [
         returnValues: presented(
           z
             .array(
-              z.object({
-                key: presented(literalText(singleLine(z.string())).min(1), {
-                  title: 'Key',
-                  description:
-                    'The name the calling pipeline reads: ${nodes.<call>.output.pipelineReturnValue.<key>}. Letters, digits and _, not starting with a digit.',
-                }),
-                type: presented(returnValueTypeSchema, {
-                  title: 'Type',
-                  options: optionTitles(returnValueTypeSchema, {
-                    string: 'String',
-                    number: 'Number',
-                    boolean: 'Boolean',
-                    array: 'Array',
-                    object: 'Object',
-                    null: 'Null',
+              z
+                .object({
+                  key: presented(literalText(singleLine(z.string())).min(1), {
+                    title: 'Key',
+                    description:
+                      'The name the calling pipeline reads: ${nodes.<call>.output.pipelineReturnValue.<key>}. Letters, digits and _, not starting with a digit.',
                   }),
-                }),
-                value: presented(singleLine(z.string()).optional(), {
-                  title: 'Value',
-                  description:
-                    'A literal or ${...}. Array and Object take JSON text or a whole-value ${...}. Null takes none, and an empty String is "".',
-                }),
-              })
-              // Strict, so the dock draws it as a table (`deriveElementFields`).
-              .strict(),
+                  type: presented(returnValueTypeSchema, {
+                    title: 'Type',
+                    options: optionTitles(returnValueTypeSchema, {
+                      string: 'String',
+                      number: 'Number',
+                      boolean: 'Boolean',
+                      array: 'Array',
+                      object: 'Object',
+                      null: 'Null',
+                    }),
+                  }),
+                  value: presented(singleLine(z.string()).optional(), {
+                    title: 'Value',
+                    description:
+                      'A literal or ${...}. Array and Object take JSON text or a whole-value ${...}. Null takes none, and an empty String is "".',
+                  }),
+                })
+                // Strict, so the dock draws it as a table (`deriveElementFields`).
+                .strict(),
             )
             .optional(),
           {
@@ -493,7 +494,8 @@ const ENTRIES: ActivityCatalogEntry[] = [
         const issue = (field: string, message: string) =>
           ctx.addIssue({ code: 'custom', path: [field], message });
         if (cfg.operation === 'return') {
-          if (cfg.variable !== undefined) issue('variable', 'Pipeline return value has no variable');
+          if (cfg.variable !== undefined)
+            issue('variable', 'Pipeline return value has no variable');
           if (cfg.value !== undefined) issue('value', 'Pipeline return value has no value');
           if ((cfg.returnValues ?? []).length === 0) {
             issue('returnValues', 'add at least one return value');

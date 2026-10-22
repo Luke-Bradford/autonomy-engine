@@ -1406,11 +1406,7 @@ export function coerceReturnValue(
  * the per-item outputs are dropped at the end of each item, so the caller would
  * get nothing.
  */
-function validateReturnValueConfig(
-  node: Node,
-  foreachOwned: boolean,
-  errors: string[],
-): void {
+function validateReturnValueConfig(node: Node, foreachOwned: boolean, errors: string[]): void {
   const at = `node.${node.id}`;
   if (node.config['variable'] !== undefined) {
     errors.push(`${at}.variable: Pipeline return value has no variable — remove it`);

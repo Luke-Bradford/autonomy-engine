@@ -198,9 +198,12 @@ describe('activitySummary', () => {
         node('set_variable', { config: { operation: 'return', returnValues } }),
         () => undefined,
       );
-    expect(ret([{ key: 'total', type: 'number', value: '1' }, { key: 'label', type: 'null' }])).toBe(
-      'return total, label',
-    );
+    expect(
+      ret([
+        { key: 'total', type: 'number', value: '1' },
+        { key: 'label', type: 'null' },
+      ]),
+    ).toBe('return total, label');
     expect(ret([])).toBeNull();
     expect(ret('nope')).toBeNull();
   });
