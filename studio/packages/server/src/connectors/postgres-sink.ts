@@ -36,6 +36,7 @@ import {
   openSession,
   qualifiedTable,
   readFailure,
+  sqlStateOf,
   type PostgresClient,
   type PostgresClientFactory,
 } from './postgres-session.js';
@@ -705,6 +706,8 @@ function incompatibleRowReason(err: unknown): string | null {
  * equivalent of the "the rollback itself failed" state — but the branch is kept
  * anyway, because a `ROLLBACK` that raises is a state this code cannot prove
  * clean, and inventing the proof is the fail-open direction §4.2 forbids.
+ * The one failure no rollback can answer is the COMMIT's own, unless the server
+ * refused it (#1806): that copy reports `partialWritePossible: true`.
  *
  * **The LOCK comes before the §7 gate reads, and its STRENGTH depends on the
  * mode** (`LOCK_MODES` holds all four; this paragraph explains the first two).
@@ -1043,7 +1046,21 @@ export async function writePostgresDatasetRows(
       // Permanent: a retry reads the same rows into the same store.
       const unverified = write.verifyBeforeCommit?.(rowsWritten) ?? null;
       if (unverified !== null) throw new DatasetIoError('permanent', unverified);
-      await client.query('COMMIT');
+      try {
+        await client.query('COMMIT');
+      } catch (err) {
+        // #1806 — only the server's own error proves nothing committed. pg's
+        // client timeout or a socket error leaves the COMMIT's outcome unknown,
+        // and a ROLLBACK after it succeeds against no transaction, so it cannot
+        // prove the store clean. Nothing is left to roll back either way.
+        if (sqlStateOf(err) !== null) throw err;
+        inTransaction = false;
+        throw new DatasetIoError(
+          'permanent',
+          `${readFailure(err, `the copy into '${spelled}' could not commit`, write.secret, 'write').message} - the COMMIT's outcome is unknown, so rows may have landed in '${spelled}'`,
+          { cause: err, partialWritePossible: true },
+        );
+      }
       inTransaction = false;
     } catch (err) {
       const failure =

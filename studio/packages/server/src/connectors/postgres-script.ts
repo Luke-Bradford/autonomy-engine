@@ -24,6 +24,7 @@ import {
   openSession,
   postgresCancelTargetOf,
   readFailure,
+  sqlStateOf,
   statementTimeoutMsOf,
   type PostgresCancelSender,
   type PostgresClient,
@@ -210,16 +211,6 @@ const MAY_COMMIT_PARTWAY: ReadonlySet<string> = new Set(['CALL', 'DO']);
 
 /** SQLSTATE `read_only_sql_transaction`. */
 const READ_ONLY_SQL_TRANSACTION = '25006';
-
-/**
- * The server's SQLSTATE on a failure, or null when the failure is not the
- * server's verdict (pg's client timeout, a socket error). Every SQLSTATE holds a
- * digit; a socket code never does, and `EPIPE` is five letters.
- */
-function sqlStateOf(err: unknown): string | null {
-  const code = (err as { code?: unknown } | null)?.code;
-  return typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) && /[0-9]/.test(code) ? code : null;
-}
 
 interface PreparedBlock {
   readonly statement: PostgresStatement;

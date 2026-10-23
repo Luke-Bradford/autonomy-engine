@@ -304,9 +304,10 @@ export function isTransientPostgresCode(code: string): boolean {
  *
  * Never on a WRITE. 57014 is the server's verdict that the statement was
  * cancelled; this timer only means the client stopped waiting, and it cancels
- * nothing. A `COMMIT` it abandons may still land, the sink's `ROLLBACK` then
- * succeeds against no transaction and reports nothing landed, and a `transient`
- * verdict would retry the copy from row 0 into rows that are already there.
+ * nothing. A `COMMIT` it abandons may still land, and a `transient` verdict would
+ * retry the copy from row 0 into rows that are already there. (The sink reports
+ * such a COMMIT as of unknown outcome, #1806: its `ROLLBACK` would succeed
+ * against no transaction and prove nothing.)
  */
 const PG_CLIENT_QUERY_TIMEOUT_MESSAGE = 'Query read timeout';
 
@@ -322,6 +323,16 @@ export function isPostgresStatementTimeout(err: unknown): boolean {
   const code = (err as { code?: unknown } | null)?.code;
   if (typeof code === 'string') return code === QUERY_CANCELED;
   return err instanceof Error && err.message === PG_CLIENT_QUERY_TIMEOUT_MESSAGE;
+}
+
+/**
+ * The server's SQLSTATE on a failure, or null when the failure is not the
+ * server's verdict (pg's client timeout, a socket error). Every SQLSTATE holds a
+ * digit; a socket code never does, and `EPIPE` is five letters.
+ */
+export function sqlStateOf(err: unknown): string | null {
+  const code = (err as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) && /[0-9]/.test(code) ? code : null;
 }
 
 /** Where a CancelRequest goes, and how long it may take. */

@@ -685,6 +685,33 @@ describe('the postgres sink’s failure posture (#1196 M10 slice 3a)', () => {
     });
   });
 
+  // #1806 — a COMMIT the client stopped waiting for may still land. Its ROLLBACK
+  // then succeeds against no transaction, so "rolled back" proves nothing here.
+  it.each([
+    ['pg’s client timeout', new Error('Query read timeout')],
+    ['a socket error', pgError('EPIPE', 'write EPIPE')],
+  ])('reports a COMMIT that ended in %s as of unknown outcome', async (_, error) => {
+    const { rec, factory } = sinkFactory({ failOn: { prefix: 'COMMIT', error } });
+    await expect(
+      writePostgresDatasetRows(write({ createClient: factory }), batchesOf([{ a: 1, b: 2 }])),
+    ).rejects.toMatchObject({
+      kind: 'permanent',
+      partialWritePossible: true,
+      message: expect.stringContaining("the COMMIT's outcome is unknown"),
+    });
+    expect(sqlOf(rec).slice(sqlOf(rec).indexOf('COMMIT'))).toEqual(['COMMIT']);
+  });
+
+  it('keeps a COMMIT the server refused provably clean, and its kind', async () => {
+    // An ErrorResponse to COMMIT is the server's verdict that nothing committed.
+    const { factory } = sinkFactory({
+      failOn: { prefix: 'COMMIT', error: pgError('40001', 'serialization failure') },
+    });
+    await expect(
+      writePostgresDatasetRows(write({ createClient: factory }), batchesOf([{ a: 1, b: 2 }])),
+    ).rejects.toMatchObject({ kind: 'transient', partialWritePossible: false });
+  });
+
   it('SCRUBS the sink credential out of an upstream failure message', async () => {
     // The source adapter running a heterogeneous copy is not postgres', so its
     // own redaction cannot know about this secret. This is the first line;
