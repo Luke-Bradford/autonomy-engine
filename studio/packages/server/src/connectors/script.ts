@@ -355,7 +355,8 @@ export function scriptFailure(err: unknown): ActivityEvent {
   if (err instanceof LookupValueError) {
     return failed('permanent', `a Script result set cannot hold a value — ${err.message}`);
   }
-  if (err instanceof DatasetIoError) return failed(err.kind, err.message, err.partialWritePossible);
+  if (err instanceof DatasetIoError)
+    return failed(err.kind, err.message, { partialWritePossible: err.partialWritePossible });
   // Fail-safe: an unrecognised throw is a programming fault, never something to
   // blind-retry against an operator's store.
   return failed('permanent', err instanceof Error ? err.message : String(err));

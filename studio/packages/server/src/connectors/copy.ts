@@ -371,7 +371,9 @@ export function copyFailure(err: unknown): ActivityEvent {
   }
   if (err instanceof DatasetIoError) {
     const partial = err.partialWritePossible ? ' (the sink may hold a partial write)' : '';
-    return failed(err.kind, `${err.message}${partial}`, err.partialWritePossible);
+    return failed(err.kind, `${err.message}${partial}`, {
+      partialWritePossible: err.partialWritePossible,
+    });
   }
   // Fail-safe: an unrecognised throw is a programming fault, never something to
   // blind-retry into an operator's store.

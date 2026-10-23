@@ -1302,15 +1302,18 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // work completed) and a `permanent` failure (a real verdict, which a retry
     // would only repeat). Cancel and timeout cannot both claim an attempt: an
     // `AbortController` aborts once, so the first one owns `signal.reason`.
-    // #1804 — a failure marked `partialWritePossible` ends a PERMANENT timeout
-    // carrying the adapter's error (`refusal`): a retry would repeat its work.
     const cancelDeadline =
       timeoutSeconds === undefined
         ? undefined
         : (deps.armDeadline ?? armDeadline)(timeoutSeconds * 1000, () =>
             controller.abort(ACTIVITY_TIMEOUT_REASON),
           );
-    /** Emit the timeout terminal if the deadline aborted this attempt; true if it did. */
+    /**
+     * Emit the timeout terminal if the deadline aborted this attempt; true if it
+     * did. #1804 — `refusal` is the error of a failure marked
+     * `partialWritePossible`, and makes the timeout PERMANENT: a retry would
+     * repeat work already in the store.
+     */
     const endedByTimeout = (refusal?: string): boolean => {
       if (timeoutSeconds === undefined || controller.signal.reason !== ACTIVITY_TIMEOUT_REASON) {
         return false;

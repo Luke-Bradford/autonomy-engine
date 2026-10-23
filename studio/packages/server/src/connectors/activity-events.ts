@@ -21,9 +21,9 @@ import type { ActivityEvent, ConnectorErrorKind } from './types.js';
 export function failed(
   kind: ConnectorErrorKind,
   error: string,
-  partialWritePossible = false,
+  options?: { partialWritePossible?: boolean },
 ): ActivityEvent {
-  return partialWritePossible
+  return options?.partialWritePossible === true
     ? { type: 'failed', kind, error, partialWritePossible: true }
     : { type: 'failed', kind, error };
 }

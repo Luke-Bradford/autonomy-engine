@@ -60,7 +60,7 @@ Sources: [pipelines and activities](https://learn.microsoft.com/azure/data-facto
 | Name | text | type + ordinal | Max 55 characters, unique in the pipeline (ADF rule) |
 | Description | text, 2 lines | — | **New** on `Node`. Shown on hover on the canvas and in the monitor |
 | Activity state | Active / Inactive | Active | **New**. Not a General field (#1694 OR42, operator 2026-10-14: an activity's state is toggled only when you want to deactivate it). Switched with *Deactivate* / *Activate* from the canvas's right-click menu, the dock's `⋯` and the multi-selection panel, as ADF's right-click *Deactivate*; *Mark as* shows on General only while inactive. An inactive node is greyed and skipped by validation. It records an *Inactive* run and **Mark as** Succeeded / Failed / Skipped (default Succeeded) drives its outgoing edges |
-| Timeout | duration (`D.HH:MM:SS` or seconds) | 12 h (workspace setting) | **Enforce it** (done in C0a; it was stored but unenforced, F3). Expiry fails the attempt with `timeout`, which can be retried |
+| Timeout | duration (`D.HH:MM:SS` or seconds) | 12 h (workspace setting) | **Enforce it** (done in C0a; it was stored but unenforced, F3). Expiry fails the attempt with `timeout`, which can be retried, unless the activity may already have changed the store: then it is permanent (#1804) |
 | Retry | number | 0 | As today; retries only transient failures |
 | Retry interval | seconds | 30 | As today |
 | Secure input / Secure output | two checkboxes on one line | off | As today, and also covering every new record in §5 |
