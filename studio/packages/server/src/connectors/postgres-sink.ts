@@ -35,10 +35,12 @@ import {
   notAPostgresKind,
   openSession,
   qualifiedTable,
+  commitOutcomeUnknown,
   readFailure,
-  sqlStateOf,
+  unknownCommitMessage,
   type PostgresClient,
   type PostgresClientFactory,
+  type PostgresQueryResult,
 } from './postgres-session.js';
 
 /**
@@ -702,7 +704,7 @@ function incompatibleRowReason(err: unknown): string | null {
  * with a `ROLLBACK` on every failure path including cancel, so the sink reports
  * `partialWritePossible: false` and §4's retry-from-row-0 is safe. Postgres is
  * strictly better placed to promise this than sqlite: if the SESSION dies
- * mid-copy the server unwinds the transaction itself, so there is no
+ * before COMMIT the server unwinds the transaction itself, so there is no
  * equivalent of the "the rollback itself failed" state — but the branch is kept
  * anyway, because a `ROLLBACK` that raises is a state this code cannot prove
  * clean, and inventing the proof is the fail-open direction §4.2 forbids.
@@ -1046,19 +1048,31 @@ export async function writePostgresDatasetRows(
       // Permanent: a retry reads the same rows into the same store.
       const unverified = write.verifyBeforeCommit?.(rowsWritten) ?? null;
       if (unverified !== null) throw new DatasetIoError('permanent', unverified);
+      let committed: PostgresQueryResult;
       try {
-        await client.query('COMMIT');
+        committed = await client.query('COMMIT');
       } catch (err) {
-        // #1806 — only the server's own error proves nothing committed. pg's
-        // client timeout or a socket error leaves the COMMIT's outcome unknown,
-        // and a ROLLBACK after it succeeds against no transaction, so it cannot
-        // prove the store clean. Nothing is left to roll back either way.
-        if (sqlStateOf(err) !== null) throw err;
+        // #1806 — a ROLLBACK after a COMMIT of unknown outcome succeeds against
+        // no transaction, so it cannot prove the store clean, and there is
+        // nothing left to roll back. A server ERROR takes the path below.
+        if (!commitOutcomeUnknown(err)) throw err;
         inTransaction = false;
         throw new DatasetIoError(
           'permanent',
-          `${readFailure(err, `the copy into '${spelled}' could not commit`, write.secret, 'write').message} - the COMMIT's outcome is unknown, so rows may have landed in '${spelled}'`,
+          unknownCommitMessage(
+            readFailure(err, `the copy into '${spelled}' could not commit`, write.secret, 'write')
+              .message,
+            `rows may have landed in '${spelled}'`,
+          ),
           { cause: err, partialWritePossible: true },
+        );
+      }
+      // A COMMIT in a failed transaction answers ROLLBACK rather than an error.
+      if (committed.command === 'ROLLBACK') {
+        inTransaction = false;
+        throw new DatasetIoError(
+          'permanent',
+          `the copy into '${spelled}' was rolled back at COMMIT, so nothing landed`,
         );
       }
       inTransaction = false;

@@ -64,6 +64,8 @@ export interface PostgresQueryResult {
   readonly rows: Record<string, unknown>[];
   readonly fields: readonly { readonly name: string }[];
   readonly rowCount?: number | null;
+  /** The command tag: a COMMIT in a failed transaction answers `ROLLBACK`. */
+  readonly command?: string;
 }
 
 /**
@@ -333,6 +335,22 @@ export function isPostgresStatementTimeout(err: unknown): boolean {
 export function sqlStateOf(err: unknown): string | null {
   const code = (err as { code?: unknown } | null)?.code;
   return typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) && /[0-9]/.test(code) ? code : null;
+}
+
+/**
+ * #1806 — whether a failed COMMIT leaves its outcome unknown. Only a server
+ * ERROR proves nothing committed. pg's client timeout and a socket error carry
+ * no SQLSTATE, and a FATAL that ends the session (class 08, 57P) can arrive
+ * after the commit record is already written.
+ */
+export function commitOutcomeUnknown(err: unknown): boolean {
+  const code = sqlStateOf(err);
+  return code === null || code.startsWith('08') || code.startsWith('57P');
+}
+
+/** The failure of a COMMIT whose outcome is unknown, and what may stay applied. */
+export function unknownCommitMessage(failure: string, mayStayApplied: string): string {
+  return `${failure} — the COMMIT's outcome is unknown, so ${mayStayApplied}`;
 }
 
 /** Where a CancelRequest goes, and how long it may take. */

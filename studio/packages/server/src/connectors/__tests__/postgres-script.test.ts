@@ -531,6 +531,19 @@ describe('Script on PostgreSQL, the run (C10b-1)', () => {
       expect(failureOf(events).error).toMatch(/the COMMIT's outcome is unknown/);
     });
 
+    it('reports a COMMIT ended by a FATAL (57P01) as of unknown outcome (#1806)', async () => {
+      const { events } = await runFake(
+        scriptCtx(two, { runAsOneTransaction: true }),
+        {
+          'insert into t values (1)': { command: 'INSERT', rowCount: 1 },
+          'insert into t values (2)': { command: 'INSERT', rowCount: 1 },
+        },
+        { COMMIT: pgError('terminating connection', '57P01') },
+      );
+      expect(failureOf(events)).toMatchObject({ kind: 'permanent' });
+      expect(failureOf(events).error).toMatch(/the COMMIT's outcome is unknown/);
+    });
+
     it('reports a COMMIT whose outcome is unknown as permanent', async () => {
       const { events } = await runFake(
         scriptCtx(two, { runAsOneTransaction: true }),

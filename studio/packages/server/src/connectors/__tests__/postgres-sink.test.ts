@@ -96,6 +96,8 @@ function sinkFactory(
     onQuery?: (sql: string) => void;
     /** An INSERT's error, given its bound values; `undefined` lets it land (C6d-1). */
     insertError?: (values: readonly unknown[]) => unknown;
+    /** COMMIT's command tag; a failed transaction answers `ROLLBACK` (#1806). */
+    commitTag?: string;
   } = {},
 ) {
   const rec: SinkRecorder = { queries: [], ended: 0 };
@@ -117,6 +119,9 @@ function sinkFactory(
           throw fixture.failOn.error;
         }
         fixture.onQuery?.(sql);
+        if (sql === 'COMMIT' && fixture.commitTag !== undefined) {
+          return { rows: [], fields: [], command: fixture.commitTag };
+        }
         if (sql.includes('pg_try_advisory_lock')) {
           return { rows: [{ locked: fixture.locks?.shift() ?? true }], fields: [] };
         }
@@ -690,6 +695,7 @@ describe('the postgres sink’s failure posture (#1196 M10 slice 3a)', () => {
   it.each([
     ['pg’s client timeout', new Error('Query read timeout')],
     ['a socket error', pgError('EPIPE', 'write EPIPE')],
+    ['a FATAL that ends the session', pgError('57P01', 'terminating connection')],
   ])('reports a COMMIT that ended in %s as of unknown outcome', async (_, error) => {
     const { rec, factory } = sinkFactory({ failOn: { prefix: 'COMMIT', error } });
     await expect(
@@ -700,6 +706,29 @@ describe('the postgres sink’s failure posture (#1196 M10 slice 3a)', () => {
       message: expect.stringContaining("the COMMIT's outcome is unknown"),
     });
     expect(sqlOf(rec).slice(sqlOf(rec).indexOf('COMMIT'))).toEqual(['COMMIT']);
+  });
+
+  it('scrubs the sink credential out of a COMMIT of unknown outcome', async () => {
+    const { factory } = sinkFactory({
+      failOn: { prefix: 'COMMIT', error: new Error('lost hunter2') },
+    });
+    await expect(
+      writePostgresDatasetRows(
+        write({ createClient: factory, secret: 'hunter2' }),
+        batchesOf([{ a: 1, b: 2 }]),
+      ),
+    ).rejects.toMatchObject({ message: expect.not.stringContaining('hunter2') });
+  });
+
+  it('fails a COMMIT the server answered with ROLLBACK, as provably clean', async () => {
+    const { factory } = sinkFactory({ commitTag: 'ROLLBACK' });
+    await expect(
+      writePostgresDatasetRows(write({ createClient: factory }), batchesOf([{ a: 1, b: 2 }])),
+    ).rejects.toMatchObject({
+      kind: 'permanent',
+      partialWritePossible: false,
+      message: expect.stringContaining('rolled back at COMMIT'),
+    });
   });
 
   it('keeps a COMMIT the server refused provably clean, and its kind', async () => {
