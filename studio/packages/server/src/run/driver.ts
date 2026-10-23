@@ -1116,7 +1116,12 @@ async function* withPreDispatchUserProperties(
  * secure node at append time, as every copy is (`redactSecureEvent`). The
  * events either seam stamps are the ones `RecordedUserPropertiesSchema` lists.
  */
-function withRecordedUserProperties(command: EngineCommand, event: EngineEvent): EngineEvent {
+function withRecordedUserProperties(
+  // Never a `dispatchNode`/`startChild`: those go to the executor, whose
+  // stream `withPreDispatchUserProperties` stamps, so typed out here.
+  command: Exclude<EngineCommand, ExecutorCommand>,
+  event: EngineEvent,
+): EngineEvent {
   const props = 'resolvedUserProperties' in command ? command.resolvedUserProperties : undefined;
   if (props === undefined || !('attemptId' in command)) return event;
   switch (event.type) {
