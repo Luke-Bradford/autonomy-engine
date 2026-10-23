@@ -32,10 +32,10 @@ import {
 } from './sink-columns.js';
 import type { SinkValue } from './sqlite-sink.js';
 import {
+  commitOutcomeUnknown,
   notAPostgresKind,
   openSession,
   qualifiedTable,
-  commitOutcomeUnknown,
   readFailure,
   unknownCommitMessage,
   type PostgresClient,

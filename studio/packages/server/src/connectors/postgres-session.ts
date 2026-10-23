@@ -340,13 +340,22 @@ export function sqlStateOf(err: unknown): string | null {
 /**
  * #1806 — whether a failed COMMIT leaves its outcome unknown. Only a server
  * ERROR proves nothing committed. pg's client timeout and a socket error carry
- * no SQLSTATE, and a FATAL that ends the session (class 08, 57P) can arrive
- * after the commit record is already written.
+ * no SQLSTATE, a FATAL that ends the session (class 08, 57P) can arrive after
+ * the commit record is already written, and `40003` (statement_completion_unknown,
+ * which a proxy or pooler may send) says so outright.
  */
 export function commitOutcomeUnknown(err: unknown): boolean {
   const code = sqlStateOf(err);
-  return code === null || code.startsWith('08') || code.startsWith('57P');
+  return (
+    code === null ||
+    code === STATEMENT_COMPLETION_UNKNOWN ||
+    code.startsWith('08') ||
+    code.startsWith('57P')
+  );
 }
+
+/** SQLSTATE `statement_completion_unknown`. */
+const STATEMENT_COMPLETION_UNKNOWN = '40003';
 
 /** The failure of a COMMIT whose outcome is unknown, and what may stay applied. */
 export function unknownCommitMessage(failure: string, mayStayApplied: string): string {

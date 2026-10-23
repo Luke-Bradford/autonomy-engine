@@ -696,6 +696,7 @@ describe('the postgres sink’s failure posture (#1196 M10 slice 3a)', () => {
     ['pg’s client timeout', new Error('Query read timeout')],
     ['a socket error', pgError('EPIPE', 'write EPIPE')],
     ['a FATAL that ends the session', pgError('57P01', 'terminating connection')],
+    ['statement_completion_unknown', pgError('40003', 'statement completion unknown')],
   ])('reports a COMMIT that ended in %s as of unknown outcome', async (_, error) => {
     const { rec, factory } = sinkFactory({ failOn: { prefix: 'COMMIT', error } });
     await expect(
