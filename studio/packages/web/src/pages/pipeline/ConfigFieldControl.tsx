@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useId, useState, type ReactNode, type RefObject } from 'react';
 import type { Node, RefSuggestion } from '@autonomy-studio/shared';
 import { Toolbar } from '../../lib/PageHeader';
 import { CheckboxField } from '../../lib/form/CheckboxField';
@@ -26,6 +26,7 @@ import {
 } from './ExpressionPicker';
 import type { WrapSpan } from './expressionInsert';
 import { fieldPickerProps, useCaretInsert } from './useCaretInsert';
+import { useRowMoves } from './useRowMoves';
 import { ExpressionEditor } from './ExpressionEditor';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { JsonEditor } from '../../lib/form/JsonEditor';
@@ -34,6 +35,7 @@ import { AutoGrowTextarea } from '../../lib/form/AutoGrowTextarea';
 import { UnitLabel, WithUnit } from '../../lib/form/UnitInput';
 import { midSentence } from '../../lib/words';
 import {
+  MoveRowButtons,
   RemoveRowButton,
   RowActions,
   RowTable,
@@ -832,34 +834,9 @@ export function ObjectListControl({
   const cells = field.elementFields ?? [];
   const columns = cells.map(cellColumn);
   const labelId = useId();
-  const [moves, setMoves] = useState(0);
-  const groupRef = useRef<HTMLDivElement>(null);
-  // Where the last move put its row. The buttons are index-keyed, so the
-  // focused one now belongs to the row that shifted the other way; focus
-  // follows the moved row instead, so pressing again keeps moving it.
-  const moved = useRef<{ index: number; direction: 'up' | 'down' } | null>(null);
-  const move = (from: number, to: number) => {
-    const next = [...rows];
-    const [row] = next.splice(from, 1);
-    if (row === undefined) return;
-    next.splice(to, 0, row);
-    moved.current = { index: to, direction: to < from ? 'up' : 'down' };
-    setMoves((n) => n + 1);
-    onChange(next);
-  };
-  useEffect(() => {
-    const target = moved.current;
-    moved.current = null;
-    if (target === null) return;
-    const byName = (direction: 'up' | 'down') =>
-      Array.from(groupRef.current?.querySelectorAll('button') ?? []).find(
-        (b) => b.getAttribute('aria-label') === rowActionName(field, target.index, direction),
-      );
-    // At either end the same direction is disabled, and a disabled button
-    // cannot hold focus; the other direction is the row's only move left.
-    const same = byName(target.direction);
-    (same && !same.disabled ? same : byName(target.direction === 'up' ? 'down' : 'up'))?.focus();
-  }, [moves, field]);
+  const { moves, move, groupRef } = useRowMoves(rows, onChange, (index, direction) =>
+    rowActionName(field, index, direction),
+  );
 
   // Each row is read by `parseRowCells`, the reader an apply uses, keeping the
   // cells that parse. An apply refuses the whole list on one bad cell; a
@@ -969,22 +946,12 @@ export function ObjectListControl({
                 );
               })}
               <RowActions>
-                <button
-                  type="button"
-                  aria-label={rowActionName(field, index, 'up')}
-                  disabled={index === 0}
-                  onClick={() => move(index, index - 1)}
-                >
-                  ↑
-                </button>
-                <button
-                  type="button"
-                  aria-label={rowActionName(field, index, 'down')}
-                  disabled={index === rows.length - 1}
-                  onClick={() => move(index, index + 1)}
-                >
-                  ↓
-                </button>
+                <MoveRowButtons
+                  index={index}
+                  count={rows.length}
+                  label={(direction) => rowActionName(field, index, direction)}
+                  onMove={(to) => move(index, to)}
+                />
                 <RemoveRowButton
                   label={rowActionName(field, index, 'remove')}
                   onRemove={() => onChange(rows.filter((_, i) => i !== index))}

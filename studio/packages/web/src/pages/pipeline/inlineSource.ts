@@ -8,6 +8,7 @@ import {
   type SqlParameterValue,
 } from '@autonomy-studio/shared';
 
+import type { RowTableColumn } from '../../lib/form/RowTable';
 import { NUMERIC_TEXT } from './paramRules';
 
 /**
@@ -22,6 +23,9 @@ export function bindNameProblem(name: string, others: readonly string[]): string
   // Keys are stored WITHOUT the colon, so `:wm` would silently never bind.
   if (name.startsWith(':')) return 'Leave out the leading :.';
   if (/\s/.test(name)) return 'A name has no spaces.';
+  // #1600 C10c — no `:name` holds one, and a Script direction's name with one
+  // is refused at save: a name is wiring, never evaluated.
+  if (name.includes('${')) return 'A name is literal: no ${} in it.';
   if (others.includes(name)) return `:${name} is already bound.`;
   return null;
 }
@@ -216,4 +220,17 @@ function parametersOf(inline: InlineDataset): Record<string, unknown> {
   return raw !== null && typeof raw === 'object' && !Array.isArray(raw)
     ? (raw as Record<string, unknown>)
     : {};
+}
+
+/** A bind-value table's columns: Name, then Type when the values are typed (C1q-c), Value, and any extra. */
+export function bindColumns(
+  typed: boolean,
+  extra: readonly RowTableColumn[] = [],
+): RowTableColumn[] {
+  return [
+    { key: 'name', header: 'Name', width: 'short' },
+    ...(typed ? [{ key: 'type', header: 'Type', width: 'short' } as const] : []),
+    { key: 'value', header: 'Value', width: 'long' },
+    ...extra,
+  ];
 }

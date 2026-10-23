@@ -68,8 +68,11 @@ import {
   type WorkspaceGitPullRequestReading,
   type ActivityBindingSlot,
   bindsSourceDataset,
+  SCRIPT_ACTIVITY_TYPE,
 } from '@autonomy-studio/shared';
 import { InlineSourceEditor } from './InlineSourceEditor';
+import { ScriptBlocksEditor } from './ScriptBlocksEditor';
+import { sqlDialectOf } from './inlineSource';
 import {
   clipboardCommandFor,
   arrangeDisabledReason,
@@ -140,6 +143,7 @@ import {
   deriveConfigFields,
   emptyControlValue,
   formatFieldValue,
+  isRowList,
   parseFieldInput,
   changedConfigKeys,
   payloadSignature,
@@ -4306,6 +4310,18 @@ export function NodePanel({
             fieldNames={shownFields}
             fieldBefore={(name) =>
               logInline && name === 'logFolder' ? bindingControls('logConnection') : undefined
+            }
+            fieldControl={(field, value, onChange) =>
+              /* #1600 OR41 C10c — a Script's blocks as blocks, not a row table. */
+              nodeType === SCRIPT_ACTIVITY_TYPE && field.name === 'blocks' ? (
+                <ScriptBlocksEditor
+                  field={field}
+                  rows={isRowList(value) ? value : []}
+                  onChange={onChange}
+                  picker={picker}
+                  dialect={sqlDialectOf(sourceConnection?.kind)}
+                />
+              ) : undefined
             }
             optionsFor={(field) =>
               offeredFieldOptions(entry, field, sourceConnection?.kind, editor.inputs[field.name])

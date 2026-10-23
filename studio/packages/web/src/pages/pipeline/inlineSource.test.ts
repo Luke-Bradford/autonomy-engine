@@ -22,6 +22,8 @@ describe('inline source bind values (#1600 C1q-b)', () => {
     expect(bindNameProblem(':wm', [])).toMatch(/leading :/);
     expect(bindNameProblem('a b', [])).toMatch(/no spaces/);
     expect(bindNameProblem('wm', ['wm'])).toMatch(/already bound/);
+    // #1600 C10c — a name is literal: a `${` in it can never be a :name.
+    expect(bindNameProblem('${x}', [])).toMatch(/literal/);
     expect(bindNameProblem('wm', ['n'])).toBeNull();
   });
 
