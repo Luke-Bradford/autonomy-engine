@@ -333,7 +333,10 @@ function QueryFields({
         about={about(sqlField, 'Literal: ${} is not evaluated here.')}
         value={sql}
         onChange={(next, coalesce) =>
-          write({ kind: 'query', config: { ...inline.config, sql: next } }, coalesce ? 'sql' : undefined)
+          write(
+            { kind: 'query', config: { ...inline.config, sql: next } },
+            coalesce ? 'sql' : undefined,
+          )
         }
       />
       {/* The list's title and `?`, as a config field's row list draws them. */}

@@ -267,7 +267,10 @@ export function BindValueRow({
         </td>
         {extra}
         <RowActions>
-          <RemoveRowButton label={`Remove ${label.charAt(0).toLowerCase()}${label.slice(1)}`} onRemove={onRemove} />
+          <RemoveRowButton
+            label={`Remove ${label.charAt(0).toLowerCase()}${label.slice(1)}`}
+            onRemove={onRemove}
+          />
         </RowActions>
       </tr>
       {note !== null && (
