@@ -272,6 +272,22 @@ describe('#1484 activity runs — one row per attempt', () => {
     }
   });
 
+  it('#1673 — withholds an inactive activity’s on a secure node in the log itself', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [
+      node('a', {
+        state: 'inactive',
+        policy: { secureInput: true },
+        userProperties: [{ name: 'Kind', value: 'nightly' }],
+      }),
+    ]);
+    const runId = await drive(db, pvId, stub());
+    const inactive = loadEngineLog(db, runId).find(({ event: e }) => e.type === 'node.inactive');
+    expect(inactive?.event).toMatchObject({
+      userProperties: [{ name: 'Kind', value: SECURE_REDACTED }],
+    });
+  });
+
   it('#1673 — a Switch, a Filter, a call that started and a Webhook carry them too', async () => {
     const { db } = freshDb();
     const props = (name: string) => ({ userProperties: [{ name, value: '${run.runId}' }] });

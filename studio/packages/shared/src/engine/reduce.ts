@@ -1960,12 +1960,7 @@ export function createEngine(doc: EngineDoc): Engine {
    * run to record, literals only (`literalOnly`): an inactive node was never
    * validated, so none of its `${}`s is evaluated.
    */
-  function inactivateCommand(
-    state: RunState,
-    node: Node,
-    sid: string,
-    attemptId: string,
-  ): EngineCommand {
+  function inactivateCommand(node: Node, sid: string, attemptId: string): EngineCommand {
     const command: Extract<EngineCommand, { type: 'inactivateNode' }> = {
       type: 'inactivateNode',
       nodeId: sid,
@@ -1974,13 +1969,7 @@ export function createEngine(doc: EngineDoc): Engine {
     };
     const props = node.userProperties;
     if (props === undefined || props.length === 0) return command;
-    const ctx = buildCtx(scopedEvalState(state, sid));
-    const item = foreachItemOf(state, sid);
-    const resolved = resolveUserProperties(
-      props,
-      literalOnly((template) => substitute(template, ctx, 0, item)),
-    );
-    return { ...command, resolvedUserProperties: resolved };
+    return { ...command, resolvedUserProperties: resolveUserProperties(props, literalOnly) };
   }
 
   /**
@@ -2028,7 +2017,7 @@ export function createEngine(doc: EngineDoc): Engine {
       // FIRST, so no adapter, control evaluation or child is ever started for it.
       // Hold it `ready` and ask the driver for its placeholder `node.inactive`,
       // whose `markAs` becomes its terminal status (`onInactive`).
-      commands.push(inactivateCommand(state, node, sid, attemptId));
+      commands.push(inactivateCommand(node, sid, attemptId));
       return {
         state: withNode(state, sid, {
           status: 'ready',
@@ -5225,7 +5214,7 @@ export function createEngine(doc: EngineDoc): Engine {
         // `node.inactive` is owed. Checked BEFORE every type fork below, the last
         // of which is `dispatchNode`: re-deriving that would RUN a switched-off
         // activity. Idempotent for the same reason as the forks below.
-        commands.push(inactivateCommand(state, node, id, ns.currentAttemptId));
+        commands.push(inactivateCommand(node, id, ns.currentAttemptId));
         continue;
       }
       if (ns.status === 'ready' && ns.callback?.attemptId === ns.currentAttemptId) {

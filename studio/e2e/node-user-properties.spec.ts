@@ -232,6 +232,14 @@ test('user properties: a rerun’s reused rows show the source’s, and an inact
     edges: [{ id: 'e1', from: 'gate', to: 'stop', on: 'success' }],
   });
   const source = await fireAndSettle(page, pipelineVersionId, 'user properties on a rerun');
+  // The inactive activity's own run records its literal and refuses its `${}`.
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(source)}`);
+  await fluentRootReady(page);
+  const sourceHeaders = await activityRuns(page).locator('thead th').allTextContents();
+  await expect(
+    activityRowById(page, 'off').locator('td').nth(sourceHeaders.indexOf('Why')),
+  ).toHaveText('Not resolved: the activity is inactive');
+
   const res = await page.request.post(`/api/runs/${encodeURIComponent(source)}/rerun-from-failed`);
   expect(res.status()).toBe(202);
   const { runId } = (await res.json()) as { runId: string };

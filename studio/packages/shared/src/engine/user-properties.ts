@@ -10,29 +10,25 @@
  * property is resolved on its own, so one bad property does not hide the rest.
  */
 import { USER_PROPERTY_VALUE_MAX_CHARS, type UserProperty } from '../schemas/pipeline.js';
-import { interpolationMode } from './expr.js';
+import { interpolationMode, restoreEscapes } from './expr.js';
 import { toStr } from './functions.js';
 import type { ResolvedUserProperty } from './types.js';
 
-/** #1673 — the error an inactive activity records for a value with a `${}`
- * (the grid shows it as `Not resolved: the activity is inactive`). */
+/** #1673 — the error an inactive activity records for a value with a `${}`. */
 export const INACTIVE_USER_PROPERTY_UNRESOLVED = 'the activity is inactive';
 
 /**
- * #1673 — `evaluate` for an inactive activity. Save-time validation leaves an
- * inactive node out (C0c), so its `${}`s were never checked for a secure
- * output's read or a secret ref, and none may be evaluated: a value with one
- * records {@link INACTIVE_USER_PROPERTY_UNRESOLVED} as its error. A literal
- * (an escaped `$${` included) still renders through `evaluate`, which reads no
- * run state for one.
+ * #1673 — `evaluate` for an inactive activity, which reads no run state.
+ * Save-time validation leaves an inactive node out (C0c), so its `${}`s were
+ * never checked for a secure output's read or a secret ref, and none may be
+ * evaluated: a value with one (an unterminated one too) records
+ * {@link INACTIVE_USER_PROPERTY_UNRESOLVED} as its error. A literal renders as
+ * `substitute` renders one, its escaped `$${` restored.
  */
-export function literalOnly(evaluate: (template: string) => unknown) {
-  return (template: string): unknown => {
-    if (interpolationMode(template).mode !== 'literal') {
-      throw new Error(INACTIVE_USER_PROPERTY_UNRESOLVED);
-    }
-    return evaluate(template);
-  };
+export function literalOnly(template: string): string {
+  const mode = interpolationMode(template);
+  if (mode.mode !== 'literal') throw new Error(INACTIVE_USER_PROPERTY_UNRESOLVED);
+  return restoreEscapes(mode.scanned);
 }
 
 function bounded(text: string): { text: string; truncated?: true } {

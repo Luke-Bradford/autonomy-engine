@@ -257,7 +257,7 @@ function firstLoggedCount(
 
 /** What an event says about its attempt's row: the user properties a dispatch
  * resolved (on its failure, when it never dispatched), or an engine-evaluated
- * activity or a call recorded on its own event (#1673), the branch an If or
+ * activity, a call or an inactive activity recorded on its own event (#1673), the branch an If or
  * Switch took, the child a call started, the counts a success logged, the error
  * a failure gave. The caller decides whether the row may still take it (rule 1). */
 function fillDetail(
@@ -624,6 +624,27 @@ export function projectActivityRuns(
 }
 
 /**
+ * #1673 — what a rerun's reused rows show: for each node the reseed copies, the
+ * user properties on the source run's own last row for it. That is the row of
+ * the attempt whose success was copied (a Wait until's re-checks share one row,
+ * which keeps its first check's), or, for a node the source itself reused, the
+ * copy its reused row carries. Nodes with none are left out.
+ */
+export function copiedUserPropertiesOf(
+  sourceRows: readonly ProjectedActivityRun[],
+  frontier: readonly string[],
+): Record<string, ResolvedUserProperty[]> {
+  const last = new Map<string, ResolvedUserProperty[] | null>();
+  for (const row of sourceRows) last.set(row.nodeId, row.userProperties);
+  return Object.fromEntries(
+    frontier.flatMap((id) => {
+      const props = last.get(id);
+      return props === undefined || props === null ? [] : [[id, props] as const];
+    }),
+  );
+}
+
+/**
  * #1557 — the activity runs of a run whose version no longer resolves (deleted,
  * or present but no longer parsing). With no doc there is no engine to step, so
  * this reads the log alone, and says less:
@@ -648,27 +669,6 @@ export function projectActivityRuns(
  * `reusedIds`: with no containers to expand, that would add each copied
  * container's own id, and a container is never a row.
  */
-/**
- * #1673 — what a rerun's reused rows show: for each node the reseed copies, the
- * user properties on the source run's own last row for it. That is the attempt
- * whose success was copied (a Wait until's re-checks share one row), or, for a
- * node the source itself reused, the copy its reused row carries. Nodes with
- * none are left out.
- */
-export function copiedUserPropertiesOf(
-  sourceRows: readonly ProjectedActivityRun[],
-  frontier: readonly string[],
-): Record<string, ResolvedUserProperty[]> {
-  const last = new Map<string, ResolvedUserProperty[] | null>();
-  for (const row of sourceRows) last.set(row.nodeId, row.userProperties);
-  return Object.fromEntries(
-    frontier.flatMap((id) => {
-      const props = last.get(id);
-      return props === undefined || props === null ? [] : [[id, props] as const];
-    }),
-  );
-}
-
 export function projectActivityRunsFromLog(
   log: readonly LoggedEngineEvent[],
 ): ProjectedActivityRuns {

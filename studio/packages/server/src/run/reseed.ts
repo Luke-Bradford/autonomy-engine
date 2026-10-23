@@ -167,11 +167,20 @@ export function createReseedService(deps: DriveDeps): ReseedService {
       const reseed = engine.reseedFrontier(sourceState);
       const { frontier, copiedOutputs, copiedContainers, childLinks, copiedInactive } = reseed;
       // #1673 — the user properties R1 recorded for each copied node, so the
-      // rerun's reused rows show what the work it reused ran with.
-      const copiedUserProperties = copiedUserPropertiesOf(
-        projectActivityRuns(doc, engine, sourceLog).rows,
-        frontier,
-      );
+      // rerun's reused rows show what the work it reused ran with. Display only:
+      // a projection that throws costs the reused rows their cells, never the rerun.
+      let copiedUserProperties: ReturnType<typeof copiedUserPropertiesOf> = {};
+      try {
+        copiedUserProperties = copiedUserPropertiesOf(
+          projectActivityRuns(doc, engine, sourceLog).rows,
+          frontier,
+        );
+      } catch (err) {
+        deps.log?.warn?.(
+          { err, sourceRunId },
+          'rerun: the source run’s activity runs would not project; reused rows show no user properties',
+        );
+      }
       // #844 V5 (spec V-D7) — exactly the COPIED nodes' variable writes, in R1's
       // log order (R1's own carried writes first, for a rerun of a rerun).
       const copiedVariableWrites = copiedVariableWritesOf(
