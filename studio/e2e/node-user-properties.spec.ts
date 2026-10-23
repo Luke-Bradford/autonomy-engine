@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { activityRowById, activityRuns, properties } from './support/panels';
-import { fireAndSettle, nodeById, openSeededCanvas } from './support/seedDoc';
+import { fireAndSettle, nodeById, openSeededCanvas, seedVersion } from './support/seedDoc';
 import { seedConnection } from './support/seedResources';
 import { fluentRootReady } from './support/theme';
 
@@ -98,4 +98,43 @@ test('user properties: authored on the General tab, resolved at run time, shown 
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+/**
+ * #1673 — an attempt refused BEFORE dispatch (its connection id resolves to no
+ * connection) still shows its user properties: the row an operator most wants
+ * them on, and the one that read blank before.
+ */
+test('user properties: an activity refused before dispatch still shows them in the activity runs grid', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const { pipelineVersionId } = await seedVersion(page, 'user properties refused', {
+    params: [{ name: 'conn', type: 'string' as const, required: false, default: 'no-such-conn' }],
+    nodes: [
+      {
+        id: 'ls',
+        type: 'file_list',
+        connectionId: '${params.conn}',
+        config: { path: '/tmp' },
+        userProperties: [{ name: 'Kind', value: 'nightly ${params.conn}' }],
+        position: { x: 0, y: 0 },
+      },
+    ],
+  });
+  const runId = await fireAndSettle(page, pipelineVersionId, 'user properties refused');
+  const run = await page.request.get(`/api/runs/${encodeURIComponent(runId)}`);
+  expect(((await run.json()) as { status: string }).status).toBe('failure');
+
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+  await fluentRootReady(page);
+  const row = activityRowById(page, 'ls');
+  await expect(row).toHaveCount(1);
+  const headers = activityRuns(page).locator('thead th');
+  await expect(headers.filter({ hasText: /^Kind$/ })).toHaveCount(1);
+  const texts = await headers.allTextContents();
+  await expect(row.locator('td').nth(texts.indexOf('Kind'))).toHaveText('nightly no-such-conn');
+
+  await expectQuiet(page, problems);
 });

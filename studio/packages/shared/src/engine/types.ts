@@ -1513,6 +1513,16 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
      */
     connectionId: z.string().optional(),
     /**
+     * #1673 — the user properties this attempt's dispatch resolved, stamped ONLY
+     * on the failure of an attempt that never reached `node.dispatched` (a
+     * pre-flight refusal, or a cancel that folded while it was queued), so its
+     * activity-runs row is not blank. A dispatched attempt keeps them on
+     * `node.dispatched` alone. Redacted on a secure node as there. The reducer
+     * never reads it; additive + optional, so an older build reading a newer log
+     * strips it.
+     */
+    userProperties: z.array(ResolvedUserPropertySchema).optional(),
+    /**
      * M1 (#1104) — WHICH END of a PAIRED activity's source/sink pair this
      * failure came from. A `copy` is heterogeneous by definition, so a failure
      * that cannot say which end failed is a support problem: "connection not
