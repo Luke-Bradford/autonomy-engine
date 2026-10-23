@@ -8,10 +8,11 @@ import {
 import { Toolbar } from '../../lib/PageHeader';
 import { AboutHelp } from '../../lib/HelpDisclosure';
 import { RequiredMark } from '../../lib/form/RequiredMark';
-import { RemoveRowButton, RowList } from '../../lib/form/RowTable';
+import { MoveRowButtons, RemoveRowButton, RowList } from '../../lib/form/RowTable';
 import { BindValueRow, ImportFromStatement, LiteralSqlField } from './BindValues';
 import { ConfigFieldControl, type FieldPicker, type PickerTarget } from './ConfigFieldControl';
 import {
+  configFieldTitle,
   emptyControlValue,
   isRowList,
   placeRowCandidate,
@@ -25,7 +26,9 @@ import {
 import { bindColumns, freshBindName, reconcileKeyOrder } from './inlineSource';
 import {
   addBlockParam,
+  blockParamDirection,
   blockParamNames,
+  blockParamValue,
   importBlockParams,
   readBlockParams,
   removeBlockParam,
@@ -69,23 +72,16 @@ const BLOCK_ABOUT =
  */
 export function ScriptBlocksEditor({
   field,
-  label,
-  required,
-  describedBy,
   rows,
   onChange,
   picker,
-  help,
   dialect,
 }: {
+  /** The Script's `blocks` field: its title, note and cells. */
   field: ConfigField;
-  label: string;
-  required: boolean;
-  describedBy: string | undefined;
   rows: readonly ObjectListRow[];
   onChange: (next: readonly ObjectListRow[]) => void;
   picker: FieldPicker | undefined;
-  help: ReactNode;
   /** The bound connection's store, for *Import from statement* and SQLite's notes. */
   dialect: SqlDialect | undefined;
 }) {
@@ -94,22 +90,18 @@ export function ScriptBlocksEditor({
     rowActionName(field, index, direction),
   );
   const noteId = useId();
+  const label = configFieldTitle(field);
+  const help = field.label?.description;
   const full = rows.length >= SCRIPT_MAX_BLOCKS;
   return (
-    <div
-      className="config-field object-list script-blocks"
-      role="group"
-      aria-label={label}
-      aria-describedby={describedBy}
-      ref={groupRef}
-    >
+    <div className="config-field object-list" role="group" aria-label={label} ref={groupRef}>
       <div className="object-list-label help-row">
         <span>{label}</span>
-        {required && <RequiredMark />}
+        {!field.optional && <RequiredMark />}
         {/* ONE `?` for the list, as the row table had: each block's SQL and
             Parameters are explained here rather than by a `?` per block. */}
         <AboutHelp name={label} noteId={noteId}>
-          {help !== null && <>{help} </>}
+          {help !== undefined && <>{help} </>}
           {BLOCK_ABOUT}
         </AboutHelp>
       </div>
@@ -126,7 +118,10 @@ export function ScriptBlocksEditor({
       {rows.length === 0 && <p className="page-hint">No blocks.</p>}
       {rows.map((row, index) => (
         <ScriptBlock
-          // Remounted on add, remove and move, as the generic list's cells are.
+          // Remounted on add, remove and move, as the generic list's cells are
+          // (`ObjectListControl`): kept by position, a block's drafts would
+          // otherwise show the content of the block that slid into its slot.
+          // A remount also re-reads the JSON-cell latch, which is intended.
           key={`${String(index)}:${String(rows.length)}:${String(moves)}`}
           field={field}
           cells={cells}
@@ -198,24 +193,19 @@ function ScriptBlock({
     <div className="script-block" role="group" aria-label={`Block ${String(index + 1)}`}>
       <div className="script-block__head">
         <span className="script-block__title">{`Block ${String(index + 1)}`}</span>
-        <span data-size={'m' satisfies FieldSize}>{cellControl(typeCell)}</span>
-        <span className="script-block__actions">
-          <button
-            type="button"
-            aria-label={rowActionName(field, index, 'up')}
-            disabled={index === 0}
-            onClick={() => onMove(index - 1)}
-          >
-            ↑
-          </button>
-          <button
-            type="button"
-            aria-label={rowActionName(field, index, 'down')}
-            disabled={index === rows.length - 1}
-            onClick={() => onMove(index + 1)}
-          >
-            ↓
-          </button>
+        {/* Named by its own accessible name; the caption is for the eye. */}
+        <span className="object-list-label" aria-hidden="true">
+          Type
+        </span>
+        {cellControl(typeCell)}
+        {/* The row table's action styling (24px targets, compact height). */}
+        <span className="row-table__actions script-block__actions">
+          <MoveRowButtons
+            index={index}
+            count={rows.length}
+            label={(direction) => rowActionName(field, index, direction)}
+            onMove={onMove}
+          />
           <RemoveRowButton label={rowActionName(field, index, 'remove')} onRemove={onRemove} />
         </span>
       </div>
@@ -315,14 +305,14 @@ function BlockParameters({
       >
         {names.map((name, i) => {
           const label = `${blockName} parameter ${String(i + 1)}`;
-          const direction = params.directions[name] ?? 'in';
+          const direction = blockParamDirection(params, name);
           return (
             <BindValueRow
               // By position, so renaming a row does not remount it mid-typing.
               key={i}
               label={label}
               name={name}
-              value={params.parameters[name]}
+              value={blockParamValue(params, name)}
               others={names.filter((n) => n !== name)}
               typed={false}
               picker={picker}
@@ -355,7 +345,7 @@ function BlockParameters({
               }
               onRename={(to) => write(renameBlockParam(params, name, to))}
               onValue={(v) =>
-                write(setBlockParamValue(params, name, typeof v === 'string' ? v : String(v ?? '')))
+                write(setBlockParamValue(params, name, typeof v === 'string' ? v : String(v)))
               }
               onRemove={() => write(removeBlockParam(params, name))}
             />
@@ -377,7 +367,7 @@ function parameterAdvisory(
   used: readonly string[] | undefined,
   dialect: SqlDialect | undefined,
 ): string | null {
-  const direction = params.directions[name] ?? 'in';
+  const direction = blockParamDirection(params, name);
   const readsBack = direction !== 'in';
   if (used !== undefined && !used.includes(name)) {
     return readsBack
@@ -387,7 +377,7 @@ function parameterAdvisory(
   if (readsBack && dialect === 'sqlite') {
     return 'SQLite has no Out parameters: the run refuses this direction.';
   }
-  const value = params.parameters[name];
+  const value = blockParamValue(params, name);
   if (direction === 'out' && value !== undefined && value !== '') {
     return 'An Out parameter’s value is not sent.';
   }

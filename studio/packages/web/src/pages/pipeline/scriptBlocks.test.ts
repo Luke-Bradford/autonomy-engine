@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   addBlockParam,
+  blockParamDirection,
   blockParamNames,
+  blockParamValue,
   importBlockParams,
   readBlockParams,
   removeBlockParam,
@@ -108,5 +110,31 @@ describe('#1600 C10c — a Script block’s parameters, read from and written to
       parameters: { a: '1', x: '', y: '' },
       directions: { total: 'out' },
     });
+  });
+
+  it('reads a value and a direction as own keys, so __proto__ never reads the prototype', () => {
+    const p = { parameters: { __proto__: 'x' }, directions: {} } as unknown as ScriptBlockParams;
+    const own = readBlockParams({ parameters: '{"__proto__": "x"}' })!;
+    expect(blockParamDirection(own, '__proto__')).toBe('in');
+    expect(
+      blockParamValue(
+        readBlockParams({ parameterDirections: '{"__proto__": "out"}' })!,
+        '__proto__',
+      ),
+    ).toBeUndefined();
+    expect(blockParamValue(p, 'missing')).toBeUndefined();
+  });
+
+  it('keeps a name with no value as an explicit In, so its row does not vanish', () => {
+    const p = { parameters: {}, directions: { total: 'out' as const } };
+    const next = setBlockParamDirection(p, 'total', 'in');
+    expect(next.directions).toEqual({ total: 'in' });
+    expect(blockParamNames(next)).toEqual(['total']);
+  });
+
+  it('round-trips what it writes, and reads a blank-looking cell as none', () => {
+    const p = { parameters: { a: '1', '10': '${x}' }, directions: { t: 'inOut' as const } };
+    expect(readBlockParams(writeBlockParams({ type: 'query', sql: 's' }, p))).toEqual(p);
+    expect(readBlockParams({ parameters: '  \n ', parameterDirections: ' ' })).toEqual(none);
   });
 });

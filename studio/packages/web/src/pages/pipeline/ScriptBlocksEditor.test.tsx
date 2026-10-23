@@ -8,23 +8,21 @@ import { deriveConfigFields, type ObjectListRow } from './configForm';
 const blocksField = deriveConfigFields(scriptConfigSchema)!.find((f) => f.name === 'blocks')!;
 const json = (v: unknown) => JSON.stringify(v, null, 2);
 
-function setup(initial: readonly ObjectListRow[], dialect: SqlDialect | undefined = 'postgres') {
+/** `'none'`: no bound connection, so no dialect (a default parameter would swallow `undefined`). */
+function setup(initial: readonly ObjectListRow[], store: SqlDialect | 'none' = 'postgres') {
+  const dialect = store === 'none' ? undefined : store;
   const latest: { rows: readonly ObjectListRow[] } = { rows: initial };
   function Harness() {
     const [rows, setRows] = useState(initial);
     return (
       <ScriptBlocksEditor
         field={blocksField}
-        label="Script blocks"
-        required
-        describedBy={undefined}
         rows={rows}
         onChange={(next) => {
           latest.rows = next;
           setRows(next);
         }}
         picker={undefined}
-        help={null}
         dialect={dialect}
       />
     );
@@ -150,5 +148,52 @@ describe('#1600 C10c — a Script’s blocks, each with a Name · Value · Direc
   it(`stops adding at ${String(SCRIPT_MAX_BLOCKS)} blocks`, () => {
     setup(Array.from({ length: SCRIPT_MAX_BLOCKS }, () => ({ type: 'query', sql: 'SELECT 1' })));
     expect(screen.getByRole('button', { name: 'Add block' })).toHaveProperty('disabled', true);
+    expect(
+      screen.getByText(`A script holds at most ${String(SCRIPT_MAX_BLOCKS)} blocks`),
+    ).toBeTruthy();
+  });
+
+  it('adds and removes a parameter, says an Out value is not sent, and refuses a ${} name', () => {
+    const latest = setup([{ type: 'nonQuery', sql: 'CALL p(:a)' }]);
+    fireEvent.click(screen.getByRole('button', { name: 'Add parameter' }));
+    expect(latest.rows[0]?.['parameters']).toBe(json({ p1: '' }));
+    fireEvent.change(box('Script blocks row 1 parameter 1 name'), { target: { value: '${x}' } });
+    expect(screen.getByText('A name is literal: no ${} in it.')).toBeTruthy();
+    // The stored row keeps its last good name.
+    expect(latest.rows[0]?.['parameters']).toBe(json({ p1: '' }));
+    fireEvent.change(box('Script blocks row 1 parameter 1 name'), { target: { value: 'a' } });
+    fireEvent.change(box('Script blocks row 1 parameter 1 value'), { target: { value: '5' } });
+    fireEvent.change(box('Script blocks row 1 parameter 1 direction'), {
+      target: { value: 'out' },
+    });
+    expect(screen.getByText('An Out parameter’s value is not sent.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove script blocks row 1 parameter 1' }));
+    expect(latest.rows[0]).toMatchObject({ parameters: '', parameterDirections: '' });
+  });
+
+  it('keeps a direction-only row when it is set to In', () => {
+    setup([
+      { type: 'nonQuery', sql: 'CALL p(:total)', parameterDirections: json({ total: 'out' }) },
+    ]);
+    fireEvent.change(box('Script blocks row 1 parameter 1 direction'), { target: { value: 'in' } });
+    expect(box('Script blocks row 1 parameter 1 name')).toHaveProperty('value', 'total');
+    expect(box('Script blocks row 1 parameter 1 direction')).toHaveProperty('value', 'in');
+  });
+
+  it('offers no Import while no connection says how to read the SQL', () => {
+    setup([{ type: 'query', sql: 'SELECT :a' }], 'none');
+    expect(screen.queryByRole('button', { name: 'Import from statement' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Add parameter' })).toBeTruthy();
+  });
+
+  it('shows a __proto__ parameter as In with its own value, never the prototype', () => {
+    setup(
+      [{ type: 'query', sql: 'SELECT :__proto__', parameters: '{"__proto__": "x"}' }],
+      'sqlite',
+    );
+    expect(box('Script blocks row 1 parameter 1 name')).toHaveProperty('value', '__proto__');
+    expect(box('Script blocks row 1 parameter 1 value')).toHaveProperty('value', 'x');
+    expect(box('Script blocks row 1 parameter 1 direction')).toHaveProperty('value', 'in');
+    expect(screen.queryByText(/SQLite has no Out parameters/)).toBeNull();
   });
 });

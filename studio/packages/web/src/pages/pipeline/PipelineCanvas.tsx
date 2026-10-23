@@ -141,7 +141,6 @@ import { ContainerPanel } from './ContainerPanel';
 import { activityLabels } from './activityLabel';
 import {
   deriveConfigFields,
-  configFieldTitle,
   emptyControlValue,
   formatFieldValue,
   isRowList,
@@ -4317,13 +4316,9 @@ export function NodePanel({
               nodeType === SCRIPT_ACTIVITY_TYPE && field.name === 'blocks' ? (
                 <ScriptBlocksEditor
                   field={field}
-                  label={configFieldTitle(field)}
-                  required={!field.optional}
-                  describedBy={undefined}
                   rows={isRowList(value) ? value : []}
                   onChange={onChange}
                   picker={picker}
-                  help={field.label?.description ?? null}
                   dialect={sqlDialectOf(sourceConnection?.kind)}
                 />
               ) : undefined

@@ -35,6 +35,7 @@ import { AutoGrowTextarea } from '../../lib/form/AutoGrowTextarea';
 import { UnitLabel, WithUnit } from '../../lib/form/UnitInput';
 import { midSentence } from '../../lib/words';
 import {
+  MoveRowButtons,
   RemoveRowButton,
   RowActions,
   RowTable,
@@ -945,22 +946,12 @@ export function ObjectListControl({
                 );
               })}
               <RowActions>
-                <button
-                  type="button"
-                  aria-label={rowActionName(field, index, 'up')}
-                  disabled={index === 0}
-                  onClick={() => move(index, index - 1)}
-                >
-                  ↑
-                </button>
-                <button
-                  type="button"
-                  aria-label={rowActionName(field, index, 'down')}
-                  disabled={index === rows.length - 1}
-                  onClick={() => move(index, index + 1)}
-                >
-                  ↓
-                </button>
+                <MoveRowButtons
+                  index={index}
+                  count={rows.length}
+                  label={(direction) => rowActionName(field, index, direction)}
+                  onMove={(to) => move(index, to)}
+                />
                 <RemoveRowButton
                   label={rowActionName(field, index, 'remove')}
                   onRemove={() => onChange(rows.filter((_, i) => i !== index))}

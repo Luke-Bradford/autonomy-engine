@@ -3,7 +3,7 @@ import {
   type ScriptParameterDirection,
 } from '@autonomy-studio/shared';
 import type { ObjectListRow } from './configForm';
-import { renameKey } from './inlineSource';
+import { renameKey, withImportedBindNames } from './inlineSource';
 
 /**
  * #1600 OR41 C10c — the pure rules behind a Script block's parameter table
@@ -71,13 +71,11 @@ export function writeBlockParams(row: ObjectListRow, params: ScriptBlockParams):
   };
 }
 
-const has = (record: object, name: string) => Object.prototype.hasOwnProperty.call(record, name);
-
 /** Every name, the parameters' first and then those with only a direction (an Out needs no value). */
 export function blockParamNames(params: ScriptBlockParams): string[] {
   return [
     ...Object.keys(params.parameters),
-    ...Object.keys(params.directions).filter((n) => !has(params.parameters, n)),
+    ...Object.keys(params.directions).filter((n) => !Object.hasOwn(params.parameters, n)),
   ];
 }
 
@@ -90,7 +88,7 @@ function withEntry<T>(
   name: string,
   value: T,
 ): Record<string, T> {
-  return has(record, name)
+  return Object.hasOwn(record, name)
     ? Object.fromEntries(Object.entries(record).map(([k, v]) => [k, k === name ? value : v]))
     : Object.fromEntries([...Object.entries(record), [name, value]]);
 }
@@ -115,9 +113,11 @@ export function setBlockParamValue(
 }
 
 /**
- * In clears the name's entry: In is the default and needs none. A stored
- * explicit `in` on another name is left as it is, and a value an Out keeps is
- * never dropped (the run ignores it, ADF's rule, and the JSON still shows it).
+ * In clears the name's entry: In is the default and needs none. A name with no
+ * value keeps an explicit `in` instead, or its row would vanish under the
+ * author (a stored `in` is not refused, #1194). A stored explicit `in` on
+ * another name is left as it is, and a value an Out keeps is never dropped
+ * (the run ignores it, ADF's rule, and the JSON still shows it).
  */
 export function setBlockParamDirection(
   params: ScriptBlockParams,
@@ -127,10 +127,23 @@ export function setBlockParamDirection(
   return {
     ...params,
     directions:
-      direction === 'in'
+      direction === 'in' && Object.hasOwn(params.parameters, name)
         ? without(params.directions, name)
         : withEntry(params.directions, name, direction),
   };
+}
+
+/** A name's value, read as an OWN key: `params.parameters['__proto__']` would be the prototype. */
+export function blockParamValue(params: ScriptBlockParams, name: string): string | undefined {
+  return Object.hasOwn(params.parameters, name) ? params.parameters[name] : undefined;
+}
+
+/** A name's direction, In when it has none, read as an own key. */
+export function blockParamDirection(
+  params: ScriptBlockParams,
+  name: string,
+): ScriptParameterDirection {
+  return Object.hasOwn(params.directions, name) ? (params.directions[name] ?? 'in') : 'in';
 }
 
 export function removeBlockParam(params: ScriptBlockParams, name: string): ScriptBlockParams {
@@ -147,12 +160,17 @@ export function addBlockParam(params: ScriptBlockParams, name: string): ScriptBl
 
 /** The SQL's `:name`s with no row yet. A name with only a direction is bound: an Out binds NULL. */
 export function unboundBlockNames(params: ScriptBlockParams, used: readonly string[]): string[] {
-  return used.filter((n) => !has(params.parameters, n) && !has(params.directions, n));
+  return used.filter(
+    (n) => !Object.hasOwn(params.parameters, n) && !Object.hasOwn(params.directions, n),
+  );
 }
 
 export function importBlockParams(
   params: ScriptBlockParams,
   names: readonly string[],
 ): ScriptBlockParams {
-  return names.reduce((p, n) => (has(p.parameters, n) ? p : addBlockParam(p, n)), params);
+  return {
+    ...params,
+    parameters: withImportedBindNames(params.parameters, names) as Record<string, string>,
+  };
 }

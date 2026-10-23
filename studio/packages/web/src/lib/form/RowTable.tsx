@@ -82,6 +82,45 @@ export function RemoveRowButton({ label, onRemove }: { label: string; onRemove: 
   );
 }
 
+/**
+ * #1347 — a row's ↑ and ↓, as buttons rather than drag handles so a keyboard
+ * reaches them. `label` names each by its row ("Move column mapping row 2 up"),
+ * which `useRowMoves` finds the next focus by. At either end the same direction
+ * is disabled.
+ */
+export function MoveRowButtons({
+  index,
+  count,
+  label,
+  onMove,
+}: {
+  index: number;
+  count: number;
+  label: (direction: 'up' | 'down') => string;
+  onMove: (to: number) => void;
+}) {
+  return (
+    <>
+      <button
+        type="button"
+        aria-label={label('up')}
+        disabled={index === 0}
+        onClick={() => onMove(index - 1)}
+      >
+        ↑
+      </button>
+      <button
+        type="button"
+        aria-label={label('down')}
+        disabled={index === count - 1}
+        onClick={() => onMove(index + 1)}
+      >
+        ↓
+      </button>
+    </>
+  );
+}
+
 /** A row's errors and advisories, on a row of their own under it (see `RowTable`). */
 export function RowNotes({ span, children }: { span: number; children: ReactNode }) {
   return (
