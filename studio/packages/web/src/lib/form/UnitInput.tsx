@@ -24,12 +24,12 @@ export function UnitLabel({ title, unit }: { title: ReactNode; unit: string | un
 
 /**
  * The control with its unit drawn inside its right edge (`unitSuffix`), as
- * ADF draws one. `aria-hidden`: the label already names the unit. No unit, no
- * wrapper, so a field without one keeps its old box.
+ * ADF draws one. `aria-hidden`: the label already names the unit. No unit (or
+ * one drawn without a suffix), no wrapper, so the field keeps its old box.
  */
 export function WithUnit({ unit, children }: { unit: string | undefined; children: ReactNode }) {
-  if (unit === undefined) return <>{children}</>;
-  const suffix = unitSuffix(unit);
+  const suffix = unit === undefined ? null : unitSuffix(unit);
+  if (suffix === null) return <>{children}</>;
   // The box keeps clear of the suffix by its length, so a long value never
   // runs under "bytes" (`--unit-ch`, `index.css`).
   return (

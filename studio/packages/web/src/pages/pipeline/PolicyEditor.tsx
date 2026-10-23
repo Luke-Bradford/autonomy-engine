@@ -11,7 +11,11 @@ import { useFieldErrorLine } from '../../lib/form/FieldErrorLine';
 import { Section } from '../../lib/Section';
 import { CheckboxField } from '../../lib/form/CheckboxField';
 import { Toolbar } from '../../lib/PageHeader';
-import { parseTimeoutSeconds, parseWholeNumber } from '../triggers/formFields';
+import {
+  formatTimeoutDuration,
+  parseTimeoutDuration,
+  parseWholeNumber,
+} from '../triggers/formFields';
 import { DraftNumberField } from './DraftNumberField';
 import { enclosingContainers, nodePolicyIssues, policyIssues, validateCanvas } from './canvasDoc';
 import type { createCanvasStore } from './canvasStore';
@@ -100,11 +104,13 @@ export function PolicyEditor({
           <FieldCell span="short">
             <DraftNumberField
               label="Timeout"
-              unit="seconds"
+              unit="duration"
               stored={policy?.timeoutSeconds}
-              parse={parseTimeoutSeconds}
+              parse={parseTimeoutDuration}
+              format={formatTimeoutDuration}
+              inputMode="text"
               placeholder="none"
-              about="Longest one attempt may run. On expiry the attempt is stopped and fails as a timeout, which Retries can retry, unless it may already have changed the store (a Script outside a transaction, a Copy whose rollback failed). A new activity starts with the workspace default from Settings. Blank sets no timeout."
+              about="Longest one attempt may run, as D.HH:MM:SS (1.00:00:00 is a day) or whole seconds. On expiry the attempt is stopped and fails as a timeout, which Retries can retry, unless it may already have changed the store (a Script outside a transaction, a Copy whose rollback failed). A new activity starts with the workspace default from Settings. Blank sets no timeout."
               onCommit={(timeoutSeconds) => set({ timeoutSeconds })}
               errorLine={errors.node}
             />

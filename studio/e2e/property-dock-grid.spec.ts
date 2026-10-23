@@ -178,7 +178,7 @@ test('the General tab packs its two retry numbers onto one row, below the timeou
   await properties(page).getByRole('tab', { name: 'General' }).click();
   const general = properties(page).getByRole('tabpanel', { name: 'General' });
   // #1600 C0a — the timeout is a row of its own above the pair.
-  const timeout = await geometryOf(general.getByRole('textbox', { name: 'Timeout (seconds)' }));
+  const timeout = await geometryOf(general.getByRole('textbox', { name: 'Timeout (duration)' }));
   const retries = await geometryOf(general.getByRole('textbox', { name: 'Retries' }));
   const interval = await geometryOf(
     general.getByRole('textbox', { name: 'Retry interval (seconds)' }),

@@ -187,8 +187,9 @@ describe('SettingsPage — run defaults', () => {
       stored: true,
     });
     render(<SettingsPage />);
-    const field = await screen.findByRole('textbox', { name: /Activity timeout \(seconds\)/ });
-    expect(field).toHaveValue('43200');
+    const field = await screen.findByRole('textbox', { name: /Activity timeout \(duration\)/ });
+    // #1680 — shown as a duration, ADF's form.
+    expect(field).toHaveValue('12:00:00');
 
     await userEvent.clear(field);
     await userEvent.type(field, '600');
@@ -198,7 +199,26 @@ describe('SettingsPage — run defaults', () => {
       defaultActivityTimeoutSeconds: 600,
       lookupMaxRows: 1000,
     });
-    expect(field).toHaveValue('600');
+    expect(field).toHaveValue('00:10:00');
+  });
+
+  it('#1680 — takes the default as D.HH:MM:SS and saves its seconds', async () => {
+    getSettingsMock.mockResolvedValue(settings('env', null));
+    putWorkspaceSettingsMock.mockResolvedValue({
+      settings: { defaultActivityTimeoutSeconds: 93_784, lookupMaxRows: 1000 },
+      stored: true,
+    });
+    render(<SettingsPage />);
+    const field = await screen.findByRole('textbox', { name: /Activity timeout \(duration\)/ });
+    expect(field).toHaveAttribute('inputmode', 'text');
+    await userEvent.clear(field);
+    await userEvent.type(field, '1.02:03:04');
+    await userEvent.tab();
+    expect(putWorkspaceSettingsMock).toHaveBeenCalledWith({
+      defaultActivityTimeoutSeconds: 93_784,
+      lookupMaxRows: 1000,
+    });
+    expect(field).toHaveValue('1.02:03:04');
   });
 
   it('saves a blank as the default turned off, and refuses 0 without saving', async () => {
@@ -208,7 +228,7 @@ describe('SettingsPage — run defaults', () => {
       stored: true,
     });
     render(<SettingsPage />);
-    const field = await screen.findByRole('textbox', { name: /Activity timeout \(seconds\)/ });
+    const field = await screen.findByRole('textbox', { name: /Activity timeout \(duration\)/ });
 
     await userEvent.clear(field);
     await userEvent.type(field, '0');
@@ -228,7 +248,7 @@ describe('SettingsPage — run defaults', () => {
     getSettingsMock.mockResolvedValue(settings('env', null));
     putWorkspaceSettingsMock.mockRejectedValue(new Error('refused by the server'));
     render(<SettingsPage />);
-    const field = await screen.findByRole('textbox', { name: /Activity timeout \(seconds\)/ });
+    const field = await screen.findByRole('textbox', { name: /Activity timeout \(duration\)/ });
     await userEvent.clear(field);
     await userEvent.type(field, '90');
     await userEvent.tab();
@@ -283,7 +303,7 @@ describe('SettingsPage — Lookup max rows', () => {
     await userEvent.tab();
     expect(await screen.findByText('refused by the server')).toBeInTheDocument();
 
-    const timeout = screen.getByRole('textbox', { name: /Activity timeout \(seconds\)/ });
+    const timeout = screen.getByRole('textbox', { name: /Activity timeout \(duration\)/ });
     await userEvent.clear(timeout);
     await userEvent.type(timeout, '600');
     await userEvent.tab();
@@ -298,7 +318,7 @@ describe('SettingsPage — Lookup max rows', () => {
     // The first save never answers before the second is sent.
     putWorkspaceSettingsMock.mockReturnValue(new Promise(() => {}));
     render(<SettingsPage />);
-    const timeout = await screen.findByRole('textbox', { name: /Activity timeout \(seconds\)/ });
+    const timeout = await screen.findByRole('textbox', { name: /Activity timeout \(duration\)/ });
     const rows = await rowsField();
 
     await userEvent.clear(timeout);

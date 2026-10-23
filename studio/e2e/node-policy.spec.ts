@@ -56,8 +56,9 @@ test.describe('#1312 — node run policy editor', () => {
     await expect(
       section.getByRole('checkbox', { name: 'Secure output' }),
     ).toHaveAccessibleDescription(/Redacts the outputs before the run log/);
-    await section.getByLabel('Timeout (seconds)', { exact: true }).fill('300');
-    await section.getByLabel('Timeout (seconds)', { exact: true }).blur();
+    // #1680 — ADF's D.HH:MM:SS, stored as seconds.
+    await section.getByLabel('Timeout (duration)', { exact: true }).fill('1.02:03:04');
+    await section.getByLabel('Timeout (duration)', { exact: true }).blur();
     await section.getByLabel('Retries', { exact: true }).fill('2');
     await section.getByLabel('Retries', { exact: true }).blur();
     await section.getByLabel('Retry interval (seconds)', { exact: true }).fill('60');
@@ -67,7 +68,7 @@ test.describe('#1312 — node run policy editor', () => {
     await page.getByRole('button', { name: 'Save version' }).click();
     await expect(page.locator('.notice')).toHaveText('Saved v2.');
     expect(await persistedPolicy(page, id)).toEqual({
-      timeoutSeconds: 300,
+      timeoutSeconds: 93_784,
       retry: 2,
       retryIntervalSeconds: 60,
       secureOutput: true,
@@ -78,8 +79,8 @@ test.describe('#1312 — node run policy editor', () => {
     await page.locator('.react-flow__renderer').waitFor();
     await nodeById(page, 'a').click();
     await openGeneralTab(page);
-    await expect(policySection(page).getByLabel('Timeout (seconds)', { exact: true })).toHaveValue(
-      '300',
+    await expect(policySection(page).getByLabel('Timeout (duration)', { exact: true })).toHaveValue(
+      '1.02:03:04',
     );
     await expect(policySection(page).getByLabel('Retries', { exact: true })).toHaveValue('2');
     await expect(
@@ -135,7 +136,7 @@ test.describe('#1312 — node run policy editor', () => {
       if (b === null) throw new Error(`${label} is not rendered`);
       return b;
     };
-    const timeout = await box('Timeout (seconds)');
+    const timeout = await box('Timeout (duration)');
     const retries = await box('Retries');
     const interval = await box('Retry interval (seconds)');
     // A number like the others: one control height, one width, one left edge.
@@ -167,7 +168,7 @@ test.describe('#1312 — node run policy editor', () => {
     await openGeneralTab(page);
     const section = policySection(page);
     await expect(section.getByLabel('Retries', { exact: true })).toBeVisible();
-    await expect(section.getByLabel('Timeout (seconds)', { exact: true })).toHaveCount(0);
+    await expect(section.getByLabel('Timeout (duration)', { exact: true })).toHaveCount(0);
     await expectQuiet(page, problems);
   });
 });

@@ -15,8 +15,8 @@ import { properties } from './support/panels';
  * is. The setting is changed through the API before the canvas opens.
  */
 
-const TIMEOUT = 'Timeout (seconds)';
-const DEFAULT_FIELD = 'Activity timeout (seconds)';
+const TIMEOUT = 'Timeout (duration)';
+const DEFAULT_FIELD = 'Activity timeout (duration)';
 const SETTINGS_URL = '/api/workspace/settings';
 
 /** The PUT takes the whole document (#1600 C7d), so Lookup max rows goes back as its default. */
@@ -63,7 +63,8 @@ test.describe('#1600 C0f — the workspace default activity timeout', () => {
     await openCanvasWithDefault(page, 'timeout default 12h', 43_200);
     await addActivity(page, 'Web');
     await openNewestGeneral(page);
-    await expect(properties(page).getByLabel(TIMEOUT, { exact: true })).toHaveValue('43200');
+    // #1680 — shown as ADF's D.HH:MM:SS.
+    await expect(properties(page).getByLabel(TIMEOUT, { exact: true })).toHaveValue('12:00:00');
     await expectQuiet(page, problems);
   });
 
@@ -72,7 +73,7 @@ test.describe('#1600 C0f — the workspace default activity timeout', () => {
     await openCanvasWithDefault(page, 'timeout default 600', 600);
     await addActivity(page, 'Web');
     await openNewestGeneral(page);
-    await expect(properties(page).getByLabel(TIMEOUT, { exact: true })).toHaveValue('600');
+    await expect(properties(page).getByLabel(TIMEOUT, { exact: true })).toHaveValue('00:10:00');
   });
 
   test('with the default off, a new activity has none, and a control activity never takes one', async ({
@@ -94,7 +95,7 @@ test.describe('#1600 C0f — the workspace default activity timeout', () => {
     const problems = collectPageProblems(page);
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto('/#/settings');
-    await expect(defaultField(page)).toHaveValue('43200');
+    await expect(defaultField(page)).toHaveValue('12:00:00');
 
     const box = await defaultField(page).boundingBox();
     expect(box).not.toBeNull();
@@ -102,15 +103,18 @@ test.describe('#1600 C0f — the workspace default activity timeout', () => {
     // Sized to a number, not stretched across the page.
     expect(box!.width).toBeLessThanOrEqual(200);
 
-    await defaultField(page).fill('600');
+    // #1680 — typed as D.HH:MM:SS, saved as its seconds.
+    await defaultField(page).fill('1.02:03:04');
     const saved = page.waitForResponse(
       (r) => r.url().endsWith(SETTINGS_URL) && r.request().method() === 'PUT',
     );
     await defaultField(page).blur();
-    expect((await saved).status()).toBe(200);
+    const put = await saved;
+    expect(put.status()).toBe(200);
+    expect(put.request().postDataJSON()).toMatchObject({ defaultActivityTimeoutSeconds: 93_784 });
     // A reload reads the stored value back, not the field's draft.
     await page.reload();
-    await expect(defaultField(page)).toHaveValue('600');
+    await expect(defaultField(page)).toHaveValue('1.02:03:04');
     await expectQuiet(page, problems);
   });
 });
@@ -157,7 +161,7 @@ test.describe('#1600 C7d — the workspace Lookup max rows', () => {
     await page.reload();
     await expect(rowsField(page)).toHaveValue('2500');
     // The timeout saved before is still there: the PUT carried the whole document.
-    await expect(defaultField(page)).toHaveValue('600');
+    await expect(defaultField(page)).toHaveValue('00:10:00');
     await expectQuiet(page, problems);
   });
 });

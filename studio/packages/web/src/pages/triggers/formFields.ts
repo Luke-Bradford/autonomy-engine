@@ -53,8 +53,8 @@ export function parseWholeNumber(raw: string): WholeNumberParse {
 
 /**
  * #1600 OR41 C0f — a timeout in whole seconds: blank is unset, otherwise above 0.
- * The dock's Timeout and Settings' default share it, so both refuse a 0 at the
- * field rather than one of them leaving it to the save.
+ * Now the Query timeout's (C1q-c); the activity timeout fields take a duration
+ * too (`parseTimeoutDuration`, #1680).
  */
 export function parseTimeoutSeconds(raw: string): WholeNumberParse {
   const parsed = parseWholeNumber(raw);
@@ -62,6 +62,64 @@ export function parseTimeoutSeconds(raw: string): WholeNumberParse {
     return { ok: false, reason: 'Enter a whole number of seconds above 0, or leave it blank' };
   }
   return parsed;
+}
+
+/** ADF's timespan, `D.HH:MM:SS`, days optional: hours 0–23, minutes and seconds two digits. */
+const DURATION = /^(?:(\d+)\.)?(\d{1,2}):(\d{2}):(\d{2})$/;
+
+const DAY = 86_400;
+
+/**
+ * #1680 — an activity timeout typed as ADF's `D.HH:MM:SS` or as whole seconds.
+ * The dock's Timeout and Settings' default share it, and both show the stored
+ * seconds back through `formatTimeoutDuration`.
+ *
+ * Deliberately narrower than .NET's `TimeSpan.Parse`, which ADF uses: bare
+ * digits are SECONDS here (as the field always took them), not days; a
+ * two-part `12:00` is refused rather than read as hours; and fractions of a
+ * second are refused, because the stored value is whole seconds. The one-year
+ * write ceiling is the schema's, not this parser's (`parseWholeNumber`'s rule).
+ */
+export function parseTimeoutDuration(raw: string): WholeNumberParse {
+  const trimmed = raw.trim();
+  if (trimmed === '') return { ok: true, value: undefined };
+  const refused = {
+    ok: false,
+    reason: `'${raw}' is not a timeout: enter D.HH:MM:SS (1.00:00:00 is a day) or whole seconds`,
+  } as const;
+  let seconds: number;
+  if (/^\d+$/.test(trimmed)) {
+    seconds = Number(trimmed);
+  } else {
+    const parts = DURATION.exec(trimmed);
+    if (parts === null) return refused;
+    const [days, hours, minutes, secs] = [parts[1] ?? '0', parts[2], parts[3], parts[4]].map(
+      Number,
+    );
+    if (hours > 23 || minutes > 59 || secs > 59) return refused;
+    seconds = days * DAY + hours * 3_600 + minutes * 60 + secs;
+  }
+  if (!Number.isSafeInteger(seconds)) return refused;
+  if (seconds === 0) return { ok: false, reason: 'Enter a timeout above 0, or leave it blank' };
+  return { ok: true, value: seconds };
+}
+
+/**
+ * #1680 — a stored timeout as `HH:MM:SS`, or `D.HH:MM:SS` from a day up (zero
+ * days left off, as .NET's `TimeSpan` "c" format does). `parseTimeoutDuration`
+ * reads it back as the same seconds, which `DraftNumberField` relies on.
+ *
+ * A value the field could never have written (not a positive safe integer,
+ * so the API or an import put it there) is shown as stored, where the save's
+ * own refusal names it.
+ */
+export function formatTimeoutDuration(seconds: number): string {
+  if (!Number.isSafeInteger(seconds) || seconds <= 0) return String(seconds);
+  const two = (n: number) => String(n).padStart(2, '0');
+  const days = Math.floor(seconds / DAY);
+  const rest = seconds % DAY;
+  const clock = `${two(Math.floor(rest / 3_600))}:${two(Math.floor((rest % 3_600) / 60))}:${two(rest % 60)}`;
+  return days === 0 ? clock : `${String(days)}.${clock}`;
 }
 
 /**

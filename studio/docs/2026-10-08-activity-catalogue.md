@@ -119,7 +119,15 @@ Still open in C0 after C0e: the 12 h workspace default, the `D.HH:MM:SS` input, 
 - **Settings page:** a *Run defaults* section with *Activity timeout (seconds)*, saved when the field is left. Blank turns the default off.
 - **Not built (deliberate):** the setting does not sync to git or travel in an export, because it is workspace configuration rather than a resource. Changing it never rewrites existing activities. An author who wants no timeout on one activity clears its Timeout field, as before.
 
-Still open in C0: the `D.HH:MM:SS` input (polish, #1680; its multi-select *Deactivate* half was built by #1694 OR42). User properties are on every activity and container (#1673 parts 1–4); the container value's ƒx flyout is #1814.
+**Built (#1680, 2026-10-23):** the `D.HH:MM:SS` input, on the dock's Timeout and Settings' *Activity timeout*. Both take ADF's timespan or whole seconds and show the stored seconds back as a duration (`12:00:00`, `1.02:03:04`). The stored value is unchanged (`policy.timeoutSeconds`, `defaultActivityTimeoutSeconds`), so there is no schema, event or `CATALOG_VERSION` change.
+
+- **One parser**, `parseTimeoutDuration`, with `formatTimeoutDuration` as its inverse, through `DraftNumberField`'s new `format` (the shown text must parse back to the stored value, because a blur on untouched text is not parsed). Days are left off under a day, as .NET's `TimeSpan` "c" format does.
+- **Deliberate differences from .NET's `TimeSpan.Parse`, which ADF uses:** bare digits are seconds, not days, because the field always took seconds; a two-part `12:00` is refused rather than read as hours; hours must be 0–23 and minutes and seconds two digits; a fraction of a second is refused, because the value is whole seconds. The one-year write ceiling stays on the schema, not the parser.
+- **Named "Timeout (duration)" and "Activity timeout (duration)"**, with no suffix drawn in the box: the value carries its own units. The name keeps a qualifier so that no other field's name contains the General tab's (#1396's label rule; plain *Timeout* is inside *Query timeout (seconds)* and *Timeout per block (seconds)*).
+- **Deliberate split from the canvas badge**, which keeps the app's one elapsed-time format (`⏱ 5m 00s`, `formatElapsed`): the field shows what can be typed back into it.
+- **Not changed:** an Until's own *Timeout* (a container setting, still whole seconds) and Copy and Lookup's *Query timeout* (whole seconds, C1q-c). Both are timespans in ADF; widening them is #1816.
+
+C0 is complete. User properties are on every activity and container (#1673 parts 1–4); the container value's ƒx flyout is #1814.
 
 ---
 
