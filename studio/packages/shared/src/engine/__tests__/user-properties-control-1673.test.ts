@@ -214,7 +214,10 @@ describe('#1673 — an inactive activity records its literal user properties, an
     node(type, config, { state: 'inactive', userProperties: MIXED, ...over });
   const OFF: [string, Node][] = [
     ['an inactive If', off('if', { condition: '${true}' })],
-    ['an inactive Web', off(WEB_ACTIVITY_TYPE, { url: '/jobs', method: 'GET' }, { connectionId: 'c1' })],
+    [
+      'an inactive Web',
+      off(WEB_ACTIVITY_TYPE, { url: '/jobs', method: 'GET' }, { connectionId: 'c1' }),
+    ],
   ];
 
   it.each(OFF)('%s, on its command and on a restart’s re-emit', (_label, n) => {
@@ -246,10 +249,14 @@ describe('#1673 — an inactive activity records its literal user properties, an
       position: { x: 0, y: 0 },
       policy: { secureOutput: true },
     };
-    const reader = off('if', { condition: '${true}' }, {
-      id: 'r',
-      userProperties: [{ name: 'Leak', value: '${nodes.s.outputs.text}' }],
-    });
+    const reader = off(
+      'if',
+      { condition: '${true}' },
+      {
+        id: 'r',
+        userProperties: [{ name: 'Leak', value: '${nodes.s.outputs.text}' }],
+      },
+    );
     const eng = createEngine({
       nodes: [secret, reader],
       edges: [{ id: 's->r', from: 's', to: 'r', on: 'success' }],
@@ -278,13 +285,17 @@ describe('#1673 — an inactive activity records its literal user properties, an
   });
 
   it('inside a ForEach body, records each item’s literals and evaluates no `${item}`', () => {
-    const child = off('if', { condition: '${true}' }, {
-      id: 'c',
-      userProperties: [
-        { name: 'Kind', value: 'nightly' },
-        { name: 'Item', value: '${item}' },
-      ],
-    });
+    const child = off(
+      'if',
+      { condition: '${true}' },
+      {
+        id: 'c',
+        userProperties: [
+          { name: 'Kind', value: 'nightly' },
+          { name: 'Item', value: '${item}' },
+        ],
+      },
+    );
     const eng = createEngine({
       nodes: [child],
       edges: [],

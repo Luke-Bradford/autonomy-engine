@@ -250,13 +250,10 @@ describe('#1484 activity runs — one row per attempt', () => {
       { name: 'Kind', value: 'nightly' },
       { name: 'Run', value: '${run.runId}' },
     ];
-    const pvId = seedVersion(
-      db,
-      [
-        node('a', { state: 'inactive', userProperties: props }),
-        node('b', { state: 'inactive', onInactiveMarkAs: 'failure', userProperties: props }),
-      ],
-    );
+    const pvId = seedVersion(db, [
+      node('a', { state: 'inactive', userProperties: props }),
+      node('b', { state: 'inactive', onInactiveMarkAs: 'failure', userProperties: props }),
+    ]);
     const runId = await drive(db, pvId, stub());
     const want = [
       { name: 'Kind', value: 'nightly' },
