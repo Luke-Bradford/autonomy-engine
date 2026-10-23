@@ -239,6 +239,20 @@ function withGeneral<T extends Pick<Node, 'description' | 'state' | 'onInactiveM
   return next;
 }
 
+/**
+ * A node's or container's user properties set to `rows` (copied), or the key
+ * REMOVED when there are none, so clearing the last row leaves it as it was.
+ */
+function withUserProperties<T extends { userProperties?: UserProperty[] | undefined }>(
+  obj: T,
+  rows: readonly UserProperty[],
+): T {
+  const next = { ...obj };
+  if (rows.length > 0) next.userProperties = rows.map((r) => ({ ...r }));
+  else delete next.userProperties;
+  return next;
+}
+
 function retypeEdge(e: Edge, condition: EdgeCondition): Edge {
   let base: Omit<Edge, 'on' | 'branch'>;
   if (e.on === 'branch') {
@@ -1578,6 +1592,8 @@ export interface CanvasState {
    * burst in the description is one undo step; every other change is its own.
    */
   setContainerGeneral(id: string, patch: GeneralPatch): void;
+  /** #1673 — a container's user properties, exactly as `setNodeUserProperties`. */
+  setContainerUserProperties(id: string, rows: readonly UserProperty[], coalesceKey?: string): void;
   /**
    * U16 — the pipeline's typed contract. Each takes a WHOLE replacement row
    * rather than a field patch, for the same reason `createContainer` takes a
@@ -2598,15 +2614,21 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         if (JSON.stringify(node.userProperties ?? []) === JSON.stringify(rows)) return;
         edit(
           (s) => ({
-            nodes: s.nodes.map((n) => {
-              if (n.id !== id) return n;
-              const next = { ...n };
-              if (rows.length > 0) next.userProperties = rows.map((r) => ({ ...r }));
-              else delete next.userProperties;
-              return next;
-            }),
+            nodes: s.nodes.map((n) => (n.id === id ? withUserProperties(n, rows) : n)),
           }),
           coalesceKey === undefined ? undefined : `node:${id}:userProperties:${coalesceKey}`,
+        );
+      },
+
+      setContainerUserProperties(id, rows, coalesceKey) {
+        const c = get().containers.find((x) => x.id === id);
+        if (c === undefined) return;
+        if (JSON.stringify(c.userProperties ?? []) === JSON.stringify(rows)) return;
+        edit(
+          (s) => ({
+            containers: s.containers.map((x) => (x.id === id ? withUserProperties(x, rows) : x)),
+          }),
+          coalesceKey === undefined ? undefined : `container:${id}:userProperties:${coalesceKey}`,
         );
       },
 

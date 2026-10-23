@@ -2118,7 +2118,7 @@ export type RefSite =
  * (#864). A container field needs its own site because its scope is not any
  * node's: `exitWhen` reads the loop's own children, `items` the container's
  * OUTER upstream — and each reads the very `ScanScope` its validator builds
- * (`exitWhenScope` / `foreachItemsScope`). A node site may name one config
+ * (`exitWhenScope` / `containerEntryScope`). A node site may name one config
  * FIELD, for the one scope that differs per field: a `filter`'s `predicate`
  * binds `${item}` where its `items` does not (`scanFilterRefs`).
  *
@@ -2155,7 +2155,7 @@ export function availableRefs(
     const scope =
       site.field === 'exitWhen'
         ? exitWhenScope(c, declared, variables, globals, outputsById, secureOutputIds)
-        : foreachItemsScope(
+        : containerEntryScope(
             c,
             declared,
             variables,
@@ -3032,7 +3032,12 @@ export type ContainerConfigField = (typeof CONTAINER_CONFIG_FIELD_NAMES)[number]
  * write-through, outside the derived config form, so they are not in
  * `CONTAINER_CONFIG_FIELD_NAMES` and no kind refuses them.
  */
-export const CONTAINER_GENERAL_FIELD_NAMES = ['description', 'state', 'onInactiveMarkAs'] as const;
+export const CONTAINER_GENERAL_FIELD_NAMES = [
+  'description',
+  'state',
+  'onInactiveMarkAs',
+  'userProperties',
+] as const;
 
 /**
  * Which config fields are meaningful on a container of each kind.
@@ -3120,8 +3125,9 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
   const outputsById = outputsByIdOf(doc.nodes, doc.containers ?? []);
   const secureOutputIds = secureOutputIdsOf(doc.nodes, doc.containers ?? []);
   // #567 — a `foreach`'s `items` is validated against the container ENDPOINT's real
-  // OUTER dominance (see `validateForeachItems`). Built lazily: only a foreach with
-  // an `items` expression needs it, so a foreach-free doc pays nothing.
+  // OUTER dominance (see `validateForeachItems`), as is any container's user
+  // properties (#1673). Built lazily: only those need it, so a doc with neither
+  // pays nothing.
   let graphForItems: Graph | null = null;
   const itemsGraph = (): Graph => (graphForItems ??= computeGraph(doc));
 
@@ -3623,6 +3629,28 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
         errors,
         options.variableReads,
       );
+    }
+    // #1673 — a container's user properties resolve as it ENTERS, against its
+    // endpoint's OUTER scope: the one `items` is checked in (none of its
+    // children has run, and no `${item}` exists yet, so both are refused). Refs,
+    // types, secure-output reads and secret refs as an activity's (C0d), and
+    // their variable reads counted. Indexed by row, as an activity's are.
+    if (live && c.userProperties !== undefined && c.userProperties.length > 0) {
+      const scope = {
+        ...containerEntryScope(
+          c,
+          declared,
+          variables,
+          g,
+          outputsById,
+          secureOutputIds,
+          itemsGraph(),
+        ),
+        ...readsFor(options.variableReads, c.id),
+      };
+      for (const [i, prop] of c.userProperties.entries()) {
+        scan(`container.${c.id}.userProperties[${i}].value`, prop.value, scope, errors);
+      }
     }
   }
 
@@ -4618,7 +4646,7 @@ function validateForeachItems(
   if (c.items === undefined) return;
   const where = `container.${c.id}.items`;
   const scope = {
-    ...foreachItemsScope(c, declared, variables, g, outputsById, secureOutputIds, graph),
+    ...containerEntryScope(c, declared, variables, g, outputsById, secureOutputIds, graph),
     ...readsFor(reads, c.id),
   };
   // `itemInScope` defaults false → a `${item}` in `items` is refused for free.
@@ -4649,13 +4677,14 @@ function validateForeachItems(
 }
 
 /**
- * The scope a foreach's `items` is checked in — the container endpoint's real
- * OUTER dominance sets (#567). ONE derivation, read by the save gate
+ * The scope a container is checked in AS IT ENTERS — the container endpoint's
+ * real OUTER dominance sets (#567): a foreach's `items`, and any container's
+ * user properties (#1673). ONE derivation, read by the save gate
  * (`validateForeachItems`) and the expression flyout (`availableRefs`' container
  * site, #864). `soft` is node-only, so a container id has no soft entry (`?? ∅`)
  * — `items` has no default()-round semantics anyway.
  */
-function foreachItemsScope(
+function containerEntryScope(
   c: Container,
   declared: Map<string, Param>,
   variables: ReadonlyMap<string, VariableDef>,

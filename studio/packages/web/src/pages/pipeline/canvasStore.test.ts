@@ -5299,6 +5299,34 @@ describe('setNodeUserProperties (#1600 OR41 C0d)', () => {
   });
 });
 
+describe('setContainerUserProperties (#1673)', () => {
+  const setup = () => {
+    const store = createCanvasStore();
+    store.setState({ containers: [{ id: 'c', kind: 'stage', children: [] }] });
+    return store;
+  };
+  const box = (store: ReturnType<typeof createCanvasStore>) => store.getState().containers[0]!;
+
+  it('writes as an activity\u2019s: a typing burst is one undo step, and none removes the key', () => {
+    const store = setup();
+    store.getState().setContainerUserProperties('c', [{ name: '', value: '' }]);
+    store.getState().setContainerUserProperties('c', [{ name: 'B', value: '' }], '0:name');
+    store.getState().setContainerUserProperties('c', [{ name: 'Batch', value: '' }], '0:name');
+    expect(box(store).userProperties).toEqual([{ name: 'Batch', value: '' }]);
+    store.getState().undo();
+    expect(box(store).userProperties).toEqual([{ name: '', value: '' }]);
+    store.getState().setContainerUserProperties('c', []);
+    expect('userProperties' in box(store)).toBe(false);
+  });
+
+  it('is a no-op for an unknown container, and for an unchanged list', () => {
+    const store = setup();
+    store.getState().setContainerUserProperties('missing', [{ name: 'a', value: 'b' }]);
+    store.getState().setContainerUserProperties('c', []);
+    expect(store.getState().dirty).toBe(false);
+  });
+});
+
 describe('setNodesInactive / setNodeMarkAs (#1600 OR41 C0c, #1694 OR42)', () => {
   const setup = (extra: Partial<Node> = {}) => {
     const store = createCanvasStore();

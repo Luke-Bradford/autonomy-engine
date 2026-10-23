@@ -165,6 +165,10 @@ export const ActivityRunGroupSchema = z.object({
   itemCount: count,
   /** One per item or round that ran, in index order; empty for a Stage. */
   iterations: z.array(ActivityRunIterationGroupSchema),
+  /** #1673 — the user properties it resolved as it entered (literals only when
+   * inactive; a reused one's are the source run's), which the grid shows in the
+   * same columns as its rows'; `null` when it has none or never entered. */
+  userProperties: z.array(ResolvedUserPropertySchema).nullable(),
   /** Where it sits among `rows`: the index of the first row logged after it
    * started (or was skipped or reused). Its own rows all come later, and the
    * page shows them together under it, so a row that ran beside the container

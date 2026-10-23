@@ -21,6 +21,7 @@ import {
   PipelineSchema,
   PipelineVersionSchema,
   PositionSchema,
+  StrictContainerSchema,
   StrictNodeSchema,
 } from './pipeline.js';
 
@@ -1029,6 +1030,31 @@ describe("#1600 OR41 C0d — an activity's user properties", () => {
       `an activity can have at most ${MAX_USER_PROPERTIES} user properties`,
     );
     expect(NodeSchema.safeParse(many).success).toBe(true);
+  });
+
+  it('#1673 — bounds a container\u2019s exactly as an activity\u2019s on WRITE, and tolerates more on read', () => {
+    const c = { id: 'c', kind: 'stage', children: [] };
+    expect(
+      StrictContainerSchema.safeParse({ ...c, userProperties: props(MAX_USER_PROPERTIES) }).success,
+    ).toBe(true);
+    const many = { ...c, userProperties: props(MAX_USER_PROPERTIES + 1) };
+    expect(StrictContainerSchema.safeParse(many).error?.issues[0]?.path).toEqual([
+      'userProperties',
+    ]);
+    expect(ContainerSchema.safeParse(many).success).toBe(true);
+    const blank = StrictContainerSchema.safeParse({
+      ...c,
+      userProperties: [{ name: ' ', value: 'x' }],
+    });
+    expect(blank.error?.issues[0]?.message).toBe('a user property needs a name');
+    const dup = StrictContainerSchema.safeParse({
+      ...c,
+      userProperties: [
+        { name: 'A', value: '1' },
+        { name: 'A', value: '2' },
+      ],
+    });
+    expect(dup.success).toBe(false);
   });
 
   it('refuses an empty name, a duplicate name and over-long text on WRITE, naming the row', () => {

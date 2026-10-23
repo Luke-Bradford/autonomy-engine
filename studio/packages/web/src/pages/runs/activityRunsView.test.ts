@@ -76,6 +76,7 @@ const GROUP: ActivityRunGroup = {
       durationMs: 1,
     },
   ],
+  userProperties: null,
   position: 1,
 };
 

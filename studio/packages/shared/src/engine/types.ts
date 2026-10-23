@@ -447,6 +447,21 @@ export const TERMINAL_CONTAINER: ReadonlySet<ContainerRunStatus> = new Set<Conta
 /** #1600 C0e — the `reason` an inactive container marked Failed records. */
 export const INACTIVE_CONTAINER_REASON = 'inactive';
 
+/**
+ * #1600 OR41 C0d — one user property as a dispatch resolved it: `value` when
+ * its `${}` evaluated, `error` (and no value) when it did not. Never both, and
+ * never a manufactured value: a property that could not be resolved says so.
+ * `truncated` is present only when the stored text was cut at
+ * `USER_PROPERTY_VALUE_MAX_CHARS`. On a secure node both texts are the marker.
+ */
+export const ResolvedUserPropertySchema = z.object({
+  name: z.string(),
+  value: z.string().optional(),
+  error: z.string().optional(),
+  truncated: z.literal(true).optional(),
+});
+export type ResolvedUserProperty = z.infer<typeof ResolvedUserPropertySchema>;
+
 export const ContainerRunStateSchema = z.object({
   status: ContainerRunStatusSchema,
   round: z.number().int().nonnegative(),
@@ -472,6 +487,14 @@ export const ContainerRunStateSchema = z.object({
    * a loop with no `timeout`, and for stage/foreach.
    */
   timeoutDueAt: z.number().int().optional(),
+  /**
+   * #1673 — the container's user properties, resolved once as it entered (literals
+   * only for an inactive one), so the activity runs grid shows them on its group
+   * line. Pure state, like `inactive`: replay re-derives them from the pinned doc,
+   * so no event records them, and a rerun's copied container carries them on.
+   * Absent when the container has none, or never entered.
+   */
+  userProperties: z.array(ResolvedUserPropertySchema).optional(),
   /**
    * FOREACH only (#4 A4): the resolved `items` array, snapshotted at enter so the
    * per-item `${item}` binding and the `results` index are stable for the whole
@@ -1226,21 +1249,6 @@ export const DispatchInputSchema = z.object({
   truncated: z.literal(true).optional(),
 });
 export type DispatchInput = z.infer<typeof DispatchInputSchema>;
-
-/**
- * #1600 OR41 C0d — one user property as a dispatch resolved it: `value` when
- * its `${}` evaluated, `error` (and no value) when it did not. Never both, and
- * never a manufactured value: a property that could not be resolved says so.
- * `truncated` is present only when the stored text was cut at
- * `USER_PROPERTY_VALUE_MAX_CHARS`. On a secure node both texts are the marker.
- */
-export const ResolvedUserPropertySchema = z.object({
-  name: z.string(),
-  value: z.string().optional(),
-  error: z.string().optional(),
-  truncated: z.literal(true).optional(),
-});
-export type ResolvedUserProperty = z.infer<typeof ResolvedUserPropertySchema>;
 
 /**
  * #1673 — the user properties an attempt recorded, on whichever event is its

@@ -119,6 +119,8 @@ export interface SeedContainer {
   description?: string;
   state?: 'inactive';
   onInactiveMarkAs?: 'success' | 'failure' | 'skipped';
+  /** #1673 — the container's user properties. */
+  userProperties?: { name: string; value: string }[];
 }
 
 /**

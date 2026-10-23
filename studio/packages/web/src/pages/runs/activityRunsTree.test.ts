@@ -32,6 +32,7 @@ const group = (extra: Partial<ActivityRunGroup> = {}): ActivityRunGroup => ({
     finishedAt: null,
     durationMs: null,
   })),
+  userProperties: null,
   position: 1,
   ...extra,
 });

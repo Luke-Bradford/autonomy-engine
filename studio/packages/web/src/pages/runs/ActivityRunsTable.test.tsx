@@ -394,6 +394,7 @@ describe('#1484 M2 ActivityRunsTable — container groups', () => {
         durationMs: null,
       },
     ],
+    userProperties: null,
     position: 0,
   };
   const item = (index: number): ActivityRun => ({
@@ -445,6 +446,41 @@ describe('#1484 M2 ActivityRunsTable — container groups', () => {
     for (const row of screen.getAllByRole('row').slice(1)) {
       expect(within(row).getAllByRole('cell')).toHaveLength(width);
     }
+  });
+
+  it('#1673 — a group line shows its container\u2019s user properties, in columns only it may carry', () => {
+    const withProp = { ...item(0), userProperties: [{ name: 'File', value: 'a.csv' }] };
+    const group = {
+      ...GROUP,
+      userProperties: [
+        { name: 'Batch', value: 'nightly' },
+        { name: 'File', error: 'the activity is inactive' },
+      ],
+    };
+    render(
+      <MemoryRouter>
+        <ActivityRunsTable
+          rows={[withProp, item(1)]}
+          groups={[group]}
+          error={null}
+          runStatus="failure"
+          nameOf={() => null}
+          typeOf={() => null}
+          containerNameOf={() => null}
+        />
+      </MemoryRouter>,
+    );
+    const headers = screen.getAllByRole('columnheader').map((h) => h.textContent);
+    expect(headers.slice(ACTIVITY_RUN_COLUMNS.length)).toEqual(['File', 'Batch']);
+    const extra = (row: HTMLElement) =>
+      within(row)
+        .getAllByRole('cell')
+        .slice(ACTIVITY_RUN_COLUMNS.length)
+        .map((c) => c.textContent);
+    const groupLine = document.querySelector<HTMLElement>('tr.activity-runs__group')!;
+    expect(extra(groupLine)).toEqual(['Not resolved: the activity is inactive', 'nightly']);
+    const iterationLine = document.querySelector<HTMLElement>('tr.activity-runs__iteration')!;
+    expect(extra(iterationLine)).toEqual(['', '']);
   });
 
   it('#1600 C0e — an inactive container is a group line saying inactive · <outcome>, over reused', () => {

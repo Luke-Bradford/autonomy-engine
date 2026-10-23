@@ -33,7 +33,8 @@ export function PickableInput({
   picker: FieldPicker | undefined;
   /** Completes the toggle's name, "Insert reference into …". */
   pickerName: string;
-  target: PickerTarget;
+  /** Where a picked reference goes; required for the flyout to show. */
+  target?: PickerTarget | undefined;
   /** Content after the input, still inside the label (a hint that names it). */
   after?: ReactNode;
   /**
@@ -68,7 +69,7 @@ export function PickableInput({
           {about.note}
         </AboutHelp>
       )}
-      {picker && (
+      {picker && target && (
         <ExpressionPicker
           fieldName={pickerName}
           {...fieldPickerProps({ insert, functionOptions }, picker, target, value, onChange)}

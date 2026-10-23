@@ -259,3 +259,56 @@ test('user properties: a rerun’s reused rows show the source’s, and an inact
 
   await expectQuiet(page, problems);
 });
+
+/**
+ * #1673 part 4 — a container's user properties: authored on its General tab,
+ * resolved once as it enters (in its outer scope), and shown on its group line
+ * in the activity runs grid, in a column only it carries.
+ */
+test('user properties: a ForEach takes them on its General tab and shows them on its group line', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const id = await openSeededCanvas(page, 'user properties on a ForEach', {
+    params: [{ name: 'label', type: 'string' as const, required: false, default: 'nightly' }],
+    nodes: [{ id: 'w', type: 'wait', config: { seconds: '${0}' }, position: { x: 40, y: 60 } }],
+    containers: [{ id: 'fe', kind: 'foreach', children: ['w'], items: '${createArray(1, 2)}' }],
+  });
+  await page.getByRole('button', { name: 'Configure ForEach 1' }).click();
+  await expect(properties(page).getByRole('tab', { name: 'General' })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  const section = properties(page).getByRole('group', { name: 'User properties', exact: true });
+  await section.getByRole('button', { name: 'Add user property' }).click();
+  await section.getByLabel('User property 1 name').fill('Batch');
+  await section.getByLabel('User property 1 value').fill('each ${params.label}');
+  await page.getByRole('button', { name: 'Save version' }).click();
+  await expect(page.locator('.notice')).toHaveText('Saved v2.');
+  const res = await page.request.get(`/api/pipelines/${encodeURIComponent(id)}/versions`);
+  const items = (await res.json()) as {
+    id: string;
+    version: number;
+    containers: Record<string, unknown>[];
+  }[];
+  const latest = items.reduce((a, b) => (a.version > b.version ? a : b));
+  expect(latest.containers[0]!.userProperties).toEqual([
+    { name: 'Batch', value: 'each ${params.label}' },
+  ]);
+
+  const runId = await fireAndSettle(page, latest.id, 'user properties on a ForEach');
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+  await fluentRootReady(page);
+  const headers = activityRuns(page).locator('thead th');
+  await expect(headers.filter({ hasText: /^Batch$/ })).toHaveCount(1);
+  const texts = await headers.allTextContents();
+  const group = page.locator('tr.activity-runs__group[data-container-id="fe"]');
+  await expect(group.locator('td').nth(texts.indexOf('Batch'))).toHaveText('each nightly');
+  // Its body's rows carry none: the value is the container's alone.
+  await expect(
+    activityRowById(page, 'w').first().locator('td').nth(texts.indexOf('Batch')),
+  ).toHaveText('');
+
+  await expectQuiet(page, problems);
+});

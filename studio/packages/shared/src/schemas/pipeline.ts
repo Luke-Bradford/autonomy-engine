@@ -787,13 +787,11 @@ export const NodeSchema = z.object({
   }),
   /**
    * #1600 OR41 C0d — up to `MAX_USER_PROPERTIES` name/value pairs, each value a
-   * literal or a `${}` template resolved at dispatch and recorded on
-   * `node.dispatched`, so the monitor shows them as activity-runs columns.
-   * Only `execution` activities carry them today: `validateDoc` refuses them on
-   * a `control` activity and on a pipeline call, neither of which reaches the
-   * executor, so they would never be recorded. ABSENT, not `[]`, when there
-   * are none (the editor deletes the key), so a doc without them is
-   * byte-identical to a pre-C0d doc.
+   * literal or a `${}` template resolved when the activity starts and recorded on
+   * the first event its attempt appends (`node.dispatched` for an activity the
+   * executor runs, #1673 for the rest), so the monitor shows them as
+   * activity-runs columns. ABSENT, not `[]`, when there are none (the editor
+   * deletes the key), so a doc without them is byte-identical to a pre-C0d doc.
    *
    * Read-tolerant here; the bounds are on `StrictNodeSchema`.
    */
@@ -1049,10 +1047,11 @@ export const ContainerSchema = z.object({
     options: optionTitles(containerJoinSchema, { all: 'All', any: 'Any' }),
   }),
   /**
-   * #1600 OR41 C0e — the container's General fields, the same three an activity
-   * has (`Node.description`, `Node.state`, `Node.onInactiveMarkAs`) with the same
-   * meaning. They are not config: `CONTAINER_GENERAL_FIELD_NAMES` lists them, and
-   * the panel's General tab edits them outside the derived config form.
+   * #1600 OR41 C0e — the container's General fields, the same ones an activity
+   * has (`Node.description`, `Node.state`, `Node.onInactiveMarkAs`, and since
+   * #1673 `userProperties`, below) with the same meaning. They are not config:
+   * `CONTAINER_GENERAL_FIELD_NAMES` lists them, and the panel's General tab
+   * edits them outside the derived config form.
    *
    * `description` is free text, never evaluated, and absent rather than `''`.
    * Read-tolerant here; bounded by `StrictContainerSchema`.
@@ -1081,6 +1080,16 @@ export const ContainerSchema = z.object({
       skipped: 'Skipped',
     }),
   }),
+  /**
+   * #1673 — the container's user properties, `Node.userProperties`' twin (a
+   * General field too). Resolved once, when the container enters, in its OUTER
+   * scope (no `${item}`: a ForEach resolves them before any item exists), and
+   * held on its run state, so the activity runs grid shows them on the
+   * container's group line. An inactive container records literals only.
+   * ABSENT, not `[]`, when there are none. Read-tolerant here; bounded by
+   * `StrictContainerSchema`.
+   */
+  userProperties: z.array(UserPropertySchema).optional(),
 });
 export type Container = z.infer<typeof ContainerSchema>;
 
@@ -1095,6 +1104,7 @@ export const StrictContainerSchema = ContainerSchema.extend({
       message: `the description can be at most ${DESCRIPTION_MAX_CHARS} characters`,
     })
     .optional(),
+  userProperties: StrictUserPropertiesSchema.optional(),
 });
 
 /**

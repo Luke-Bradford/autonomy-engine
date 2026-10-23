@@ -1188,7 +1188,7 @@ export function PipelineCanvas({
         ...validateCanvas(nodes, edges, containers, params, variables, globals, advisories),
         ...policyIssues(nodes),
         ...descriptionIssues(nodes),
-        ...userPropertiesIssues(nodes),
+        ...userPropertiesIssues(nodes, containers),
       ].map(rewrite),
       warnings: advisories.map((raw) => readableIssue(raw, nodes, edges, containers)),
     };
@@ -2862,6 +2862,9 @@ function PropertyPanel({
         globals={globals}
         onApply={(next) => store.getState().updateContainer(container.id, next)}
         onGeneral={(patch) => store.getState().setContainerGeneral(container.id, patch)}
+        onUserProperties={(rows, coalesceKey) =>
+          store.getState().setContainerUserProperties(container.id, rows, coalesceKey)
+        }
         onCopy={() => {
           if (store.getState().copyContainer(container.id, pipelineId)) {
             onNotice(
