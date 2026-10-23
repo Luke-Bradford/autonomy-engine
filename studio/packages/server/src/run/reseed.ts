@@ -6,12 +6,12 @@ import {
   type VariableWrite,
 } from '@autonomy-studio/shared';
 import { createRun, findLiveRerunOf, getRun } from '../repo/runs.js';
-import { loadEngineEvents, terminalFactFromLog } from './events.js';
+import { loadEngineLog, terminalFactFromLog } from './events.js';
 import { buildEngine, type DriveDeps } from './driver.js';
 import { GlobalStartError, resolveRunGlobals } from './globals.js';
 import type { Db } from '../repo/types.js';
 import { foldOutOfBand, publishThenDrive } from './out-of-band.js';
-import { copiedUserPropertiesOf } from './activity-runs.js';
+import { copiedUserPropertiesOf, projectActivityRuns } from './activity-runs.js';
 
 /**
  * RS2 — the LIVE rerun-from-failed PRODUCER: start a NEW run `R2` that skips the
@@ -112,7 +112,8 @@ export function createReseedService(deps: DriveDeps): ReseedService {
       // terminality (#443) — never a re-fold. `success` is deliberately excluded:
       // rerun-from-failed resumes from a failure; a fully-successful run would copy
       // its entire graph and finish immediately (a simple rerun's job, F11).
-      const sourceEvents = loadEngineEvents(db, sourceRunId);
+      const sourceLog = loadEngineLog(db, sourceRunId);
+      const sourceEvents = sourceLog.map((entry) => entry.event);
       if (sourceEvents.length === 0) {
         throw new RerunNotEligibleError(sourceRunId, 'the run has no event log');
       }
@@ -168,9 +169,8 @@ export function createReseedService(deps: DriveDeps): ReseedService {
       // #1673 — the user properties R1 recorded for each copied node, so the
       // rerun's reused rows show what the work it reused ran with.
       const copiedUserProperties = copiedUserPropertiesOf(
-        sourceEvents,
+        projectActivityRuns(doc, engine, sourceLog).rows,
         frontier,
-        (id) => sourceState.nodes[id]?.currentAttemptId,
       );
       // #844 V5 (spec V-D7) — exactly the COPIED nodes' variable writes, in R1's
       // log order (R1's own carried writes first, for a rerun of a rerun).

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CATALOG_VERSION,
+  INACTIVE_USER_PROPERTY_UNRESOLVED,
   type Container,
   type Edge,
   type EngineEvent,
@@ -243,9 +244,12 @@ describe('#1484 activity runs — one row per attempt', () => {
     }
   });
 
-  it('#1673 — an inactive activity carries them from its placeholder run', async () => {
+  it('#1673 — an inactive activity carries its literal ones from its placeholder run', async () => {
     const { db } = freshDb();
-    const props = [{ name: 'Run', value: '${run.runId}' }];
+    const props = [
+      { name: 'Kind', value: 'nightly' },
+      { name: 'Run', value: '${run.runId}' },
+    ];
     const pvId = seedVersion(
       db,
       [
@@ -254,7 +258,10 @@ describe('#1484 activity runs — one row per attempt', () => {
       ],
     );
     const runId = await drive(db, pvId, stub());
-    const want = [{ name: 'Run', value: runId }];
+    const want = [
+      { name: 'Kind', value: 'nightly' },
+      { name: 'Run', error: INACTIVE_USER_PROPERTY_UNRESOLVED },
+    ];
     const inactive = loadEngineLog(db, runId).filter(({ event: e }) => e.type === 'node.inactive');
     expect(inactive).toHaveLength(2);
     for (const rows of [
@@ -1800,39 +1807,17 @@ describe('#1600 OR41 C7d — a Lookup’s count fills the Rows read column', () 
 });
 
 describe('#1673 — copiedUserPropertiesOf, the user properties a rerun copies', () => {
-  const ev = (attemptId: string, value?: string): EngineEvent => ({
-    type: 'node.dispatched',
-    runId: 'R1',
-    nodeId: attemptId.split('#')[0]!,
-    attemptId,
-    idempotent: true,
-    ...(value !== undefined ? { userProperties: [{ name: 'p', value }] } : {}),
+  const row = (nodeId: string, value: string | null) => ({
+    nodeId,
+    userProperties: value === null ? null : [{ name: 'p', value }],
   });
-  const p = (value: string) => [{ name: 'p', value }];
-
-  it('takes the copied attempt’s first record, not an earlier retry’s or a later event’s', () => {
-    const log: EngineEvent[] = [
-      ev('a#0', 'retry'),
-      ev('a#1', 'kept'),
-      ev('a#1', 'later'),
-      ev('b#0'),
-    ];
-    const last: Record<string, string> = { a: 'a#1', b: 'b#0' };
-    expect(copiedUserPropertiesOf(log, ['a', 'b'], (id) => last[id])).toEqual({ a: p('kept') });
-  });
-
-  it('carries the source’s own copy for a node it reused, and only for one in the frontier', () => {
-    const log: EngineEvent[] = [
-      {
-        type: 'run.reseeded',
-        runId: 'R1',
-        sourceRunId: 'R0',
-        frontier: ['a', 'x'],
-        copiedOutputs: {},
-        copiedContainers: {},
-        copiedUserProperties: { a: p('from R0'), x: p('not copied again') },
-      },
-    ];
-    expect(copiedUserPropertiesOf(log, ['a'], () => undefined)).toEqual({ a: p('from R0') });
+  it('takes each copied node’s last row, and leaves out a node with none or not copied', () => {
+    const rows = [
+      row('a', 'retry'),
+      row('a', 'kept'),
+      row('b', null),
+      row('c', 'not copied'),
+    ] as never as Parameters<typeof copiedUserPropertiesOf>[0];
+    expect(copiedUserPropertiesOf(rows, ['a', 'b'])).toEqual({ a: [{ name: 'p', value: 'kept' }] });
   });
 });

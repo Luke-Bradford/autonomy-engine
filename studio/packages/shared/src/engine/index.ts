@@ -67,3 +67,5 @@ export * from './validate-pipeline.js';
 // spawn seam (the reducer never sees a child's state), while its rule has to
 // stay readable beside the container projection it mirrors.
 export * from './child-outputs.js';
+// #1673 — the record an inactive activity's `${}` user property gets.
+export { INACTIVE_USER_PROPERTY_UNRESOLVED } from './user-properties.js';

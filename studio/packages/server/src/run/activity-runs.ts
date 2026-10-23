@@ -110,42 +110,6 @@ function attemptOf(e: EngineEvent): { nodeId: string; attemptId: string } | null
   }
 }
 
-/**
- * #1673 — what a rerun's reused rows show: for each node the reseed copies, the
- * user properties the source run recorded for the attempt whose success was
- * copied (`lastAttemptOf`), from that attempt's first record, as the grid takes
- * a row's. A node the source itself reused (a rerun of a rerun) has no attempt
- * there, so it carries the source's own copy. Nodes with none are left out.
- */
-export function copiedUserPropertiesOf(
-  sourceEvents: readonly EngineEvent[],
-  frontier: readonly string[],
-  lastAttemptOf: (nodeId: string) => string | undefined,
-): Record<string, ResolvedUserProperty[]> {
-  const recorded = new Map<string, ResolvedUserProperty[]>();
-  let carried: Record<string, ResolvedUserProperty[]> = {};
-  for (const e of sourceEvents) {
-    if (e.type === 'run.reseeded') carried = e.copiedUserProperties ?? {};
-    const ref = attemptOf(e);
-    if (ref === null || recorded.has(ref.attemptId)) continue;
-    if ('userProperties' in e && e.userProperties !== undefined) {
-      recorded.set(ref.attemptId, e.userProperties);
-    }
-  }
-  const out: Record<string, ResolvedUserProperty[]> = {};
-  for (const id of frontier) {
-    const attemptId = lastAttemptOf(id);
-    const props =
-      attemptId !== undefined
-        ? recorded.get(attemptId)
-        : Object.hasOwn(carried, id)
-          ? carried[id]
-          : undefined;
-    if (props !== undefined) out[id] = props;
-  }
-  return out;
-}
-
 /** The attempt an event SETTLES, and how, for when the state no longer says. */
 function resultOf(
   e: EngineEvent,
@@ -684,6 +648,27 @@ export function projectActivityRuns(
  * `reusedIds`: with no containers to expand, that would add each copied
  * container's own id, and a container is never a row.
  */
+/**
+ * #1673 — what a rerun's reused rows show: for each node the reseed copies, the
+ * user properties on the source run's own last row for it. That is the attempt
+ * whose success was copied (a Wait until's re-checks share one row), or, for a
+ * node the source itself reused, the copy its reused row carries. Nodes with
+ * none are left out.
+ */
+export function copiedUserPropertiesOf(
+  sourceRows: readonly ProjectedActivityRun[],
+  frontier: readonly string[],
+): Record<string, ResolvedUserProperty[]> {
+  const last = new Map<string, ResolvedUserProperty[] | null>();
+  for (const row of sourceRows) last.set(row.nodeId, row.userProperties);
+  return Object.fromEntries(
+    frontier.flatMap((id) => {
+      const props = last.get(id);
+      return props === undefined || props === null ? [] : [[id, props] as const];
+    }),
+  );
+}
+
 export function projectActivityRunsFromLog(
   log: readonly LoggedEngineEvent[],
 ): ProjectedActivityRuns {

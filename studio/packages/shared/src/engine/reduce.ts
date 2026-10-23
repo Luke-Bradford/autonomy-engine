@@ -26,7 +26,7 @@ import {
   VARIABLE_MAX_BYTES,
   terminalStatusOf,
 } from './types.js';
-import { resolveUserProperties } from './user-properties.js';
+import { literalOnly, resolveUserProperties } from './user-properties.js';
 import {
   FAIL_ACTIVITY_TYPE,
   FILTER_ACTIVITY_TYPE,
@@ -486,7 +486,7 @@ type EndpointOutcome = TerminalNodeStatus | null;
 
 /** #1673 — the commands that carry a node's resolved user properties for the
  * driver to record: every one an activity the engine evaluates, or a pipeline
- * call, is started with, and an inactive activity's placeholder run. */
+ * call, is started with. */
 type UserPropertiesCommand = Extract<
   EngineCommand,
   {
@@ -497,8 +497,7 @@ type UserPropertiesCommand = Extract<
       | 'succeedControl'
       | 'scheduleWait'
       | 'scheduleExternalWait'
-      | 'startChild'
-      | 'inactivateNode';
+      | 'startChild';
   }
 >;
 
@@ -1957,8 +1956,9 @@ export function createEngine(doc: EngineDoc): Engine {
 
   /**
    * #1600 C0c — the one place an inactive node's command is built (dispatch and
-   * resume). #1673 — it carries the node's user properties, so the placeholder
-   * run records them as a run that did would.
+   * resume). #1673 — it carries the node's user properties for its placeholder
+   * run to record, literals only (`literalOnly`): an inactive node was never
+   * validated, so none of its `${}`s is evaluated.
    */
   function inactivateCommand(
     state: RunState,
@@ -1966,12 +1966,21 @@ export function createEngine(doc: EngineDoc): Engine {
     sid: string,
     attemptId: string,
   ): EngineCommand {
-    return withUserProperties(
-      { type: 'inactivateNode', nodeId: sid, attemptId, markAs: inactiveMarkAs(node) },
-      state,
-      node,
-      sid,
+    const command: Extract<EngineCommand, { type: 'inactivateNode' }> = {
+      type: 'inactivateNode',
+      nodeId: sid,
+      attemptId,
+      markAs: inactiveMarkAs(node),
+    };
+    const props = node.userProperties;
+    if (props === undefined || props.length === 0) return command;
+    const ctx = buildCtx(scopedEvalState(state, sid));
+    const item = foreachItemOf(state, sid);
+    const resolved = resolveUserProperties(
+      props,
+      literalOnly((template) => substitute(template, ctx, 0, item)),
     );
+    return { ...command, resolvedUserProperties: resolved };
   }
 
   /**
