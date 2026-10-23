@@ -23,6 +23,9 @@ export function bindNameProblem(name: string, others: readonly string[]): string
   // Keys are stored WITHOUT the colon, so `:wm` would silently never bind.
   if (name.startsWith(':')) return 'Leave out the leading :.';
   if (/\s/.test(name)) return 'A name has no spaces.';
+  // #1600 C10c — no `:name` holds one, and a Script direction's name with one
+  // is refused at save: a name is wiring, never evaluated.
+  if (name.includes('${')) return 'A name is literal: no ${} in it.';
   if (others.includes(name)) return `:${name} is already bound.`;
   return null;
 }

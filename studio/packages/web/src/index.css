@@ -5371,6 +5371,32 @@ textarea[data-grow='edit'],
   gap: var(--space-2);
 }
 
+/* #1600 OR41 C10c — a Script's blocks: each block's head (its number, Type and
+   moves) on one line, then its SQL and its parameters, a rule between blocks. */
+.script-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: var(--border-width) solid var(--border);
+}
+
+.script-block__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.script-block__title {
+  font: var(--type-body-strong);
+}
+
+.script-block__actions {
+  display: flex;
+  gap: var(--space-1);
+  margin-left: auto;
+}
+
 /* #1694 OR42 item 8 — an override table's row header is the setting's name,
    read like the cell beside it rather than as a column heading, and level with
    its box: the value cell also holds the box's `${}` / `ƒx` toggles, so a
