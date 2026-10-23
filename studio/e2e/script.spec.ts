@@ -99,9 +99,19 @@ test.describe('#1600 C10a — Script on SQLite', () => {
       const box = (await firstSql.boundingBox())!;
       expect(box.y + box.height).toBeLessThanOrEqual(900);
 
+      // C10c — the block's parameters are a Name · Value · Direction table, not
+      // a JSON cell, and the statement's :name is already bound.
+      await expect(pane.getByRole('textbox', { name: /JSON/ })).toHaveCount(0);
+      await expect(
+        pane.getByRole('textbox', { name: 'Script blocks row 1 parameter 1 name', exact: true }),
+      ).toHaveValue('inc');
+      await expect(pane.getByRole('status').filter({ hasText: 'Every :name is bound' })).toHaveCount(
+        1,
+      );
       // Authored, not only seeded: the bind value becomes an expression.
-      const params = pane.getByLabel('Script blocks row 1 parameters — JSON', { exact: true });
-      await params.fill('{"inc": "${string(add(2, 3))}"}');
+      await pane
+        .getByRole('textbox', { name: 'Script blocks row 1 parameter 1 value', exact: true })
+        .fill('${string(add(2, 3))}');
       await pane.getByRole('button', { name: 'Apply config' }).click();
       await pane.getByRole('tab', { name: 'Settings', exact: true }).click();
       await pane.getByRole('checkbox', { name: 'Run as one transaction' }).check();
@@ -208,11 +218,17 @@ test.describe('#1600 C10b-1 — Script on PostgreSQL', () => {
       .getByRole('textbox', { name: 'Timeout per block (seconds)', exact: true })
       .fill('60');
 
-    // C10b-2a — Out is authored beside Parameters, in the block's own row.
+    // C10b-2a, C10c — Out is authored in the block's parameter table: Import
+    // adds the CALL's unbound :total, and its Direction is set to Out.
     await pane.getByRole('tab', { name: 'Script', exact: true }).click();
+    await expect(pane.getByRole('status').filter({ hasText: 'Not bound: :total' })).toHaveCount(1);
+    await pane.getByRole('button', { name: 'Import from statement' }).click();
+    await expect(
+      pane.getByRole('textbox', { name: 'Script blocks row 1 parameter 2 name', exact: true }),
+    ).toHaveValue('total');
     await pane
-      .getByLabel('Script blocks row 1 parameter directions — JSON', { exact: true })
-      .fill('{"total": "out"}');
+      .getByRole('combobox', { name: 'Script blocks row 1 parameter 2 direction', exact: true })
+      .selectOption('out');
     await pane.getByRole('button', { name: 'Apply config' }).click();
 
     // A Non-query block on a connection that does not allow writes is a warning,
@@ -241,7 +257,8 @@ test.describe('#1600 C10b-1 — Script on PostgreSQL', () => {
         blocks: [
           {
             sql: 'CALL etl.tally(:n, :total)',
-            parameters: { n: '1' },
+            // Import writes a blank value, which an Out never sends.
+            parameters: { n: '1', total: '' },
             parameterDirections: { total: 'out' },
           },
         ],
