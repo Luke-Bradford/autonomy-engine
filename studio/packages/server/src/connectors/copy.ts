@@ -359,7 +359,7 @@ export function verifyAfterCopyFailure(counters: CopyCounters, rowsWritten: numb
  * rolled back — so re-classifying here would second-guess the only code with
  * the evidence.
  */
-function copyFailure(err: unknown): ActivityEvent {
+export function copyFailure(err: unknown): ActivityEvent {
   const mapping =
     err instanceof CopyMappingError
       ? err
@@ -371,7 +371,9 @@ function copyFailure(err: unknown): ActivityEvent {
   }
   if (err instanceof DatasetIoError) {
     const partial = err.partialWritePossible ? ' (the sink may hold a partial write)' : '';
-    return failed(err.kind, `${err.message}${partial}`);
+    return failed(err.kind, `${err.message}${partial}`, {
+      partialWritePossible: err.partialWritePossible,
+    });
   }
   // Fail-safe: an unrecognised throw is a programming fault, never something to
   // blind-retry into an operator's store.

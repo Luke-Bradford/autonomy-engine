@@ -15,6 +15,7 @@ import {
 } from '@autonomy-studio/shared';
 import {
   INCREMENTAL_NEEDS_DATABASE,
+  copyFailure,
   runCopyActivity,
   storeCountAdvisory,
   verifyAfterCopyFailure,
@@ -523,6 +524,30 @@ describe('copy activity — a failure is never a silent partial (§10)', () => {
       events.indexOf(terminal(events)),
     );
     expect(terminal(events).type).toBe('failed');
+  });
+});
+
+// #1804 — the activity timeout turns a `cancelled` into a retryable timeout, so
+// the terminal has to carry the sink's "rows may have landed" fact for the
+// executor to keep the copy unretried.
+describe('copyFailure — a possible partial write reaches the terminal (#1804)', () => {
+  it('marks a cancel whose sink may hold rows', () => {
+    expect(
+      copyFailure(new DatasetIoError('cancelled', 'copy aborted', { partialWritePossible: true })),
+    ).toEqual({
+      type: 'failed',
+      kind: 'cancelled',
+      error: 'copy aborted (the sink may hold a partial write)',
+      partialWritePossible: true,
+    });
+  });
+
+  it('leaves a cancel the sink rolled back unmarked', () => {
+    expect(copyFailure(new DatasetIoError('cancelled', 'copy aborted'))).toEqual({
+      type: 'failed',
+      kind: 'cancelled',
+      error: 'copy aborted',
+    });
   });
 });
 

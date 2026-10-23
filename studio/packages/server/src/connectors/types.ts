@@ -384,6 +384,16 @@ export type ActivityEvent =
        * is worse than the gap.
        */
       spendFact?: LlmUsage;
+      /**
+       * #1804 — work this attempt did may already be in the store, so a retry
+       * would repeat it (a Script block run outside a transaction, a Copy sink
+       * that could not prove its rollback). The adapter's `kind` already refuses
+       * a retry, except a `cancelled`, which is kept so a run Cancel still ends
+       * cancelled. The executor reads this when the activity timeout owns the
+       * abort, and ends the attempt as a PERMANENT timeout instead of the
+       * transient one D4 would retry. Set only when true.
+       */
+      partialWritePossible?: true;
     };
 
 export interface ConnectorAdapter {

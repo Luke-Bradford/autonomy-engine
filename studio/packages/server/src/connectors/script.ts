@@ -327,7 +327,8 @@ export function* scriptMessagesOnFailure(messages: MessageCapture): Generator<Ac
 /**
  * A failure after blocks outside a transaction may have changed the store, on
  * either store. A retry would run them again, so it is refused: `permanent`, or
- * `cancelled` for a cancel. `applied` says how many and how sure.
+ * `cancelled` for a cancel. `applied` says how many and how sure. Both carry
+ * `partialWritePossible`, so an activity timeout keeps the refusal (#1804).
  */
 export function notRetried(
   failure: DatasetIoError | LookupValueError,
@@ -342,6 +343,7 @@ export function notRetried(
   return new DatasetIoError(
     kind,
     `${message} — ${applied}, so this is not retried. Turn on Run as one transaction to make the script all or nothing`,
+    { partialWritePossible: true },
   );
 }
 
@@ -353,7 +355,8 @@ export function scriptFailure(err: unknown): ActivityEvent {
   if (err instanceof LookupValueError) {
     return failed('permanent', `a Script result set cannot hold a value — ${err.message}`);
   }
-  if (err instanceof DatasetIoError) return failed(err.kind, err.message);
+  if (err instanceof DatasetIoError)
+    return failed(err.kind, err.message, { partialWritePossible: err.partialWritePossible });
   // Fail-safe: an unrecognised throw is a programming fault, never something to
   // blind-retry against an operator's store.
   return failed('permanent', err instanceof Error ? err.message : String(err));

@@ -711,7 +711,8 @@ export const FAILURE_CODES = {
   /**
    * #1 D4/F3 (#1600 C0a): the POLICY timeout — `policy.timeoutSeconds` expired
    * and the executor ended the attempt as `node.failed{kind:'transient',
-   * code:'timeout'}` (`server/src/run/timeout.ts`). NOT an adapter's own
+   * code:'timeout'}` (`server/src/run/timeout.ts`), or `kind:'permanent'` where
+   * the adapter reported work a retry would repeat (#1804). NOT an adapter's own
    * internal timeout — that arrives as a plain connector `transient`.
    */
   TIMEOUT: 'timeout',

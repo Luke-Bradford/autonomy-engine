@@ -7,7 +7,8 @@ import { FAILURE_CODES, MAX_TIMER_DELAY_MS, type EngineEvent } from '@autonomy-s
  * the attempt's controller with `ACTIVITY_TIMEOUT_REASON` — the same per-attempt
  * controller CX2's cancel aborts — and the attempt ends with
  * `activityTimeoutFailure`, which D4's retry policy then handles like any other
- * transient failure.
+ * transient failure — unless the adapter said work may already be applied, when
+ * it is permanent (#1804).
  *
  * In process, not a durable alarm. A `dispatched` attempt has a live pump, so an
  * out-of-band append behind it would race the pump's in-memory state; and after a
@@ -32,20 +33,29 @@ import { FAILURE_CODES, MAX_TIMER_DELAY_MS, type EngineEvent } from '@autonomy-s
  */
 export const ACTIVITY_TIMEOUT_REASON: unknown = Object.freeze({ activityTimedOut: true });
 
-/** D4's terminal for a timed-out attempt: transient, so retry applies uniformly. */
+/**
+ * D4's terminal for a timed-out attempt: transient, so retry applies uniformly.
+ *
+ * #1804 — except where the adapter reported that work may already be in the
+ * store (`partialWritePossible`): a retry would repeat it, so the timeout keeps
+ * the adapter's refusal. It is then `permanent`, still coded `timeout`, and its
+ * error carries the adapter's (`refusal`), which says what stays applied.
+ */
 export function activityTimeoutFailure(
   runId: string,
   nodeId: string,
   attemptId: string,
   timeoutSeconds: number,
+  refusal?: string,
 ): Extract<EngineEvent, { type: 'node.failed' }> {
+  const timedOut = `activity timed out after ${timeoutSeconds}s`;
   return {
     type: 'node.failed',
     runId,
     nodeId,
     attemptId,
-    error: `activity timed out after ${timeoutSeconds}s`,
-    kind: 'transient',
+    error: refusal === undefined ? timedOut : `${timedOut} — ${refusal}`,
+    kind: refusal === undefined ? 'transient' : 'permanent',
     code: FAILURE_CODES.TIMEOUT,
   };
 }

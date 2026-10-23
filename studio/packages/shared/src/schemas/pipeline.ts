@@ -312,7 +312,9 @@ export const NodePolicySchema = z.object({
   /**
    * Wall-clock budget for one attempt. F3 terminalizes an over-budget attempt
    * via `node.failed{kind:'transient', code:'timeout'}` so retry policy then
-   * applies uniformly and boot-recovery can tell timed-out from crashed.
+   * applies uniformly and boot-recovery can tell timed-out from crashed
+   * (`kind:'permanent'` where the adapter reports work may already be applied,
+   * #1804).
    *
    * Named `timeoutSeconds`, not the spec's bare `timeout`, so this object never
    * mixes units with the spec-verbatim `retryIntervalSeconds`.
@@ -329,7 +331,9 @@ export const NodePolicySchema = z.object({
    * (`server/src/run/timeout.ts`). It bounds ONE ATTEMPT, from the moment its
    * adapter starts, and each retry gets a fresh budget (ADF's per-attempt
    * timeout). Expiry aborts the attempt's signal and ends it
-   * `node.failed{kind:'transient', code:'timeout'}`, so retry applies.
+   * `node.failed{kind:'transient', code:'timeout'}`, so retry applies — or
+   * `kind:'permanent'` when the adapter reports that a retry would repeat work
+   * already in the store (`partialWritePossible`, #1804).
    * Enforcement is cooperative: an adapter that cannot stop mid-call (a
    * synchronous SQLite statement, one long Postgres batch) overruns it.
    * Execution activities only — `validateDoc` refuses it elsewhere.

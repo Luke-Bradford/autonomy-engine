@@ -1302,22 +1302,23 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // work completed) and a `permanent` failure (a real verdict, which a retry
     // would only repeat). Cancel and timeout cannot both claim an attempt: an
     // `AbortController` aborts once, so the first one owns `signal.reason`.
-    const timeoutTerminal =
-      timeoutSeconds === undefined
-        ? undefined
-        : activityTimeoutFailure(runId, nodeId, attemptId, timeoutSeconds);
     const cancelDeadline =
       timeoutSeconds === undefined
         ? undefined
         : (deps.armDeadline ?? armDeadline)(timeoutSeconds * 1000, () =>
             controller.abort(ACTIVITY_TIMEOUT_REASON),
           );
-    /** Emit the timeout terminal if the deadline aborted this attempt; true if it did. */
-    const endedByTimeout = (): boolean => {
-      if (timeoutTerminal === undefined || controller.signal.reason !== ACTIVITY_TIMEOUT_REASON) {
+    /**
+     * Emit the timeout terminal if the deadline aborted this attempt; true if it
+     * did. #1804 — `refusal` is the error of a failure marked
+     * `partialWritePossible`, and makes the timeout PERMANENT: a retry would
+     * repeat work already in the store.
+     */
+    const endedByTimeout = (refusal?: string): boolean => {
+      if (timeoutSeconds === undefined || controller.signal.reason !== ACTIVITY_TIMEOUT_REASON) {
         return false;
       }
-      emit(timeoutTerminal);
+      emit(activityTimeoutFailure(runId, nodeId, attemptId, timeoutSeconds, refusal));
       return true;
     };
     // #1600 OR41 C11c — a Web *Wait for callback* records its correlation row
@@ -1531,7 +1532,12 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           // reached, and L6 summed a run cost that silently omitted the exchange —
           // the same silent-loss shape #708 closed at the price-table door.
           if (ev.spendFact !== undefined) emit(meteredEvent(ev.spendFact));
-          if (ev.kind !== 'permanent' && endedByTimeout()) return;
+          if (
+            ev.kind !== 'permanent' &&
+            endedByTimeout(ev.partialWritePossible === true ? ev.error : undefined)
+          ) {
+            return;
+          }
           emit(
             nodeFailed(runId, nodeId, attemptId, {
               error: ev.error,

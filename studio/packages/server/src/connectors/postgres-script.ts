@@ -372,7 +372,8 @@ export async function executePostgresScript(args: {
         }
         // #1800 — our own CancelRequest, checked before any other reading of
         // the failure: `cancelled` survives `notRetried`, where a transient
-        // 57014 would turn permanent and hide an activity timeout.
+        // 57014 would turn permanent and hide an activity timeout. With blocks
+        // applied, `notRetried` marks it, so that timeout is permanent (#1804).
         if (signal.aborted && sqlStateOf(err) === QUERY_CANCELED) {
           throw new DatasetIoError('cancelled', SCRIPT_ABORTED);
         }

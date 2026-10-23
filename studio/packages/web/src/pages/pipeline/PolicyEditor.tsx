@@ -104,7 +104,7 @@ export function PolicyEditor({
               stored={policy?.timeoutSeconds}
               parse={parseTimeoutSeconds}
               placeholder="none"
-              about="Longest one attempt may run. On expiry the attempt is stopped and fails as a timeout, which Retries can retry. A new activity starts with the workspace default from Settings. Blank sets no timeout."
+              about="Longest one attempt may run. On expiry the attempt is stopped and fails as a timeout, which Retries can retry, unless it may already have changed the store (a Script outside a transaction, a Copy whose rollback failed). A new activity starts with the workspace default from Settings. Blank sets no timeout."
               onCommit={(timeoutSeconds) => set({ timeoutSeconds })}
               errorLine={errors.node}
             />
@@ -118,7 +118,7 @@ export function PolicyEditor({
             stored={policy?.retry}
             parse={parseWholeNumber}
             placeholder="no retry"
-            about="Times a transient failure, including a timeout, is retried after the first attempt. 0 never retries; blank leaves it unset."
+            about="Times a transient failure, including a timeout, is retried after the first attempt. Work that may already have changed the store is never retried. 0 never retries; blank leaves it unset."
             onCommit={(retry) => set({ retry })}
             errorLine={errors.node}
           />
