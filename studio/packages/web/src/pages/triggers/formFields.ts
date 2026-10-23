@@ -93,9 +93,10 @@ export function parseTimeoutDuration(raw: string): WholeNumberParse {
   } else {
     const parts = DURATION.exec(trimmed);
     if (parts === null) return refused;
-    const [days, hours, minutes, secs] = [parts[1] ?? '0', parts[2], parts[3], parts[4]].map(
-      Number,
-    );
+    const days = Number(parts[1] ?? '0');
+    const hours = Number(parts[2]);
+    const minutes = Number(parts[3]);
+    const secs = Number(parts[4]);
     if (hours > 23 || minutes > 59 || secs > 59) return refused;
     seconds = days * DAY + hours * 3_600 + minutes * 60 + secs;
   }
