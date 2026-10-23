@@ -48,8 +48,9 @@ const PARAM_COLUMNS = bindColumns(false, [
   { key: 'direction', header: 'Direction', width: 'short' },
 ]);
 
-const PARAMETERS_ABOUT =
-  'A value for each :name in the SQL, keyed without the colon; a value may be ${...}. ' +
+const BLOCK_ABOUT =
+  'Each block is one statement, literal: ${} is not evaluated in the SQL. ' +
+  'Parameters give a value for each :name in the SQL, keyed without the colon; a value may be ${...}. ' +
   'Out and In-out are read back by column name from the row a CALL returns, into outputParameters ' +
   '(PostgreSQL only); an Out value is not sent. Import from statement adds a row for each :name the SQL uses.';
 
@@ -105,11 +106,12 @@ export function ScriptBlocksEditor({
       <div className="object-list-label help-row">
         <span>{label}</span>
         {required && <RequiredMark />}
-        {help !== null && (
-          <AboutHelp name={label} noteId={noteId}>
-            {help}
-          </AboutHelp>
-        )}
+        {/* ONE `?` for the list, as the row table had: each block's SQL and
+            Parameters are explained here rather than by a `?` per block. */}
+        <AboutHelp name={label} noteId={noteId}>
+          {help !== null && <>{help} </>}
+          {BLOCK_ABOUT}
+        </AboutHelp>
       </div>
       <Toolbar align="start">
         <button type="button" disabled={full} onClick={() => onChange([...rows, {}])}>
@@ -221,10 +223,7 @@ function ScriptBlock({
         <LiteralSqlField
           title={sqlCell.label?.title ?? 'SQL'}
           inputLabel={rowCellName(field, index, sqlCell)}
-          about={{
-            name: sqlCell.label?.title ?? 'SQL',
-            note: `${sqlCell.label?.description ?? ''} Literal: \${} is not evaluated here.`.trim(),
-          }}
+          about={undefined}
           value={sql}
           onChange={(next) => onRow({ ...row, sql: next })}
         />
@@ -291,16 +290,11 @@ function BlockParameters({
   if (names !== shownNames) setShownNames(names);
   const used = dialect === undefined ? undefined : sqlBindNames(sql, dialect);
   const unbound = used === undefined ? [] : unboundBlockNames(params, used);
-  const labelId = useId();
-  const noteId = useId();
   const title = `${blockName} parameters`;
   return (
     <>
-      <div className="object-list-label help-row">
-        <span id={labelId}>Parameters</span>
-        <AboutHelp name="Parameters" noteId={noteId}>
-          {PARAMETERS_ABOUT}
-        </AboutHelp>
+      <div className="object-list-label">
+        <span>Parameters</span>
       </div>
       <RowList
         columns={PARAM_COLUMNS}
