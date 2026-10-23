@@ -64,6 +64,8 @@ export interface PostgresQueryResult {
   readonly rows: Record<string, unknown>[];
   readonly fields: readonly { readonly name: string }[];
   readonly rowCount?: number | null;
+  /** The command tag: a COMMIT in a failed transaction answers `ROLLBACK`. */
+  readonly command?: string;
 }
 
 /**
@@ -304,9 +306,10 @@ export function isTransientPostgresCode(code: string): boolean {
  *
  * Never on a WRITE. 57014 is the server's verdict that the statement was
  * cancelled; this timer only means the client stopped waiting, and it cancels
- * nothing. A `COMMIT` it abandons may still land, the sink's `ROLLBACK` then
- * succeeds against no transaction and reports nothing landed, and a `transient`
- * verdict would retry the copy from row 0 into rows that are already there.
+ * nothing. A `COMMIT` it abandons may still land, and a `transient` verdict would
+ * retry the copy from row 0 into rows that are already there. (The sink reports
+ * such a COMMIT as of unknown outcome, #1806: its `ROLLBACK` would succeed
+ * against no transaction and prove nothing.)
  */
 const PG_CLIENT_QUERY_TIMEOUT_MESSAGE = 'Query read timeout';
 
@@ -322,6 +325,41 @@ export function isPostgresStatementTimeout(err: unknown): boolean {
   const code = (err as { code?: unknown } | null)?.code;
   if (typeof code === 'string') return code === QUERY_CANCELED;
   return err instanceof Error && err.message === PG_CLIENT_QUERY_TIMEOUT_MESSAGE;
+}
+
+/**
+ * The server's SQLSTATE on a failure, or null when the failure is not the
+ * server's verdict (pg's client timeout, a socket error). Every SQLSTATE holds a
+ * digit; a socket code never does, and `EPIPE` is five letters.
+ */
+export function sqlStateOf(err: unknown): string | null {
+  const code = (err as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) && /[0-9]/.test(code) ? code : null;
+}
+
+/**
+ * #1806 — whether a failed COMMIT leaves its outcome unknown. Only a server
+ * ERROR proves nothing committed. pg's client timeout and a socket error carry
+ * no SQLSTATE, a FATAL that ends the session (class 08, 57P) can arrive after
+ * the commit record is already written, and `40003` (statement_completion_unknown,
+ * which a proxy or pooler may send) says so outright.
+ */
+export function commitOutcomeUnknown(err: unknown): boolean {
+  const code = sqlStateOf(err);
+  return (
+    code === null ||
+    code === STATEMENT_COMPLETION_UNKNOWN ||
+    code.startsWith('08') ||
+    code.startsWith('57P')
+  );
+}
+
+/** SQLSTATE `statement_completion_unknown`. */
+const STATEMENT_COMPLETION_UNKNOWN = '40003';
+
+/** The failure of a COMMIT whose outcome is unknown, and what may stay applied. */
+export function unknownCommitMessage(failure: string, mayStayApplied: string): string {
+  return `${failure} — the COMMIT's outcome is unknown, so ${mayStayApplied}`;
 }
 
 /** Where a CancelRequest goes, and how long it may take. */

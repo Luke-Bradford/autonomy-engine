@@ -20,11 +20,14 @@ import {
 import {
   QUERY_CANCELED,
   armPostgresCancel,
+  commitOutcomeUnknown,
   isPostgresStatementTimeout,
   openSession,
   postgresCancelTargetOf,
   readFailure,
+  sqlStateOf,
   statementTimeoutMsOf,
+  unknownCommitMessage,
   type PostgresCancelSender,
   type PostgresClient,
   type PostgresClientFactory,
@@ -211,16 +214,6 @@ const MAY_COMMIT_PARTWAY: ReadonlySet<string> = new Set(['CALL', 'DO']);
 /** SQLSTATE `read_only_sql_transaction`. */
 const READ_ONLY_SQL_TRANSACTION = '25006';
 
-/**
- * The server's SQLSTATE on a failure, or null when the failure is not the
- * server's verdict (pg's client timeout, a socket error). Every SQLSTATE holds a
- * digit; a socket code never does, and `EPIPE` is five letters.
- */
-function sqlStateOf(err: unknown): string | null {
-  const code = (err as { code?: unknown } | null)?.code;
-  return typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) && /[0-9]/.test(code) ? code : null;
-}
-
 interface PreparedBlock {
   readonly statement: PostgresStatement;
   readonly mayCommitPartway: boolean;
@@ -366,7 +359,7 @@ export async function executePostgresScript(args: {
           if (!inTransaction) applied += 1;
           throw err;
         }
-        if (!inTransaction && (sqlStateOf(err) === null || prepared.mayCommitPartway)) {
+        if (!inTransaction && (commitOutcomeUnknown(err) || prepared.mayCommitPartway)) {
           // The server may have committed it before the failure reached us.
           applied += 1;
         }
@@ -424,10 +417,13 @@ export async function executePostgresScript(args: {
       try {
         await client.query(end);
       } catch (err) {
-        if (!readOnly && sqlStateOf(err) === null) {
+        if (!readOnly && commitOutcomeUnknown(err)) {
           throw new DatasetIoError(
             'permanent',
-            `${readFailure(err, within('the script could not commit', err), secret, path).message} — the COMMIT's outcome is unknown, so the script may have been applied`,
+            unknownCommitMessage(
+              readFailure(err, within('the script could not commit', err), secret, path).message,
+              'the script may have been applied',
+            ),
           );
         }
         throw readFailure(err, within('the script could not commit', err), secret, path);
