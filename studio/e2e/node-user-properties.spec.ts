@@ -101,24 +101,32 @@ test('user properties: authored on the General tab, resolved at run time, shown 
 });
 
 /**
- * #1673 — an attempt refused BEFORE dispatch (its connection id resolves to no
- * connection) still shows its user properties: the row an operator most wants
- * them on, and the one that read blank before.
+ * #1673 — an attempt refused BEFORE dispatch (its connection is the wrong kind
+ * for the activity) still shows its user properties: the row an operator most
+ * wants them on, and the one that read blank before. The connection is named by
+ * a LITERAL id: a `${}` one is a dynamic reference that may resolve to any
+ * connection, so every later connection delete in this server would ask for
+ * the typed name.
  */
 test('user properties: an activity refused before dispatch still shows them in the activity runs grid', async ({
   page,
 }) => {
   const problems = collectPageProblems(page);
   await page.setViewportSize({ width: 1440, height: 900 });
+  const connectionId = await seedConnection(page, {
+    name: '#1673 wrong kind',
+    kind: 'http',
+    config: {},
+  });
   const { pipelineVersionId } = await seedVersion(page, 'user properties refused', {
-    params: [{ name: 'conn', type: 'string' as const, required: false, default: 'no-such-conn' }],
+    params: [{ name: 'label', type: 'string' as const, required: false, default: 'refused' }],
     nodes: [
       {
         id: 'ls',
         type: 'file_list',
-        connectionId: '${params.conn}',
+        connectionId,
         config: { path: '/tmp' },
-        userProperties: [{ name: 'Kind', value: 'nightly ${params.conn}' }],
+        userProperties: [{ name: 'Kind', value: 'nightly ${params.label}' }],
         position: { x: 0, y: 0 },
       },
     ],
@@ -134,7 +142,7 @@ test('user properties: an activity refused before dispatch still shows them in t
   const headers = activityRuns(page).locator('thead th');
   await expect(headers.filter({ hasText: /^Kind$/ })).toHaveCount(1);
   const texts = await headers.allTextContents();
-  await expect(row.locator('td').nth(texts.indexOf('Kind'))).toHaveText('nightly no-such-conn');
+  await expect(row.locator('td').nth(texts.indexOf('Kind'))).toHaveText('nightly refused');
 
   await expectQuiet(page, problems);
 });
