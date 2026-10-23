@@ -351,6 +351,51 @@ describe('#1669 — a copied inactive node stays inactive in the rerun', () => {
   });
 });
 
+describe('#1673 — a rerun carries the user properties of the work it reused', () => {
+  it('logs what R1 recorded for each copied node, and a rerun of the rerun carries it on', async () => {
+    const { db } = freshDb();
+    const props = [{ name: 'Run', value: '${run.runId}' }];
+    // a (props) → b (props) → c, b fails in R1 and again in R2.
+    const pvId = seedVersion(
+      db,
+      [{ ...node('a'), userProperties: props }, { ...node('b'), userProperties: props }, node('c')],
+      [edge('a', 'b'), edge('b', 'c')],
+    );
+    const failB = { nodes: { b: { outcome: 'failure' as const } } };
+    const r1 = await seedRun(db, pvId, failB);
+
+    const reseededOf = (runId: string) =>
+      loadEngineEvents(db, runId).find((e) => e.type === 'run.reseeded') as Extract<
+        EngineEvent,
+        { type: 'run.reseeded' }
+      >;
+    const first = await createReseedService(deps(db, failB)).rerunFromFailed(r1);
+    await first.drive;
+    // Copied, not re-resolved: `${run.runId}` reads R1's id. `b` was not copied.
+    expect(reseededOf(first.runId).copiedUserProperties).toEqual({
+      a: [{ name: 'Run', value: r1 }],
+    });
+
+    const second = await createReseedService(deps(db, {})).rerunFromFailed(first.runId);
+    await second.drive;
+    expect(getRun(db, second.runId)!.status).toBe('success');
+    // `a` never ran in R2, so R3 carries R2's copy of R1's record.
+    expect(reseededOf(second.runId).copiedUserProperties).toEqual({
+      a: [{ name: 'Run', value: r1 }],
+    });
+  });
+
+  it('omits the field when no copied node recorded any', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a'), node('b')], [edge('a', 'b')]);
+    const r1 = await seedRun(db, pvId, { nodes: { b: { outcome: 'failure' } } });
+    const { runId: r2, drive } = await createReseedService(deps(db, {})).rerunFromFailed(r1);
+    await drive;
+    const reseeded = loadEngineEvents(db, r2).find((e) => e.type === 'run.reseeded')!;
+    expect('copiedUserProperties' in reseeded).toBe(false);
+  });
+});
+
 describe('CX5 (#1320) D9 — a CANCELLED run is rerun-from-failed eligible', () => {
   it('resumes it: the strict-prefix frontier is copied, and the node the cancel aborted re-runs', async () => {
     const { db } = freshDb();

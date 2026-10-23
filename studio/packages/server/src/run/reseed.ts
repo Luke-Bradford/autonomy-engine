@@ -11,6 +11,7 @@ import { buildEngine, type DriveDeps } from './driver.js';
 import { GlobalStartError, resolveRunGlobals } from './globals.js';
 import type { Db } from '../repo/types.js';
 import { foldOutOfBand, publishThenDrive } from './out-of-band.js';
+import { copiedUserPropertiesOf } from './activity-runs.js';
 
 /**
  * RS2 — the LIVE rerun-from-failed PRODUCER: start a NEW run `R2` that skips the
@@ -164,6 +165,13 @@ export function createReseedService(deps: DriveDeps): ReseedService {
       // 3. The PURE frontier over R1's projection (strict successful prefix).
       const reseed = engine.reseedFrontier(sourceState);
       const { frontier, copiedOutputs, copiedContainers, childLinks, copiedInactive } = reseed;
+      // #1673 — the user properties R1 recorded for each copied node, so the
+      // rerun's reused rows show what the work it reused ran with.
+      const copiedUserProperties = copiedUserPropertiesOf(
+        sourceEvents,
+        frontier,
+        (id) => sourceState.nodes[id]?.currentAttemptId,
+      );
       // #844 V5 (spec V-D7) — exactly the COPIED nodes' variable writes, in R1's
       // log order (R1's own carried writes first, for a rerun of a rerun).
       const copiedVariableWrites = copiedVariableWritesOf(
@@ -228,6 +236,8 @@ export function createReseedService(deps: DriveDeps): ReseedService {
           copiedVariableWrites,
           // #1669 — likewise omitted when no copied node is inactive.
           ...(copiedInactive.length > 0 ? { copiedInactive } : {}),
+          // #1673 — likewise omitted when no copied node recorded any.
+          ...(Object.keys(copiedUserProperties).length > 0 ? { copiedUserProperties } : {}),
         };
 
         const { records: recs } = foldOutOfBand(

@@ -1112,7 +1112,8 @@ async function* withPreDispatchUserProperties(
  * driver appends its event (its branch, its write, its success or failure, its
  * park) from the command the reducer built, which carries the user properties
  * resolved for it. Record them there, so its activity-runs row shows them as a
- * dispatched attempt's would. Only on that command's own attempt. Redacted on a
+ * dispatched attempt's would; so does an inactive activity's placeholder run
+ * (`node.inactive`). Only on that command's own attempt. Redacted on a
  * secure node at append time, as every copy is (`redactSecureEvent`). The
  * events either seam stamps are the ones `RecordedUserPropertiesSchema` lists.
  */
@@ -1133,6 +1134,7 @@ function withRecordedUserProperties(
     case 'node.failed':
     case 'timer.waitScheduled':
     case 'externalWait.created':
+    case 'node.inactive':
       return event.attemptId === command.attemptId ? { ...event, userProperties: props } : event;
     default:
       return event;

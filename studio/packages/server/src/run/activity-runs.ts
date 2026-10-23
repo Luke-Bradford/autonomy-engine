@@ -12,6 +12,7 @@ import {
   type EngineEvent,
   type NodeRunStatus,
   type PipelineVersion,
+  type ResolvedUserProperty,
   type RunState,
   webCallbackOutcome,
 } from '@autonomy-studio/shared';
@@ -107,6 +108,42 @@ function attemptOf(e: EngineEvent): { nodeId: string; attemptId: string } | null
     default:
       return null;
   }
+}
+
+/**
+ * #1673 — what a rerun's reused rows show: for each node the reseed copies, the
+ * user properties the source run recorded for the attempt whose success was
+ * copied (`lastAttemptOf`), from that attempt's first record, as the grid takes
+ * a row's. A node the source itself reused (a rerun of a rerun) has no attempt
+ * there, so it carries the source's own copy. Nodes with none are left out.
+ */
+export function copiedUserPropertiesOf(
+  sourceEvents: readonly EngineEvent[],
+  frontier: readonly string[],
+  lastAttemptOf: (nodeId: string) => string | undefined,
+): Record<string, ResolvedUserProperty[]> {
+  const recorded = new Map<string, ResolvedUserProperty[]>();
+  let carried: Record<string, ResolvedUserProperty[]> = {};
+  for (const e of sourceEvents) {
+    if (e.type === 'run.reseeded') carried = e.copiedUserProperties ?? {};
+    const ref = attemptOf(e);
+    if (ref === null || recorded.has(ref.attemptId)) continue;
+    if ('userProperties' in e && e.userProperties !== undefined) {
+      recorded.set(ref.attemptId, e.userProperties);
+    }
+  }
+  const out: Record<string, ResolvedUserProperty[]> = {};
+  for (const id of frontier) {
+    const attemptId = lastAttemptOf(id);
+    const props =
+      attemptId !== undefined
+        ? recorded.get(attemptId)
+        : Object.hasOwn(carried, id)
+          ? carried[id]
+          : undefined;
+    if (props !== undefined) out[id] = props;
+  }
+  return out;
 }
 
 /** The attempt an event SETTLES, and how, for when the state no longer says. */
@@ -468,8 +505,11 @@ export function projectActivityRuns(
   };
 
   let state = engine.seedState();
+  /** #1673 — the last reseed's copied user properties, for the reused rows. */
+  let copiedUserProperties: Record<string, ResolvedUserProperty[]> = {};
   for (const { event: e, ts, payload } of log) {
     openedNow.clear();
+    if (e.type === 'run.reseeded') copiedUserProperties = e.copiedUserProperties ?? {};
     const before = state;
     const reduced = engine.reduce(before, e);
     state = reduced.state;
@@ -600,6 +640,9 @@ export function projectActivityRuns(
       reused: true,
       // #1669 — the fold carried a copied inactive node's flag from the reseed.
       inactive: state.nodes[n.id]?.inactive === true,
+      userProperties: Object.hasOwn(copiedUserProperties, n.id)
+        ? copiedUserProperties[n.id]!
+        : null,
     }));
   // The carried rows lead, so every group made while stepping moves down past
   // them; a reused group leads with them.
@@ -649,6 +692,7 @@ export function projectActivityRunsFromLog(
   const open = new Set<ProjectedActivityRun>();
   let frontier: readonly string[] = [];
   let copiedInactive: ReadonlySet<string> = new Set();
+  let copiedUserProperties: Record<string, ResolvedUserProperty[]> = {};
   /** #1600 C8d — a Wait until's row, by node, awaiting its next check's attempt. */
   const rechecks = new Map<string, ProjectedActivityRun>();
   for (const { event: e, ts, payload } of log) {
@@ -657,6 +701,7 @@ export function projectActivityRunsFromLog(
       // Trusted as logged, like `frontier`: this path has no doc to apply the
       // reducer's "inactive in the pinned version" guard against (#1669).
       copiedInactive = new Set(e.copiedInactive);
+      copiedUserProperties = e.copiedUserProperties ?? {};
     }
     if (e.type === 'node.recheckDue') {
       const row = byAttempt.get(e.previousAttemptId);
@@ -702,6 +747,7 @@ export function projectActivityRunsFromLog(
     ...emptyRow(`reused:${id}`, id, 'success', null),
     reused: true,
     inactive: copiedInactive.has(id),
+    userProperties: Object.hasOwn(copiedUserProperties, id) ? copiedUserProperties[id]! : null,
   }));
   return { rows: [...reusedRows, ...rows], groups: [] };
 }
