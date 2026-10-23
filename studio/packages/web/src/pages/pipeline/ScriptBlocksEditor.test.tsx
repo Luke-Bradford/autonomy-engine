@@ -111,10 +111,14 @@ describe('#1600 C10c — a Script’s blocks, each with a Name · Value · Direc
       ],
       'sqlite',
     );
-    expect(screen.getByText('SQLite has no Out parameters: the run refuses this direction.')).toBeTruthy();
+    expect(
+      screen.getByText('SQLite has no Out parameters: the run refuses this direction.'),
+    ).toBeTruthy();
     expect(screen.getByText('Not in the SQL, so it is not bound.')).toBeTruthy();
     expect(
-      screen.getByText('Not in the SQL: the run refuses an Out or In-out name the SQL never binds.'),
+      screen.getByText(
+        'Not in the SQL: the run refuses an Out or In-out name the SQL never binds.',
+      ),
     ).toBeTruthy();
   });
 

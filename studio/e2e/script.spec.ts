@@ -105,9 +105,9 @@ test.describe('#1600 C10a — Script on SQLite', () => {
       await expect(
         pane.getByRole('textbox', { name: 'Script blocks row 1 parameter 1 name', exact: true }),
       ).toHaveValue('inc');
-      await expect(pane.getByRole('status').filter({ hasText: 'Every :name is bound' })).toHaveCount(
-        1,
-      );
+      await expect(
+        pane.getByRole('status').filter({ hasText: 'Every :name is bound' }),
+      ).toHaveCount(1);
       // Authored, not only seeded: the bind value becomes an expression.
       await pane
         .getByRole('textbox', { name: 'Script blocks row 1 parameter 1 value', exact: true })

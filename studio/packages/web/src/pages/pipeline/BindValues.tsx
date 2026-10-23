@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import type { SqlParameterValue } from '@autonomy-studio/shared';
 import { LabelledControl } from '../../lib/LabelledControl';
+import { midSentence } from '../../lib/words';
 import { RequiredMark } from '../../lib/form/RequiredMark';
 import { AutoGrowTextarea } from '../../lib/form/AutoGrowTextarea';
 import { RemoveRowButton, RowActions, RowNotes } from '../../lib/form/RowTable';
@@ -79,7 +80,8 @@ export function LiteralSqlField({
               The wrapper is the toggle row a config field's ⤢ sits in. */}
           <div className="expression-picker">
             <ExpressionEditor
-              fieldName={inputLabel ?? title}
+              // A list's box is named mid-sentence there, as a row cell's is.
+              fieldName={inputLabel === undefined ? title : midSentence(inputLabel)}
               value={value}
               onChange={(next) => onChange(next, false)}
               singleLine={false}
