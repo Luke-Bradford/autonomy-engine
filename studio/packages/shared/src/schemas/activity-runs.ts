@@ -109,7 +109,9 @@ export const ActivityRunSchema = z.object({
   /** #1600 OR41 C0d — the user properties this attempt recorded, from the
    * first event of its that carries them (`RecordedUserPropertiesSchema` names
    * which, #1673), which the grid shows as columns; `null` for an attempt with
-   * none, and for a row a rerun reused. */
+   * none. A row a rerun reused shows the ones the source recorded for the work
+   * it copied (`run.reseeded.copiedUserProperties`), and `null` when it
+   * recorded none or the row is a copied container's child. */
   userProperties: z.array(ResolvedUserPropertySchema).nullable(),
 });
 export type ActivityRun = z.infer<typeof ActivityRunSchema>;

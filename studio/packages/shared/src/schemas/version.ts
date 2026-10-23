@@ -519,6 +519,9 @@
 // stored one exactly as authored, because nothing the run does depends on
 // them: only the grid's columns are lost, as for C0d. The event fields are additive
 // and optional, as part 1's.
+// NO BUMP for #1673 (part 3): an inactive activity's literal user properties
+// on `node.inactive`, and a rerun's copies on `run.reseeded.copiedUserProperties`.
+// Run-log fields only, additive and optional; the reducer reads neither.
 // BUMP 34→35 for #1600 OR41 C0e: `ContainerSchema.state` + `onInactiveMarkAs`
 // (and `description`), a container switched off. C0c's reason, for a box: a
 // pre-C0e build strips `state` and ENTERS the container for real, running its

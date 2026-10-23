@@ -14,8 +14,9 @@ import { interpolationMode } from './expr.js';
 import { toStr } from './functions.js';
 import type { ResolvedUserProperty } from './types.js';
 
-/** #1673 — what an inactive activity records for a value with a `${}`. */
-export const INACTIVE_USER_PROPERTY_UNRESOLVED = 'Not resolved: the activity is inactive';
+/** #1673 — the error an inactive activity records for a value with a `${}`
+ * (the grid shows it as `Not resolved: the activity is inactive`). */
+export const INACTIVE_USER_PROPERTY_UNRESOLVED = 'the activity is inactive';
 
 /**
  * #1673 — `evaluate` for an inactive activity. Save-time validation leaves an
