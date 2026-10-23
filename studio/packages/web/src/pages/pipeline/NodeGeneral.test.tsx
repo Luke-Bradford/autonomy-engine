@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { NodeSchema, fieldLabelOf, type Node } from '@autonomy-studio/shared';
 import { createCanvasStore } from './canvasStore';
 import { NodeGeneral } from './NodeGeneral';
@@ -95,13 +95,13 @@ describe('NodeGeneral — User properties (#1600 C0d)', () => {
     expect('userProperties' in stored()).toBe(false);
   });
 
-  it('is not offered on an activity the engine evaluates, which would never record them', () => {
-    mountAs('if');
-    expect(screen.queryByRole('button', { name: 'Add user property' })).toBeNull();
-  });
-
-  it('still shows ones such an activity already holds, so the refusal can be acted on', () => {
-    mountAs('if', { userProperties: [{ name: 'a', value: 'b' }] });
-    expect(screen.getByLabelText('User property 1 name')).toHaveValue('a');
+  it('is offered on an activity the engine evaluates and on a pipeline call (#1673)', () => {
+    const stored = mountAs('if');
+    fireEvent.click(add());
+    fireEvent.change(screen.getByLabelText('User property 1 name'), { target: { value: 'Why' } });
+    expect(stored().userProperties).toEqual([{ name: 'Why', value: '' }]);
+    cleanup();
+    mountAs('execute_pipeline', { call: { pipelineVersionId: 'pv', params: {} } });
+    expect(add()).toBeEnabled();
   });
 });

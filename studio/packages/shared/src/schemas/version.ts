@@ -512,6 +512,13 @@
 // failure's user properties. A run-log field, not a doc shape: additive and
 // optional, so an older build reading a newer log strips it, and the reducer
 // never reads it.
+// NO BUMP for #1673 (part 2): user properties on an activity the engine
+// evaluates and on a pipeline call. The save now takes them there, and the
+// events those append (`condition.evaluated`, `variable.set`, `call.started`,
+// …) record them. A pre-#1673 build refuses such a doc at save, and runs a
+// stored one exactly as authored, because nothing the run does depends on
+// them: only the grid's columns are lost, as for C0d. The event fields are additive
+// and optional, as part 1's.
 // BUMP 34→35 for #1600 OR41 C0e: `ContainerSchema.state` + `onInactiveMarkAs`
 // (and `description`), a container switched off. C0c's reason, for a box: a
 // pre-C0e build strips `state` and ENTERS the container for real, running its

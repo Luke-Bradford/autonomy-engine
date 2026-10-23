@@ -95,15 +95,13 @@ describe('#1600 C0d — user properties at save', () => {
     expect([...(reads.get('a') ?? [])]).toContain('v');
   });
 
-  it('refuses them on an activity the engine evaluates, which would never record them', () => {
-    expect(
-      errs(agent({ id: 'i', type: 'if', config: { condition: '${true}' }, ...PROPS })),
-    ).toContain(
-      "node 'i': userProperties are not supported on 'if' — only activities that run record them",
+  it('takes them on an activity the engine evaluates, which records them on its own event (#1673)', () => {
+    expect(errs(agent({ id: 'i', type: 'if', config: { condition: '${true}' }, ...PROPS }))).toBe(
+      '',
     );
   });
 
-  it('refuses them on a pipeline call', () => {
+  it('takes them on a pipeline call (#1673)', () => {
     expect(
       errs(
         agent({
@@ -114,7 +112,7 @@ describe('#1600 C0d — user properties at save', () => {
           ...PROPS,
         }),
       ),
-    ).toContain("node 'c': userProperties are not supported on a pipeline call");
+    ).toBe('');
   });
 
   it('skips an inactive node, as every per-node rule does', () => {

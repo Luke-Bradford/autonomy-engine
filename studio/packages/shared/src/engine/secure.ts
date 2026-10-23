@@ -134,6 +134,18 @@ function redactUserProperties(props: ResolvedUserProperty[]): ResolvedUserProper
  */
 export function redactSecureEvent(node: Node | undefined, event: EngineEvent): EngineEvent {
   if (node === undefined || !isSecureNode(node)) return event;
+  const redacted = redactSecureFields(node, event);
+  // #1600 C0d / #1673 — user properties, on whichever event records them (a
+  // dispatch, a failure before it, or an engine-evaluated activity's own
+  // event): EITHER flag, as for `node.dispatched`'s input, because a `${}` in
+  // one can echo the input.
+  return 'userProperties' in redacted && redacted.userProperties !== undefined
+    ? { ...redacted, userProperties: redactUserProperties(redacted.userProperties) }
+    : redacted;
+}
+
+/** `redactSecureEvent`'s per-event fields, but for the user properties. */
+function redactSecureFields(node: Node, event: EngineEvent): EngineEvent {
   const secureOut = hasSecureOutput(node);
   switch (event.type) {
     case 'node.succeeded':
@@ -176,14 +188,7 @@ export function redactSecureEvent(node: Node | undefined, event: EngineEvent): E
         ? { ...event, name: SECURE_REDACTED, value: SECURE_REDACTED }
         : event;
     case 'node.failed':
-      // #1673 — a failure before dispatch carries the user properties too.
-      return {
-        ...event,
-        error: SECURE_ERROR_WITHHELD,
-        ...(event.userProperties !== undefined
-          ? { userProperties: redactUserProperties(event.userProperties) }
-          : {}),
-      };
+      return { ...event, error: SECURE_ERROR_WITHHELD };
     // #1600 C8d — a Wait until's reason names the path, as a failure would.
     case 'node.notReady':
       return { ...event, reason: SECURE_ERROR_WITHHELD };
@@ -208,16 +213,10 @@ export function redactSecureEvent(node: Node | undefined, event: EngineEvent): E
       // `secureInput` alone would still leave it readable on a `secureOutput`
       // node through the other half. `chars` stays, as it does there. The
       // resolved parameters (`params`) are input too, and go the same way.
-      // #1600 C0d — user properties likewise: a `${}` in one can echo the input.
-      return event.input === undefined &&
-        event.params === undefined &&
-        event.userProperties === undefined
+      return event.input === undefined && event.params === undefined
         ? event
         : {
             ...event,
-            ...(event.userProperties !== undefined
-              ? { userProperties: redactUserProperties(event.userProperties) }
-              : {}),
             ...(event.input !== undefined
               ? { input: { text: SECURE_REDACTED, chars: event.input.chars } }
               : {}),
@@ -238,7 +237,9 @@ export function redactSecureEvent(node: Node | undefined, event: EngineEvent): E
   }
 }
 
-/** The node id an event is ABOUT, for the ones `redactSecureEvent` scrubs. */
+/** The node id an event is ABOUT, for the ones `redactSecureEvent` scrubs.
+ * #1673 — an If, Switch, variable write or call records user properties on an
+ * event left out here; none of them can be secure (`validateSecurePolicy`). */
 export function secureEventNodeId(event: EngineEvent): string | undefined {
   switch (event.type) {
     case 'node.dispatched':
@@ -253,6 +254,7 @@ export function secureEventNodeId(event: EngineEvent): string | undefined {
     case 'activity.captured':
     case 'activity.agentTelemetry':
     case 'activity.toolCalled':
+    case 'timer.waitScheduled': // #1673 — a Wait's user properties are on the event that parks it.
       return event.nodeId;
     // #844 V5 (spec V-D8) — listed EXPLICITLY as never secure rather than left to
     // the default: a `set`/`append` node cannot carry a secure flag

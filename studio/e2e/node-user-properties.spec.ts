@@ -146,3 +146,45 @@ test('user properties: an activity refused before dispatch still shows them in t
 
   await expectQuiet(page, problems);
 });
+
+/**
+ * #1673 part 2 — an activity the engine evaluates (an If here) never reaches
+ * the executor. The General tab offers it user properties all the same, and
+ * the run records them on the If's own event, so its row shows them too.
+ */
+test('user properties: an activity the engine evaluates takes them and shows them in the activity runs grid', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const gate = {
+    id: 'gate',
+    type: 'if',
+    config: { condition: '${equals(1, 1)}' },
+    position: { x: 0, y: 0 },
+  };
+  await openSeededCanvas(page, 'user properties on an If', { nodes: [gate] });
+  await nodeById(page, 'gate').click();
+  await properties(page).getByRole('tab', { name: 'General' }).click();
+  const section = properties(page).getByRole('group', { name: 'User properties', exact: true });
+  await expect(section.getByRole('button', { name: 'Add user property' })).toBeEnabled();
+
+  const { pipelineVersionId } = await seedVersion(page, 'user properties on an If run', {
+    params: [{ name: 'label', type: 'string' as const, required: false, default: 'nightly' }],
+    nodes: [{ ...gate, userProperties: [{ name: 'Why', value: 'gate ${params.label}' }] }],
+  });
+  const runId = await fireAndSettle(page, pipelineVersionId, 'user properties on an If run');
+  const run = await page.request.get(`/api/runs/${encodeURIComponent(runId)}`);
+  expect(((await run.json()) as { status: string }).status).toBe('success');
+
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+  await fluentRootReady(page);
+  const row = activityRowById(page, 'gate');
+  await expect(row).toHaveCount(1);
+  const headers = activityRuns(page).locator('thead th');
+  await expect(headers.filter({ hasText: /^Why$/ })).toHaveCount(1);
+  const texts = await headers.allTextContents();
+  await expect(row.locator('td').nth(texts.indexOf('Why'))).toHaveText('gate nightly');
+
+  await expectQuiet(page, problems);
+});

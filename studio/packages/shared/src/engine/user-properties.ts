@@ -1,6 +1,7 @@
 /**
  * #1600 OR41 C0d (catalogue spec §3; ADF "user properties") — resolving an
- * activity's user properties at dispatch.
+ * activity's user properties when it starts (at dispatch, or for an activity
+ * the engine evaluates or a pipeline call, as its command is built, #1673).
  *
  * A user property is monitoring metadata, so it must never change what a run
  * does. A `${}` in `config` that fails to evaluate fails the run
