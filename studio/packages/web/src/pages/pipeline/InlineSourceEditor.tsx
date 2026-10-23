@@ -11,20 +11,13 @@ import {
   type InlineDatasetKind,
   type Node,
   type SqlDialect,
-  type SqlParameterValue,
 } from '@autonomy-studio/shared';
 import { AboutHelp } from '../../lib/HelpDisclosure';
 import { LabelledControl } from '../../lib/LabelledControl';
 import { RequiredMark } from '../../lib/form/RequiredMark';
-import { AutoGrowTextarea } from '../../lib/form/AutoGrowTextarea';
-import {
-  RemoveRowButton,
-  RowActions,
-  RowList,
-  RowNotes,
-  type RowTableColumn,
-} from '../../lib/form/RowTable';
-import { EDIT_ROWS, type FieldPicker, type PickerTarget } from './ConfigFieldControl';
+import { RowList } from '../../lib/form/RowTable';
+import type { FieldPicker, PickerTarget } from './ConfigFieldControl';
+import { BindValueRow, ImportFromStatement, LiteralSqlField } from './BindValues';
 import {
   configFieldTitle,
   deriveConfigFields,
@@ -33,25 +26,18 @@ import {
   type FieldSize,
 } from './configForm';
 import type { createCanvasStore } from './canvasStore';
-import { ExpressionEditor } from './ExpressionEditor';
-import { PickableInput } from './PickableInput';
 import { ConnectionTables } from './ConnectionTables';
 import { SourcePreview } from './SourcePreview';
 import { DraftNumberField } from './DraftNumberField';
 import { parseTimeoutSeconds } from '../triggers/formFields';
 import {
-  bindNameProblem,
-  bindTypeOf,
-  bindValueFor,
-  bindValueText,
+  bindColumns,
   freshBindName,
-  isDynamicBindText,
   reconcileKeyOrder,
   renameKey,
   sqlDialectOf,
   statementBindNames,
   withImportedBindNames,
-  type BindType,
 } from './inlineSource';
 
 type Use = 'saved' | InlineDatasetKind;
@@ -62,17 +48,7 @@ const USE_LABELS: Record<Use, string> = {
   query: 'Query',
 };
 
-const PARAM_COLUMNS: readonly RowTableColumn[] = [
-  { key: 'name', header: 'Name', width: 'short' },
-  { key: 'type', header: 'Type', width: 'short' },
-  { key: 'value', header: 'Value', width: 'long' },
-];
-
-const BIND_TYPE_LABELS: Record<BindType, string> = {
-  text: 'Text',
-  number: 'Number',
-  null: 'Null',
-};
+const PARAM_COLUMNS = bindColumns(true);
 
 /** What a newly chosen Table or Query starts as: the fields to fill, nothing
  * carried. A new Query starts at ADF's two-hour query timeout (#1600 C1q-c),
@@ -328,8 +304,6 @@ function QueryFields({
   const bindLabelId = useId();
   const bindNoteId = useId();
   const sql = text(inline.config['sql']);
-  const setSql = (next: string) =>
-    write({ kind: 'query', config: { ...inline.config, sql: next } }, 'sql');
 
   const withParameters = (next: Record<string, unknown>): InlineDataset => {
     const config = { ...inline.config };
@@ -354,43 +328,14 @@ function QueryFields({
 
   return (
     <>
-      <LabelledControl
-        label={
-          <>
-            {sqlTitle}
-            <RequiredMark />
-          </>
-        }
+      <LiteralSqlField
+        title={sqlTitle}
         about={about(sqlField, 'Literal: ${} is not evaluated here.')}
-      >
-        {(id, describedBy) => (
-          <>
-            <AutoGrowTextarea
-              id={id}
-              aria-describedby={describedBy}
-              aria-required
-              restRows={1}
-              maxRows={EDIT_ROWS}
-              spellCheck={false}
-              value={sql}
-              onChange={(e) => setSql(e.target.value)}
-            />
-            {/* No picker: the statement is literal, so its editor offers no `${}`.
-                The wrapper is the toggle row a config field's ⤢ sits in. OK is
-                its own undo step, not merged into the typing before it. */}
-            <div className="expression-picker">
-              <ExpressionEditor
-                fieldName={sqlTitle}
-                value={sql}
-                onChange={(next) =>
-                  write({ kind: 'query', config: { ...inline.config, sql: next } })
-                }
-                singleLine={false}
-              />
-            </div>
-          </>
-        )}
-      </LabelledControl>
+        value={sql}
+        onChange={(next, coalesce) =>
+          write({ kind: 'query', config: { ...inline.config, sql: next } }, coalesce ? 'sql' : undefined)
+        }
+      />
       {/* The list's title and `?`, as a config field's row list draws them. */}
       <div className="object-list-label help-row">
         <span id={bindLabelId}>{bindTitle}</span>
@@ -409,38 +354,31 @@ function QueryFields({
         onAdd={() => write(withParameters({ ...parameters, [freshBindName(names)]: '' }))}
         actions={
           used !== undefined && (
-            <>
-              <button
-                type="button"
-                disabled={unbound.length === 0}
-                title="Add a row for each :name in the statement that has no value yet"
-                onClick={() => write(withParameters(withImportedBindNames(parameters, unbound)))}
-              >
-                Import from statement
-              </button>
-              {/* Said beside the button, not only in its hover: a disabled
-                  button gets no hover in every browser (`RowList`). */}
-              <span className="page-hint" role="status">
-                {unbound.length > 0
-                  ? `Not bound: ${unbound.map((n) => `:${n}`).join(', ')}`
-                  : used.length > 0
-                    ? 'Every :name is bound'
-                    : 'No :name in the statement'}
-              </span>
-            </>
+            <ImportFromStatement
+              used={used}
+              unbound={unbound}
+              onImport={() => write(withParameters(withImportedBindNames(parameters, unbound)))}
+            />
           )
         }
       >
         {names.map((name, i) => (
-          <ParameterRow
+          <BindValueRow
             // By position, so renaming a row does not remount it mid-typing.
             key={i}
-            index={i}
+            label={`Bind value ${i + 1}`}
             name={name}
             value={parameters[name]}
             others={names.filter((n) => n !== name)}
+            typed
             picker={picker}
-            unused={used !== undefined && !used.includes(name)}
+            target={bindTarget(name)}
+            advisory={
+              used !== undefined && !used.includes(name)
+                ? 'Not in the statement, so it is not bound.'
+                : null
+            }
+            columnCount={PARAM_COLUMNS.length}
             onRename={(to) => rename(name, to, i)}
             onValue={(v, coalesce) =>
               write(
@@ -475,72 +413,9 @@ function QueryFields({
   );
 }
 
-/**
- * One `:name`, its type and its value. The name box shows a local DRAFT: a name
- * that cannot be a key of the stored record (`bindNameProblem`) is held here
- * with its reason until it can be, and the stored row keeps its last good name.
- * The type and value are drafts too (`bindValueFor`): a Number whose text is not
- * a number yet is held with its reason, and the stored value waits.
- */
-function ParameterRow({
-  index,
-  name,
-  value,
-  others,
-  picker,
-  unused,
-  onRename,
-  onValue,
-  onRemove,
-}: {
-  index: number;
-  name: string;
-  value: unknown;
-  others: readonly string[];
-  picker: FieldPicker | undefined;
-  /** The statement does not use this name, so its value is never bound. */
-  unused: boolean;
-  onRename: (to: string) => void;
-  /** `coalesce` merges a keystroke into the typing before it; a type change is its own undo step. */
-  onValue: (value: SqlParameterValue, coalesce: boolean) => void;
-  onRemove: () => void;
-}) {
-  const [draft, setDraft] = useState(name);
-  const [synced, setSynced] = useState(name);
-  // The value box shows a DRAFT as the override rows do (`OverrideRow`): a
-  // stored number is `150` for the text `150.`, and rendering it back would
-  // snap the box while the author is still typing.
-  const [valueDraft, setValueDraft] = useState(() => bindValueText(value));
-  const [typeDraft, setTypeDraft] = useState<BindType>(() => bindTypeOf(value));
-  const [syncedValue, setSyncedValue] = useState(value);
-  const resync = () => {
-    setValueDraft(bindValueText(value));
-    setTypeDraft(bindTypeOf(value));
-  };
-  const own = bindValueFor(typeDraft, valueDraft);
-  const drafted = 'value' in own && own.value === value;
-  // The drafts follow the store only when it moves on its own (undo, a flyout
-  // insert, or a row removed above this one, as rows are kept by position).
-  if (syncedValue !== value) {
-    setSyncedValue(value);
-    if (!drafted) resync();
-  }
-  if (synced !== name) {
-    setSynced(name);
-    // A name this row's own rename stored is the draft already.
-    if (name !== draft) {
-      setDraft(name);
-      if (!drafted) resync();
-    }
-  }
-  // A stored name is judged too: an imported `:wm` says why it never binds.
-  const problem = bindNameProblem(draft, others);
-  const valueProblem = 'problem' in own ? own.problem : null;
-  const dynamic = typeDraft !== 'null' && isDynamicBindText(valueDraft);
-  const note =
-    problem ?? valueProblem ?? (unused ? 'Not in the statement, so it is not bound.' : null);
-  const label = `Bind value ${index + 1}`;
-  const target: PickerTarget = {
+/** Where the ⓕ flyout places a bind value: the inline source's `parameters`, by its stored name. */
+function bindTarget(name: string): PickerTarget {
+  return {
     place: (n, v) => {
       const source = n.inlineDatasets?.source;
       if (source === undefined) return n;
@@ -556,73 +431,4 @@ function ParameterRow({
     },
     baseline: 'stored',
   };
-  return (
-    <>
-      <tr>
-        <td>
-          <input
-            aria-label={`${label} name`}
-            aria-invalid={problem !== null || undefined}
-            spellCheck={false}
-            value={draft}
-            onChange={(e) => {
-              const to = e.target.value;
-              setDraft(to);
-              if (bindNameProblem(to, others) === null) onRename(to);
-            }}
-          />
-        </td>
-        <td>
-          <select
-            aria-label={`${label} type`}
-            data-size={'s' satisfies FieldSize}
-            value={dynamic ? 'expression' : typeDraft}
-            disabled={dynamic}
-            title={dynamic ? 'A ${} value keeps the type it resolves to' : undefined}
-            onChange={(e) => {
-              const t = e.target.value as BindType;
-              setTypeDraft(t);
-              const next = bindValueFor(t, valueDraft);
-              if (t === 'null') setValueDraft('');
-              if ('value' in next) onValue(next.value, false);
-            }}
-          >
-            {dynamic && <option value="expression">Expression</option>}
-            {(Object.keys(BIND_TYPE_LABELS) as BindType[]).map((t) => (
-              <option key={t} value={t}>
-                {BIND_TYPE_LABELS[t]}
-              </option>
-            ))}
-          </select>
-        </td>
-        <td>
-          {typeDraft === 'null' ? (
-            <input aria-label={`${label} value`} disabled value="" placeholder="null" />
-          ) : (
-            <PickableInput
-              value={valueDraft}
-              onChange={(t) => {
-                setValueDraft(t);
-                const next = bindValueFor(typeDraft, t);
-                if ('value' in next) onValue(next.value, true);
-              }}
-              picker={picker}
-              pickerName={`:${name}`}
-              target={target}
-            >
-              <span className="visually-hidden">{`${label} value`}</span>
-            </PickableInput>
-          )}
-        </td>
-        <RowActions>
-          <RemoveRowButton label={`Remove bind value ${index + 1}`} onRemove={onRemove} />
-        </RowActions>
-      </tr>
-      {note !== null && (
-        <RowNotes span={PARAM_COLUMNS.length + 1}>
-          <p className="contract-advisory">{note}</p>
-        </RowNotes>
-      )}
-    </>
-  );
 }

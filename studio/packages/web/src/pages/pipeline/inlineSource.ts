@@ -8,6 +8,7 @@ import {
   type SqlParameterValue,
 } from '@autonomy-studio/shared';
 
+import type { RowTableColumn } from '../../lib/form/RowTable';
 import { NUMERIC_TEXT } from './paramRules';
 
 /**
@@ -216,4 +217,17 @@ function parametersOf(inline: InlineDataset): Record<string, unknown> {
   return raw !== null && typeof raw === 'object' && !Array.isArray(raw)
     ? (raw as Record<string, unknown>)
     : {};
+}
+
+/** A bind-value table's columns: Name, then Type when the values are typed (C1q-c), Value, and any extra. */
+export function bindColumns(
+  typed: boolean,
+  extra: readonly RowTableColumn[] = [],
+): RowTableColumn[] {
+  return [
+    { key: 'name', header: 'Name', width: 'short' },
+    ...(typed ? [{ key: 'type', header: 'Type', width: 'short' } as const] : []),
+    { key: 'value', header: 'Value', width: 'long' },
+    ...extra,
+  ];
 }
