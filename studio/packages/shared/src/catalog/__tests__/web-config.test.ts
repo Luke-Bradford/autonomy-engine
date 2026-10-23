@@ -13,7 +13,6 @@ import {
   webWaitsOnly,
   WEB_NO_REQUEST_OUTPUTS,
   timeoutApplies,
-  userPropertiesApply,
   type Node,
 } from '../../index.js';
 import { activityNodeErrors } from '../../engine/activity-config-check.js';
@@ -258,11 +257,10 @@ describe('web config — no Request URL, review follow-ups (#1600 OR41 C11c-2)',
     expect(Object.keys(WEB_NO_REQUEST_OUTPUTS).sort()).toEqual(names.sort());
   });
 
-  it('takes no activity timeout or user properties: it is never dispatched', () => {
+  it('takes no activity timeout: it is never dispatched', () => {
     const node = (config: Record<string, unknown>) =>
       ({ type: WEB_ACTIVITY_TYPE, config }) as Pick<Node, 'type' | 'config'>;
     expect(timeoutApplies(node({ waitForCallback: true }))).toBe(false);
-    expect(userPropertiesApply(node({ waitForCallback: true }))).toBe(false);
     expect(timeoutApplies(node({ waitForCallback: true, url: '/x' }))).toBe(true);
     expect(timeoutApplies(node({ url: '/x' }))).toBe(true);
   });

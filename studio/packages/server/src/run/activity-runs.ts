@@ -255,7 +255,8 @@ function firstLoggedCount(
 }
 
 /** What an event says about its attempt's row: the user properties a dispatch
- * resolved (on its failure, when it never dispatched), the branch an If or
+ * resolved (on its failure, when it never dispatched), or an engine-evaluated
+ * activity or a call recorded on its own event (#1673), the branch an If or
  * Switch took, the child a call started, the counts a success logged, the error
  * a failure gave. The caller decides whether the row may still take it (rule 1). */
 function fillDetail(
@@ -264,10 +265,13 @@ function fillDetail(
   payload: unknown,
   rowsReadOutputs: readonly string[] = DEFAULT_ROWS_READ_OUTPUTS,
 ): void {
+  // #1673 — a row's first record is kept: a dispatched Web's later park and
+  // success carry none and must not blank it, and a restart that re-emits a
+  // call already started records a later resolution it must not replace.
+  if ('userProperties' in e && e.userProperties !== undefined) {
+    row.userProperties ??= e.userProperties;
+  }
   switch (e.type) {
-    case 'node.dispatched':
-      row.userProperties = e.userProperties ?? null;
-      return;
     case 'condition.evaluated':
     case 'switch.evaluated':
       row.branch = e.branch;
@@ -297,8 +301,6 @@ function fillDetail(
       }
       return;
     case 'node.failed':
-      // #1673 — present only when the attempt never dispatched.
-      if (e.userProperties !== undefined) row.userProperties = e.userProperties;
       row.error = {
         message: e.error,
         kind: statedKind(payload) ? e.kind : null,

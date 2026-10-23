@@ -6,6 +6,7 @@ import {
   type EngineEvent,
   type NewPipelineVersion,
   type Node,
+  SECURE_REDACTED,
 } from '@autonomy-studio/shared';
 import { freshDb } from '../../repo/__tests__/helpers.js';
 import { createPipeline } from '../../repo/pipelines.js';
@@ -27,7 +28,7 @@ import {
   type Executor,
 } from '../driver.js';
 import { createRunDrives } from '../drives.js';
-import { appendEngineEvent, loadEngineLog } from '../events.js';
+import { appendEngineEvent, loadEngineLog, type LoggedEngineEvent } from '../events.js';
 import { makeStubExecutor, type StubExecutorOptions } from './stub-executor.js';
 import { stubAlarms } from './stub-alarms.js';
 
@@ -77,6 +78,8 @@ function deps(db: Db, executor: Executor): DriveDeps {
     executor,
     alarms: stubAlarms(),
     drives: createRunDrives(),
+    // #1673 — a Webhook parks on a token; any stable string stands in here.
+    signExternalWaitToken: ({ runId, nodeId, attemptId }) => `${runId}:${nodeId}:${attemptId}`,
   };
 }
 
@@ -200,6 +203,150 @@ describe('#1484 activity runs — one row per attempt', () => {
     const [a] = project(db, pvId, runId);
     expect(a).toMatchObject({ status: 'failure', attemptId: 'a#0' });
     expect(a?.userProperties).toEqual([{ name: 'Run', value: runId }]);
+  });
+
+  it('#1673 — an activity the engine evaluates, and a pipeline call, carry them from their own event', async () => {
+    const { db } = freshDb();
+    const props = (name: string) => ({ userProperties: [{ name, value: '${run.runId}' }] });
+    const pvId = seedVersion(
+      db,
+      [
+        node('c', { type: 'if', config: { condition: '${equals(1, 1)}' }, ...props('If') }),
+        node('t', { type: 'fail', config: { message: 'stop' }, ...props('Fail') }),
+        node('w', { type: 'wait', config: { seconds: '${60}' }, ...props('Wait') }),
+        node('p', {
+          type: 'execute_pipeline',
+          config: {},
+          call: { pipelineVersionId: 'pv-child', params: {} },
+          ...props('Call'),
+        }),
+      ],
+      [branchEdge('c', 't', 'true')],
+    );
+    const runId = await drive(db, pvId, stub());
+    const log = loadEngineLog(db, runId).map((l) => l.event);
+    expect(log.some((e) => e.type === 'node.dispatched')).toBe(false);
+    const want = (name: string) => [{ name, value: runId }];
+    const byId = (rows: { activityId: string; userProperties: unknown }[], id: string) =>
+      rows.find((r) => r.activityId === id)?.userProperties;
+    const rows = project(db, pvId, runId);
+    const logRows = projectActivityRunsFromLog(loadEngineLog(db, runId)).rows;
+    for (const [id, name] of [
+      ['c', 'If'],
+      ['t', 'Fail'],
+      ['w', 'Wait'],
+      ['p', 'Call'],
+    ] as const) {
+      expect(byId(rows, id), id).toEqual(want(name));
+      expect(byId(logRows, id), `${id} (log basis)`).toEqual(want(name));
+    }
+  });
+
+  it('#1673 — a Switch, a Filter, a call that started and a Webhook carry them too', async () => {
+    const { db } = freshDb();
+    const props = (name: string) => ({ userProperties: [{ name, value: '${run.runId}' }] });
+    const pvId = seedVersion(db, [
+      node('s', { type: 'switch', config: { on: 'x', cases: ['x'] }, ...props('Switch') }),
+      node('f', {
+        type: 'filter',
+        config: { items: '${createArray(1)}', predicate: '${true}' },
+        ...props('Filter'),
+      }),
+      node('p', {
+        type: 'execute_pipeline',
+        config: {},
+        call: { pipelineVersionId: 'pv-child', params: {} },
+        ...props('Call'),
+      }),
+    ]);
+    // A child that is announced (`call.started`) before it returns.
+    const base = stub();
+    const announcing: Executor = {
+      ...base,
+      async *perform(command, runId) {
+        if (command.type === 'startChild') {
+          yield {
+            type: 'call.started',
+            runId,
+            callNodeId: command.callNodeId,
+            attemptId: command.attemptId,
+            childRunId: command.childRunId,
+          };
+        }
+        yield* base.perform(command, runId);
+      },
+    };
+    const runId = await drive(db, pvId, announcing);
+    const log = loadEngineLog(db, runId).map((l) => l.event);
+    const want = (name: string) => [{ name, value: runId }];
+    // The call's record is its `call.started`; its `call.returned` repeats nothing.
+    const callEvents = log.filter((e) => e.type === 'call.started' || e.type === 'call.returned');
+    expect(callEvents.map((e) => [e.type, 'userProperties' in e && e.userProperties])).toEqual([
+      ['call.started', want('Call')],
+      ['call.returned', false],
+    ]);
+    const rows = project(db, pvId, runId);
+    for (const [id, name] of [
+      ['s', 'Switch'],
+      ['f', 'Filter'],
+      ['p', 'Call'],
+    ] as const) {
+      expect(rows.find((r) => r.activityId === id)?.userProperties, id).toEqual(want(name));
+    }
+    // A Webhook parks the run on its own, so it gets a run of its own.
+    const hookPv = seedVersion(db, [
+      node('h', { type: 'webhook', config: { timeoutSeconds: '${600}' }, ...props('Webhook') }),
+    ]);
+    const hookRun = await drive(db, hookPv, stub());
+    expect(project(db, hookPv, hookRun)[0]?.userProperties).toEqual([
+      { name: 'Webhook', value: hookRun },
+    ]);
+  });
+
+  it('#1673 — withholds them on a secure Wait in the log itself', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [
+      node('w', {
+        type: 'wait',
+        config: { seconds: '${60}' },
+        policy: { secureInput: true },
+        userProperties: [{ name: 'Run', value: '${run.runId}' }],
+      }),
+    ]);
+    const runId = await drive(db, pvId, stub());
+    const parked = loadEngineLog(db, runId).find((l) => l.event.type === 'timer.waitScheduled');
+    expect(parked?.event.type === 'timer.waitScheduled' && parked.event.userProperties).toEqual([
+      { name: 'Run', value: SECURE_REDACTED },
+    ]);
+  });
+
+  it('#1673 — keeps the first record: a later event that records a re-resolution replaces nothing', () => {
+    const at = { runId: 'r1', callNodeId: 'p', attemptId: 'p#0', childRunId: 'c1' };
+    const log: LoggedEngineEvent[] = [
+      {
+        ts: 1,
+        payload: null,
+        event: { type: 'run.started', runId: 'r1', pipelineVersionId: 'pv', params: {} },
+      },
+      {
+        ts: 2,
+        payload: null,
+        event: { type: 'call.started', ...at, userProperties: [{ name: 'V', value: 'first' }] },
+      },
+      {
+        ts: 3,
+        payload: null,
+        event: {
+          type: 'call.returned',
+          ...at,
+          childOutcome: 'success',
+          outputs: {},
+          userProperties: [{ name: 'V', value: 'after a restart' }],
+        },
+      },
+    ];
+    const [row] = projectActivityRunsFromLog(log).rows;
+    expect(row?.userProperties).toEqual([{ name: 'V', value: 'first' }]);
   });
 
   it('records the branch an If took, and the branch it did not take as a skip', async () => {

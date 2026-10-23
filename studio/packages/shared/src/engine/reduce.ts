@@ -484,6 +484,23 @@ type Readiness = 'ready' | 'skipped' | 'pending';
  */
 type EndpointOutcome = TerminalNodeStatus | null;
 
+/** #1673 — the commands that carry a node's resolved user properties for the
+ * driver to record: every one an activity the engine evaluates, or a pipeline
+ * call, is started with. */
+type UserPropertiesCommand = Extract<
+  EngineCommand,
+  {
+    type:
+      | 'evaluateControl'
+      | 'failNode'
+      | 'writeVariable'
+      | 'succeedControl'
+      | 'scheduleWait'
+      | 'scheduleExternalWait'
+      | 'startChild';
+  }
+>;
+
 /**
  * The bundle `prepDispatch` resolves for every `dispatchNode` emission — ONE
  * named shape so the four emission sites' local annotations cannot drift from
@@ -635,12 +652,12 @@ export function createEngine(doc: EngineDoc): Engine {
     node: Node,
     sid: string,
     attemptId: string,
-  ): EngineCommand {
+  ): UserPropertiesCommand {
     const rows = node.config['returnValues'];
     if (!Array.isArray(rows) || rows.length === 0) {
       throw new SubstituteError(`'${node.type}' node returns no values`);
     }
-    const fail = (code: string, error: string): EngineCommand => ({
+    const fail = (code: string, error: string): UserPropertiesCommand => ({
       type: 'failNode',
       nodeId: sid,
       attemptId,
@@ -726,7 +743,7 @@ export function createEngine(doc: EngineDoc): Engine {
     node: Node,
     sid: string,
     attemptId: string,
-  ): EngineCommand {
+  ): UserPropertiesCommand {
     // #1600 C12a — a `set_variable`'s Operation, or `append_variable`'s append.
     const op = variableWriteOp(node);
     if (op === undefined) {
@@ -758,7 +775,7 @@ export function createEngine(doc: EngineDoc): Engine {
       foreachItemOf(state, sid),
     );
 
-    const fail = (code: string, error: string): EngineCommand => ({
+    const fail = (code: string, error: string): UserPropertiesCommand => ({
       type: 'failNode',
       nodeId: sid,
       attemptId,
@@ -1781,6 +1798,26 @@ export function createEngine(doc: EngineDoc): Engine {
   }
 
   /**
+   * #1673 — `command` carrying the node's user properties, resolved in its scope
+   * as `prepDispatch` resolves a dispatch's: for an activity the engine
+   * evaluates, and a pipeline call, whose events the driver appends. Unchanged
+   * when the node has none. Never throws, so it cannot change what runs.
+   */
+  function withUserProperties<C extends UserPropertiesCommand>(
+    command: C,
+    state: RunState,
+    node: Node,
+    sid: string,
+  ): C {
+    const resolved = resolveNodeUserProperties(
+      scopedEvalState(state, sid),
+      node,
+      foreachItemOf(state, sid),
+    );
+    return resolved === undefined ? command : { ...command, resolvedUserProperties: resolved };
+  }
+
+  /**
    * Build a `dispatchNode` command from a `prepDispatch` result. The SOLE
    * constructor of this command, so the four emission sites (`tryDispatchNode`,
    * `onRetryDue`, `onRetryRequested`, `run.resumed` re-emit) cannot drift on which
@@ -1977,6 +2014,12 @@ export function createEngine(doc: EngineDoc): Engine {
         changed: true,
       };
     }
+    // #1673 — an activity the engine evaluates, and a pipeline call, never reach
+    // the executor, so its command carries the node's user properties for the
+    // driver to record on the event it appends. A dispatch resolves its own
+    // (`prepDispatch`), over this same pre-step state.
+    const recorded = <C extends UserPropertiesCommand>(command: C): C =>
+      withUserProperties(command, state, node, sid);
     const controlEvent = controlBranchEvent(node.type);
     if (controlEvent !== undefined) {
       // #4 A1/A2 — a `control` `if`/`switch` is ENGINE-evaluated: no connector, no
@@ -2001,13 +2044,9 @@ export function createEngine(doc: EngineDoc): Engine {
         attempts: ns.attempts + 1,
         currentAttemptId: attemptId,
       });
-      commands.push({
-        type: 'evaluateControl',
-        nodeId: sid,
-        attemptId,
-        branch,
-        event: controlEvent,
-      });
+      commands.push(
+        recorded({ type: 'evaluateControl', nodeId: sid, attemptId, branch, event: controlEvent }),
+      );
       return { state: next, changed: true };
     }
     if (isVariableWriterType(node.type)) {
@@ -2016,7 +2055,7 @@ export function createEngine(doc: EngineDoc): Engine {
       // and check the value PURELY, hold the node `ready` (the driver owes
       // `variable.set`/`variable.append`, or `node.failed` for an unwritable
       // value), and emit that command. NEVER handed to the executor.
-      let command: EngineCommand;
+      let command: UserPropertiesCommand;
       try {
         command = variableWriteCommand(state, node, sid, attemptId);
       } catch (err) {
@@ -2027,7 +2066,7 @@ export function createEngine(doc: EngineDoc): Engine {
         attempts: ns.attempts + 1,
         currentAttemptId: attemptId,
       });
-      commands.push(command);
+      commands.push(recorded(command));
       return { state: next, changed: true };
     }
     if (node.type === FAIL_ACTIVITY_TYPE) {
@@ -2049,7 +2088,7 @@ export function createEngine(doc: EngineDoc): Engine {
         attempts: ns.attempts + 1,
         currentAttemptId: attemptId,
       });
-      commands.push({ type: 'failNode', nodeId: sid, attemptId, error });
+      commands.push(recorded({ type: 'failNode', nodeId: sid, attemptId, error }));
       return { state: next, changed: true };
     }
     if (node.type === FILTER_ACTIVITY_TYPE) {
@@ -2074,7 +2113,7 @@ export function createEngine(doc: EngineDoc): Engine {
         attempts: ns.attempts + 1,
         currentAttemptId: attemptId,
       });
-      commands.push({ type: 'succeedControl', nodeId: sid, attemptId, outputs });
+      commands.push(recorded({ type: 'succeedControl', nodeId: sid, attemptId, outputs }));
       return { state: next, changed: true };
     }
     if (node.type === WAIT_ACTIVITY_TYPE) {
@@ -2102,7 +2141,7 @@ export function createEngine(doc: EngineDoc): Engine {
         attempts: ns.attempts + 1,
         currentAttemptId: attemptId,
       });
-      commands.push({ type: 'scheduleWait', nodeId: sid, attemptId, seconds });
+      commands.push(recorded({ type: 'scheduleWait', nodeId: sid, attemptId, seconds }));
       return { state: next, changed: true };
     }
     if (node.type === WEBHOOK_ACTIVITY_TYPE) {
@@ -2132,7 +2171,9 @@ export function createEngine(doc: EngineDoc): Engine {
         attempts: ns.attempts + 1,
         currentAttemptId: attemptId,
       });
-      commands.push({ type: 'scheduleExternalWait', nodeId: sid, attemptId, timeoutSeconds });
+      commands.push(
+        recorded({ type: 'scheduleExternalWait', nodeId: sid, attemptId, timeoutSeconds }),
+      );
       return { state: next, changed: true };
     }
     if (node.type === WEB_ACTIVITY_TYPE && webWaitsOnly(node.config)) {
@@ -2171,7 +2212,7 @@ export function createEngine(doc: EngineDoc): Engine {
         currentAttemptId: attemptId,
         callback,
       });
-      commands.push(callbackWaitCommand(sid, callback));
+      commands.push(recorded(callbackWaitCommand(sid, callback)));
       return { state: next, changed: true };
     }
     if (node.call !== undefined) {
@@ -2193,15 +2234,17 @@ export function createEngine(doc: EngineDoc): Engine {
         attempts: ns.attempts + 1,
         currentAttemptId: attemptId,
       });
-      commands.push({
-        type: 'startChild',
-        callNodeId: sid,
-        attemptId,
-        childRunId,
-        pipelineVersionId: pvId,
-        params: callParams,
-        wait: !callDetaches(node.call),
-      });
+      commands.push(
+        recorded({
+          type: 'startChild',
+          callNodeId: sid,
+          attemptId,
+          childRunId,
+          pipelineVersionId: pvId,
+          params: callParams,
+          wait: !callDetaches(node.call),
+        }),
+      );
       return { state: next, changed: true };
     }
 
@@ -4557,7 +4600,7 @@ export function createEngine(doc: EngineDoc): Engine {
   function callbackWaitCommand(
     nodeId: string,
     callback: NonNullable<NodeRunState['callback']>,
-  ): EngineCommand {
+  ): Extract<EngineCommand, { type: 'scheduleExternalWait' }> {
     return {
       type: 'scheduleExternalWait',
       nodeId,
@@ -5149,6 +5192,10 @@ export function createEngine(doc: EngineDoc): Engine {
       const ns = state.nodes[id];
       if (ns === undefined || ns.currentAttemptId === undefined) continue;
       const node = docNodeFor(id)!;
+      // #1673 — each re-emit below carries the user properties its first
+      // emission did, so a restart between command and event loses none.
+      const recorded = <C extends UserPropertiesCommand>(command: C): C =>
+        withUserProperties(command, state, node, id);
       if (ns.status === 'ready' && isInactive(node)) {
         // #1600 C0c crash recovery — an inactive node folds `ready` while its
         // `node.inactive` is owed. Checked BEFORE every type fork below, the last
@@ -5164,7 +5211,9 @@ export function createEngine(doc: EngineDoc): Engine {
         // idempotent. C11c-2: a Web with no Request URL is held here from its
         // preparation, and is never dispatched at all. `armExternalWait` is
         // idempotent (see the webhook fork).
-        commands.push(callbackWaitCommand(id, ns.callback));
+        // #1673 — a Web that dispatched recorded them on its `node.dispatched`.
+        const wait = callbackWaitCommand(id, ns.callback);
+        commands.push(webWaitsOnly(node.config) ? recorded(wait) : wait);
         continue;
       }
       if (ns.status === 'ready' && ns.recheck?.notReadyAttemptId === ns.currentAttemptId) {
@@ -5202,13 +5251,15 @@ export function createEngine(doc: EngineDoc): Engine {
             const failed = prepFailure(state, id, err, diagnostics);
             return { state: failed.state, commands: [failed.finish], diagnostics };
           }
-          commands.push({
-            type: 'evaluateControl',
-            nodeId: id,
-            attemptId: ns.currentAttemptId,
-            branch,
-            event: controlEvent,
-          });
+          commands.push(
+            recorded({
+              type: 'evaluateControl',
+              nodeId: id,
+              attemptId: ns.currentAttemptId,
+              branch,
+              event: controlEvent,
+            }),
+          );
           continue;
         }
         if (isVariableWriterType(node.type)) {
@@ -5219,7 +5270,7 @@ export function createEngine(doc: EngineDoc): Engine {
           // re-route to `writeVariable` or `failNode` accordingly. Idempotent: same
           // `currentAttemptId`, and a duplicate event folds as a stale no-op.
           try {
-            commands.push(variableWriteCommand(state, node, id, ns.currentAttemptId));
+            commands.push(recorded(variableWriteCommand(state, node, id, ns.currentAttemptId)));
           } catch (err) {
             const failed = prepFailure(state, id, err, diagnostics);
             return { state: failed.state, commands: [failed.finish], diagnostics };
@@ -5246,7 +5297,9 @@ export function createEngine(doc: EngineDoc): Engine {
             const failed = prepFailure(state, id, err, diagnostics);
             return { state: failed.state, commands: [failed.finish], diagnostics };
           }
-          commands.push({ type: 'failNode', nodeId: id, attemptId: ns.currentAttemptId, error });
+          commands.push(
+            recorded({ type: 'failNode', nodeId: id, attemptId: ns.currentAttemptId, error }),
+          );
           continue;
         }
         if (node.type === FILTER_ACTIVITY_TYPE) {
@@ -5269,12 +5322,14 @@ export function createEngine(doc: EngineDoc): Engine {
             const failed = prepFailure(state, id, err, diagnostics);
             return { state: failed.state, commands: [failed.finish], diagnostics };
           }
-          commands.push({
-            type: 'succeedControl',
-            nodeId: id,
-            attemptId: ns.currentAttemptId,
-            outputs,
-          });
+          commands.push(
+            recorded({
+              type: 'succeedControl',
+              nodeId: id,
+              attemptId: ns.currentAttemptId,
+              outputs,
+            }),
+          );
           continue;
         }
         if (node.type === WAIT_ACTIVITY_TYPE) {
@@ -5298,12 +5353,14 @@ export function createEngine(doc: EngineDoc): Engine {
             const failed = prepFailure(state, id, err, diagnostics);
             return { state: failed.state, commands: [failed.finish], diagnostics };
           }
-          commands.push({
-            type: 'scheduleWait',
-            nodeId: id,
-            attemptId: ns.currentAttemptId,
-            seconds,
-          });
+          commands.push(
+            recorded({
+              type: 'scheduleWait',
+              nodeId: id,
+              attemptId: ns.currentAttemptId,
+              seconds,
+            }),
+          );
           continue;
         }
         if (node.type === WEBHOOK_ACTIVITY_TYPE) {
@@ -5332,12 +5389,14 @@ export function createEngine(doc: EngineDoc): Engine {
             const failed = prepFailure(state, id, err, diagnostics);
             return { state: failed.state, commands: [failed.finish], diagnostics };
           }
-          commands.push({
-            type: 'scheduleExternalWait',
-            nodeId: id,
-            attemptId: ns.currentAttemptId,
-            timeoutSeconds,
-          });
+          commands.push(
+            recorded({
+              type: 'scheduleExternalWait',
+              nodeId: id,
+              attemptId: ns.currentAttemptId,
+              timeoutSeconds,
+            }),
+          );
           continue;
         }
         let prepared: PreparedDispatch;
@@ -5372,15 +5431,17 @@ export function createEngine(doc: EngineDoc): Engine {
           const failed = prepFailure(state, id, err, diagnostics);
           return { state: failed.state, commands: [failed.finish], diagnostics };
         }
-        commands.push({
-          type: 'startChild',
-          callNodeId: id,
-          attemptId: ns.currentAttemptId,
-          childRunId: deterministicChildRunId(state.runId, id, ns.currentAttemptId),
-          pipelineVersionId: pvId,
-          params: callParams,
-          wait: !callDetaches(node.call),
-        });
+        commands.push(
+          recorded({
+            type: 'startChild',
+            callNodeId: id,
+            attemptId: ns.currentAttemptId,
+            childRunId: deterministicChildRunId(state.runId, id, ns.currentAttemptId),
+            pipelineVersionId: pvId,
+            params: callParams,
+            wait: !callDetaches(node.call),
+          }),
+        );
       }
     }
     // #4 A17 crash recovery: a `loop`'s timeout is armed at container-enter, but

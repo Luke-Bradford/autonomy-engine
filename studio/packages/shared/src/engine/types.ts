@@ -1243,6 +1243,22 @@ export const ResolvedUserPropertySchema = z.object({
 export type ResolvedUserProperty = z.infer<typeof ResolvedUserPropertySchema>;
 
 /**
+ * #1673 — the user properties an attempt recorded, on whichever event is its
+ * record: `node.dispatched` (or the `node.failed` of one that never dispatched)
+ * for an activity the executor runs; for one the engine evaluates, the event
+ * its command appends (`condition.evaluated`, `switch.evaluated`,
+ * `variable.set`, `variable.append`, `node.succeeded`, `node.failed`,
+ * `timer.waitScheduled`, `externalWait.created`); for a pipeline call, its
+ * attempt's first event (`call.started`, or the `call.returned`,
+ * `call.detached` or `node.failed` that came first, as for a call that never
+ * started). On a command (`resolvedUserProperties`), what
+ * the reducer resolved for the driver or executor to record. Absent when the
+ * node has none. Additive and optional, so an older build reading a newer log
+ * strips it, and the reducer never reads it.
+ */
+export const RecordedUserPropertiesSchema = z.array(ResolvedUserPropertySchema).optional();
+
+/**
  * The durable facts the driver/reconciler append to `run_events`; folding them
  * through `reduce` is the ONLY way state changes. Every attempt-bearing event
  * carries its `attemptId` for stale-rejection. `run.resumed` /
@@ -1446,7 +1462,7 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
      * stay). Absent when the node has none, so such a dispatch is
      * byte-identical to a pre-C0d one. The reducer never reads it.
      */
-    userProperties: z.array(ResolvedUserPropertySchema).optional(),
+    userProperties: RecordedUserPropertiesSchema,
   }),
   z.object({
     type: z.literal('node.succeeded'),
@@ -1454,6 +1470,7 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     nodeId: z.string(),
     attemptId: z.string(),
     outputs: z.record(z.string(), z.unknown()),
+    userProperties: RecordedUserPropertiesSchema,
   }),
   z.object({
     /**
@@ -1525,7 +1542,7 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
      * never reads it; additive + optional, so an older build reading a newer log
      * strips it.
      */
-    userProperties: z.array(ResolvedUserPropertySchema).optional(),
+    userProperties: RecordedUserPropertiesSchema,
     /**
      * M1 (#1104) — WHICH END of a PAIRED activity's source/sink pair this
      * failure came from. A `copy` is heterogeneous by definition, so a failure
@@ -1584,6 +1601,7 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     nodeId: z.string(),
     attemptId: z.string(),
     branch: z.string(),
+    userProperties: RecordedUserPropertiesSchema,
   }),
   z.object({
     /**
@@ -1603,6 +1621,7 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     nodeId: z.string(),
     attemptId: z.string(),
     branch: z.string(),
+    userProperties: RecordedUserPropertiesSchema,
   }),
   z.object({
     /**
@@ -1623,6 +1642,7 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     attemptId: z.string(),
     name: z.string(),
     value: z.unknown(),
+    userProperties: RecordedUserPropertiesSchema,
   }),
   z.object({
     /**
@@ -1637,6 +1657,7 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     attemptId: z.string(),
     name: z.string(),
     value: z.unknown(),
+    userProperties: RecordedUserPropertiesSchema,
   }),
   z.object({
     /**
@@ -1665,6 +1686,7 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     callNodeId: z.string(),
     attemptId: z.string(),
     childRunId: z.string(),
+    userProperties: RecordedUserPropertiesSchema,
   }),
   z.object({
     /**
@@ -1684,6 +1706,7 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     callNodeId: z.string(),
     attemptId: z.string(),
     childRunId: z.string(),
+    userProperties: RecordedUserPropertiesSchema,
   }),
   z.object({
     // A spawned `call_pipeline` child returned. `childOutcome` may be `failure`
@@ -1704,6 +1727,7 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     // version from a missing one (`child.ts`). Observability only —
     // the reducer does not read it. Optional, so pre-#796 logs replay unchanged.
     reason: z.string().optional(),
+    userProperties: RecordedUserPropertiesSchema,
   }),
   z.object({
     type: z.literal('run.finished'),
@@ -2158,6 +2182,7 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     /** The attempt this timer parks (the alarm's freshness handle). */
     attemptId: z.string(),
     dueAt: z.number().int(),
+    userProperties: RecordedUserPropertiesSchema,
   }),
   z.object({
     /**
@@ -2276,6 +2301,7 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
      * `reportedError` is set as on `externalWait.completed`.
      */
     arrived: z.object({ callback: z.unknown(), reportedError: z.string().optional() }).optional(),
+    userProperties: RecordedUserPropertiesSchema,
   }),
   z.object({
     /**
@@ -2499,7 +2525,7 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
      * `node.dispatched`. Absent when the node has none. Ephemeral, like every
      * command field.
      */
-    resolvedUserProperties: z.array(ResolvedUserPropertySchema).optional(),
+    resolvedUserProperties: RecordedUserPropertiesSchema,
     /**
      * #2 L13a — the node's `connectionId` after the reducer resolved its `${}`
      * expression against the run env (a literal id passes through unchanged;
@@ -2604,6 +2630,7 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
      * the flag rides on the command.
      */
     wait: z.boolean(),
+    resolvedUserProperties: RecordedUserPropertiesSchema,
   }),
   z.object({
     /**
@@ -2658,6 +2685,7 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
     attemptId: z.string(),
     branch: z.string(),
     event: z.enum(['condition.evaluated', 'switch.evaluated']),
+    resolvedUserProperties: RecordedUserPropertiesSchema,
   }),
   z.object({
     /**
@@ -2687,6 +2715,7 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
      * sends its `VARIABLE_*` code here. `kind` stays `permanent` either way.
      */
     code: z.string().optional(),
+    resolvedUserProperties: RecordedUserPropertiesSchema,
   }),
   z.object({
     /**
@@ -2708,6 +2737,7 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
     op: z.enum(['set', 'append']),
     name: z.string(),
     value: z.unknown(),
+    resolvedUserProperties: RecordedUserPropertiesSchema,
   }),
   z.object({
     /**
@@ -2732,6 +2762,7 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
     nodeId: z.string(),
     attemptId: z.string(),
     outputs: z.record(z.string(), z.unknown()),
+    resolvedUserProperties: RecordedUserPropertiesSchema,
   }),
   z.object({
     /**
@@ -2776,6 +2807,7 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
     attemptId: z.string(),
     /** Resolved, non-negative, finite duration in seconds (the reducer's pure half). */
     seconds: z.number(),
+    resolvedUserProperties: RecordedUserPropertiesSchema,
   }),
   z.object({
     /**
@@ -2813,6 +2845,7 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
     attemptId: z.string(),
     /** Resolved, non-negative, finite timeout in seconds (the reducer's pure half). */
     timeoutSeconds: z.number(),
+    resolvedUserProperties: RecordedUserPropertiesSchema,
   }),
   z.object({
     /**

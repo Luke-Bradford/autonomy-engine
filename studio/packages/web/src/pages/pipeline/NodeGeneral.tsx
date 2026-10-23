@@ -8,7 +8,6 @@ import {
   fieldLabelOf,
   inactiveMarkAs,
   isInactive,
-  userPropertiesApply,
   type InactiveMarkAs,
 } from '@autonomy-studio/shared';
 import { LabelledControl } from '../../lib/LabelledControl';
@@ -54,10 +53,9 @@ const LABELS = {
  * Each shapes the whole activity (which tabs it has), so it is chosen here
  * rather than on the Source tab.
  *
- * #1600 C0d — User properties, last, on an activity that records them
- * (`userPropertiesApply`): the save refuses them anywhere else. A node of
- * another kind that already holds some (an imported doc) still shows them, so
- * the refusal names config the author can see and remove.
+ * #1600 C0d — User properties, last, on every activity: one the executor
+ * dispatches records them on its dispatch, one the engine evaluates and a
+ * pipeline call on their own event (#1673).
  */
 export function NodeGeneral({
   store,
@@ -81,10 +79,6 @@ export function NodeGeneral({
     const n = s.nodes.find((x) => x.id === nodeId);
     return n === undefined ? 'success' : inactiveMarkAs(n);
   });
-  const showUserProperties = useStore(store, (s) => {
-    const n = s.nodes.find((x) => x.id === nodeId);
-    return n !== undefined && (userPropertiesApply(n) || n.userProperties !== undefined);
-  });
   // #1600 OR41 C1a — the one Copy palette item stands for two types; C7b, and
   // the one Lookup item.
   const type = useStore(store, (s) => s.nodes.find((x) => x.id === nodeId)?.type);
@@ -107,7 +101,7 @@ export function NodeGeneral({
         onMarkAs={(v) => store.getState().setNodeMarkAs(nodeId, v)}
       />
       <PolicyEditor store={store} nodeId={nodeId} />
-      {showUserProperties && <NodeUserProperties store={store} nodeId={nodeId} picker={picker} />}
+      <NodeUserProperties store={store} nodeId={nodeId} picker={picker} />
     </>
   );
 }

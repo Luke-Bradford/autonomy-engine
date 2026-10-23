@@ -15,8 +15,8 @@ const NONE: readonly UserProperty[] = [];
 /**
  * #1600 OR41 C0d (catalogue spec §3; ADF "user properties") — an activity's user
  * properties: up to `MAX_USER_PROPERTIES` name/value rows, each value a literal
- * or dynamic content (the ƒx picker), resolved at dispatch and shown as columns
- * in the activity runs grid. Rows write straight through to the store, as the
+ * or dynamic content (the ƒx picker), resolved when the activity runs and shown
+ * as columns in the activity runs grid. Rows write straight through to the store, as the
  * description does. Refusals (an empty or duplicate name) are the save's, shown
  * in the tab's issues, so nothing here trims or de-duplicates what was typed.
  */

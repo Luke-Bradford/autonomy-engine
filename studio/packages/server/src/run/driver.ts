@@ -1068,25 +1068,69 @@ async function* oneEvent(event: EngineEvent): AsyncGenerator<EngineEvent> {
  * queue) records the user properties its dispatch resolved on that
  * `node.failed`, so its activity-runs row is not blank. One seam for every
  * executor and the queued-cancel path. A failure after the dispatch is left
- * alone: the dispatch already recorded them.
+ * alone: the dispatch already recorded them. A pipeline call (#1673 part 2)
+ * records them on its attempt's first event, which nothing else stamps.
  */
 async function* withPreDispatchUserProperties(
   command: ExecutorCommand,
   stream: AsyncIterable<EngineEvent>,
 ): AsyncGenerator<EngineEvent> {
-  const props = command.type === 'dispatchNode' ? command.resolvedUserProperties : undefined;
+  const props = command.resolvedUserProperties;
   if (props === undefined) {
     yield* stream;
     return;
   }
-  let dispatched = false;
+  // #1673 — a dispatch's own record is its `node.dispatched` (the executor
+  // stamps that); a failure before it carries them instead. A pipeline call's
+  // first event of the attempt is its record: `call.started`, or the
+  // `call.returned`/`node.failed` of a call that never started.
+  let opened = false;
   for await (const event of stream) {
-    if (event.type === 'node.dispatched' && event.attemptId === command.attemptId) {
-      dispatched = true;
+    if (opened || !('attemptId' in event) || event.attemptId !== command.attemptId) {
+      yield event;
+      continue;
     }
-    yield !dispatched && event.type === 'node.failed' && event.attemptId === command.attemptId
-      ? { ...event, userProperties: props }
-      : event;
+    if (command.type === 'dispatchNode') {
+      if (event.type === 'node.dispatched') opened = true;
+      yield event.type === 'node.failed' ? { ...event, userProperties: props } : event;
+    } else if (
+      event.type === 'call.started' ||
+      event.type === 'call.returned' ||
+      event.type === 'call.detached' ||
+      event.type === 'node.failed'
+    ) {
+      opened = true;
+      yield { ...event, userProperties: props };
+    } else {
+      yield event;
+    }
+  }
+}
+
+/**
+ * #1673 — an activity the engine evaluates never reaches the executor: the
+ * driver appends its event (its branch, its write, its success or failure, its
+ * park) from the command the reducer built, which carries the user properties
+ * resolved for it. Record them there, so its activity-runs row shows them as a
+ * dispatched attempt's would. Only on that command's own attempt. Redacted on a
+ * secure node at append time, as every copy is (`redactSecureEvent`). The
+ * events either seam stamps are the ones `RecordedUserPropertiesSchema` lists.
+ */
+function withRecordedUserProperties(command: EngineCommand, event: EngineEvent): EngineEvent {
+  const props = 'resolvedUserProperties' in command ? command.resolvedUserProperties : undefined;
+  if (props === undefined || !('attemptId' in command)) return event;
+  switch (event.type) {
+    case 'condition.evaluated':
+    case 'switch.evaluated':
+    case 'variable.set':
+    case 'variable.append':
+    case 'node.succeeded':
+    case 'node.failed':
+    case 'timer.waitScheduled':
+    case 'externalWait.created':
+      return event.attemptId === command.attemptId ? { ...event, userProperties: props } : event;
+    default:
+      return event;
   }
 }
 
@@ -1551,7 +1595,9 @@ export async function pump(
       }
 
       for (const event of source) {
-        if (fold(event)) break pumping;
+        // #1673 — the event an engine-evaluated activity's command appends
+        // records the user properties the reducer resolved for it.
+        if (fold(withRecordedUserProperties(command, event))) break pumping;
       }
     }
   } catch (err) {

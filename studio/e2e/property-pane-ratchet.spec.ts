@@ -484,8 +484,8 @@ interface SeedIds {
 /** Every toolbox entry with its config filled, plus the second states above. */
 function seeds(ids: SeedIds): Record<string, Seed> {
   const description = 'Seeded so every field renders.';
-  // Timeout and user properties are refused on control and call nodes, and the
-  // secure flags on the branch, variable and call nodes.
+  // Timeout is refused on control and call nodes, and the secure flags on the
+  // branch, variable and call nodes. User properties go on every node (#1673).
   const exec = {
     description,
     policy: {
@@ -503,8 +503,13 @@ function seeds(ids: SeedIds): Record<string, Seed> {
   const control = {
     description,
     policy: { retry: 2, retryIntervalSeconds: 60, secureInput: true, secureOutput: true },
+    userProperties: exec.userProperties,
   };
-  const retryOnly = { description, policy: { retry: 2, retryIntervalSeconds: 60 } };
+  const retryOnly = {
+    description,
+    policy: { retry: 2, retryIntervalSeconds: 60 },
+    userProperties: exec.userProperties,
+  };
   const fsNode = (type: string, config: Record<string, unknown>): Seed => ({
     node: { ...exec, type, config, connectionId: ids.fs, connectionParams: { maxBytes: 2048 } },
   });

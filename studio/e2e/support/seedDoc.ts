@@ -69,7 +69,7 @@ export interface SeedNode {
   policy?: Record<string, unknown>;
   /** #1600 C0b — the activity's description. Passed through as authored. */
   description?: string;
-  /** #1600 — the activity's user properties (execution nodes only). Passed through as authored. */
+  /** #1600 — the activity's user properties. Passed through as authored. */
   userProperties?: { name: string; value: string }[];
   /** #1600 C0c — switched off, and the outcome it records. Passed through as authored. */
   state?: 'inactive';

@@ -27,7 +27,7 @@ import { containerOutputContract, outputContract } from './outputs.js';
 import { hasSecureOutput } from './secure.js';
 import type { Expr, ExprSegment, TemplateMode } from './expr.js';
 import { infixOperatorHint, interpolationMode, parseExpr, restoreEscapes } from './expr.js';
-import { getActivity, timeoutApplies, userPropertiesApply } from '../catalog/registry.js';
+import { getActivity, timeoutApplies } from '../catalog/registry.js';
 import type { ActivityCatalog } from '../catalog/types.js';
 import { GET_METADATA_ACTIVITY_TYPE } from '../catalog/types.js';
 import { activityNodeErrors } from './activity-config-check.js';
@@ -1819,7 +1819,7 @@ export function validateRefs(
     scanVariableWriteValue(node, scope, errors);
     // #1600 C12b — and each return value row's, against the row's type.
     scanReturnValueTypes(node, scope, errors);
-    // #1600 C0d — a user property's value is resolved at dispatch against the
+    // #1600 C0d — a user property's value is resolved when the node starts against the
     // same env as `config` (the node's scope, `${item}` in a foreach body), so it
     // is scanned the same way: refs, types, secure-output reads and secret refs
     // refused, and its variable reads counted. Not a secret sink. Indexed by row,
@@ -3206,8 +3206,6 @@ export function validateDoc(doc: ValidatedDoc, options: ValidateDocOptions = {})
     validateSecurePolicy(node, errors);
     // #1600 C0a — likewise a timeout on a node nothing would time out.
     validateTimeoutPolicy(node, errors);
-    // #1600 C0d — and user properties on a node nothing would record them for.
-    validateUserPropertiesPolicy(node, errors);
     // #4 A1 — an `if`'s boolean condition must be WHOLE-VALUE (save-time half).
     if (node.type === IF_ACTIVITY_TYPE) validateIfCondition(node, errors);
     // #4 A2 — a `switch`'s `on` + `cases` shape (save-time half).
@@ -5388,23 +5386,6 @@ function validateTimeoutPolicy(node: Node, errors: string[]): void {
     refuse(`'${node.type}'`, 'its duration is its own setting');
   } else if (getActivity(node.type) !== undefined) {
     refuse(`'${node.type}'`, 'the engine evaluates it instantly, so there is nothing to time out');
-  }
-}
-
-/**
- * #1600 OR41 C0d — user properties are resolved when the executor dispatches an
- * activity and recorded on `node.dispatched`. An engine-evaluated activity and a
- * pipeline call never get there, so a user property on one would save and then
- * show nowhere. Refused, as `validateTimeoutPolicy` refuses a timeout nothing
- * enforces. (An unknown type is the #1480 check's to refuse.)
- */
-function validateUserPropertiesPolicy(node: Node, errors: string[]): void {
-  if (node.userProperties === undefined || userPropertiesApply(node)) return;
-  const why = 'only activities that run record them';
-  if (node.call !== undefined) {
-    errors.push(`node '${node.id}': userProperties are not supported on a pipeline call — ${why}`);
-  } else if (getActivity(node.type) !== undefined) {
-    errors.push(`node '${node.id}': userProperties are not supported on '${node.type}' — ${why}`);
   }
 }
 
