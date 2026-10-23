@@ -5598,6 +5598,55 @@ describe('createExecutor — #1600 C0a: the activity timeout', () => {
     expect(alarms.armed).toHaveLength(1);
   });
 
+  // #1804 — a Script outside a transaction that had applied a block reports the
+  // abort as `cancelled` + `partialWritePossible`. A transient timeout would let
+  // D4 run that block again, so the timeout keeps the refusal: permanent.
+  it('a refusal that work may have been applied stays unretried: permanent `timeout`, no retry', async () => {
+    const { db, run, state, alarms } = await runTimedOut(
+      async function* (ctx) {
+        await aborted(ctx.signal);
+        yield {
+          type: 'failed',
+          kind: 'cancelled',
+          error: 'script aborted — 1 block(s) had already run, so this is not retried',
+          partialWritePossible: true,
+        };
+      },
+      { retry: 1 },
+    );
+    expect(failureOf(db, run.id)).toMatchObject({
+      kind: 'permanent',
+      code: FAILURE_CODES.TIMEOUT,
+      error:
+        'activity timed out after 90s — script aborted — 1 block(s) had already run, so this is not retried',
+    });
+    expect(state.status).toBe('failure');
+    expect(eventTypes(db, run.id)).not.toContain('node.retryScheduled');
+    expect(alarms.armed).toHaveLength(0);
+  });
+
+  it('a run cancel keeps a partial-write refusal `cancelled`, so the run ends cancelled', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const run = seedRun(db, seedVersion(db, [timedNode('n1', connId, 90, 1)]));
+    const started = gate();
+    const deadlines = manualDeadlines();
+    const adapters = fakeHttpAdapter(async function* (ctx): AsyncIterable<ActivityEvent> {
+      started.open();
+      await aborted(ctx.signal);
+      yield { type: 'failed', kind: 'cancelled', error: 'aborted', partialWritePossible: true };
+    });
+    const cancels = createRunCancels();
+    const d = { ...deps(db, { adapters, armDeadline: deadlines.armDeadline }), cancels };
+    const done = startRun(d, run);
+    await started.held;
+    cancels.request(run.id, { kind: 'operator' });
+    cancels.poke(run.id);
+    const state = await done;
+    expect(state.status).toBe('cancelled');
+    expect(failureOf(db, run.id)).toMatchObject({ kind: 'cancelled', error: 'aborted' });
+  });
+
   it('each retry gets a FRESH budget: the retried attempt arms its own deadline, and times out again', async () => {
     const db = freshDb().db;
     const connId = await seedConnection(db, 'http', {}, null);

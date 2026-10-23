@@ -483,7 +483,7 @@ describe('Script on PostgreSQL, the run (C10b-1)', () => {
       })) {
         events.push(e);
       }
-      expect(failureOf(events)).toMatchObject({ kind: 'cancelled' });
+      expect(failureOf(events)).toMatchObject({ kind: 'cancelled', partialWritePossible: true });
       expect(failureOf(events).error).toMatch(/^script aborted — 1 block\(s\)/);
       expect(queries.filter((q) => q.startsWith('insert'))).toEqual(['insert into t values (1)']);
     });

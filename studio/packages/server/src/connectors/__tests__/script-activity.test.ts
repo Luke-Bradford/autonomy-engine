@@ -8,7 +8,8 @@ import {
   scriptDispatchConfigSchema,
 } from '@autonomy-studio/shared';
 import { LOOKUP_BYTE_CAP } from '../../limits.js';
-import { executeSqliteScript } from '../script.js';
+import { executeSqliteScript, scriptFailure } from '../script.js';
+import { DatasetIoError } from '../dataset-io-error.js';
 import { sqliteAdapter } from '../sqlite.js';
 import { cleanupTempRoots, seedDb, tempRoot, writableConfig } from './sqlite-fixtures.js';
 import type { ActivityContext, ActivityEvent } from '../types.js';
@@ -428,6 +429,7 @@ describe('Script on SQLite (C10a)', () => {
       controller.abort();
       await expect(running).rejects.toMatchObject({
         kind: 'cancelled',
+        partialWritePossible: true,
         message: expect.stringMatching(
           /^script aborted — 1 block\(s\) had already changed the store/,
         ),
@@ -472,5 +474,18 @@ describe('Script on SQLite (C10a)', () => {
     );
     expect(failureOf(events).kind).toBe('cancelled');
     expect(count(path)).toBe(2);
+  });
+
+  // #1804 — the executor keeps a timed-out script unretried only if the
+  // terminal says blocks may have been applied.
+  it('carries a possible partial write onto the terminal, and nothing otherwise', () => {
+    expect(
+      scriptFailure(new DatasetIoError('cancelled', 'x', { partialWritePossible: true })),
+    ).toEqual({ type: 'failed', kind: 'cancelled', error: 'x', partialWritePossible: true });
+    expect(scriptFailure(new DatasetIoError('cancelled', 'x'))).toEqual({
+      type: 'failed',
+      kind: 'cancelled',
+      error: 'x',
+    });
   });
 });
