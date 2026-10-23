@@ -143,6 +143,29 @@ describe('#1600 C0d — user properties on a secure node', () => {
     }
   });
 
+  it('#1673 — withholds them on a failure before dispatch too, on either flag', () => {
+    const failed: EngineEvent = {
+      type: 'node.failed',
+      runId: 'r1',
+      nodeId: 'a',
+      attemptId: 'a#0',
+      error: 'connection not found',
+      kind: 'permanent',
+      userProperties: props,
+    };
+    for (const policy of [{ secureInput: true }, { secureOutput: true }]) {
+      const got = createEngine({ nodes: [node({ policy })], edges: [], containers: [] }).redact(
+        failed,
+      );
+      expect(got.type === 'node.failed' && got.userProperties).toEqual([
+        { name: 'File', value: SECURE_REDACTED },
+        { name: 'Bad', error: SECURE_REDACTED },
+      ]);
+    }
+    const plain = createEngine({ nodes: [node()], edges: [], containers: [] }).redact(failed);
+    expect(plain.type === 'node.failed' && plain.userProperties).toEqual(props);
+  });
+
   it('leaves them as resolved on a node that is not secure', () => {
     const got = createEngine({ nodes: [node()], edges: [], containers: [] }).redact(
       dispatched('a'),

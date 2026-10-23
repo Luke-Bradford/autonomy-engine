@@ -50,7 +50,7 @@
  */
 import { RUN_LOG_STREAMS } from '../catalog/session-log.js';
 import type { Node } from '../schemas/pipeline.js';
-import type { CapturedContent, EngineEvent } from './types.js';
+import type { CapturedContent, EngineEvent, ResolvedUserProperty } from './types.js';
 import {
   outputContract,
   matchesType,
@@ -120,6 +120,13 @@ function redactCaptured<T extends CapturedContent>(field: T): T {
   return withText;
 }
 
+/** #1600 C0d — every value and error is the marker; the names stay. */
+function redactUserProperties(props: ResolvedUserProperty[]): ResolvedUserProperty[] {
+  return props.map(({ name, error }) =>
+    error !== undefined ? { name, error: SECURE_REDACTED } : { name, value: SECURE_REDACTED },
+  );
+}
+
 /**
  * PURE: the event as it may be persisted, given the doc node it belongs to
  * (`undefined` — a run-level event, or a node the doc does not know — passes
@@ -169,7 +176,14 @@ export function redactSecureEvent(node: Node | undefined, event: EngineEvent): E
         ? { ...event, name: SECURE_REDACTED, value: SECURE_REDACTED }
         : event;
     case 'node.failed':
-      return { ...event, error: SECURE_ERROR_WITHHELD };
+      // #1673 — a failure before dispatch carries the user properties too.
+      return {
+        ...event,
+        error: SECURE_ERROR_WITHHELD,
+        ...(event.userProperties !== undefined
+          ? { userProperties: redactUserProperties(event.userProperties) }
+          : {}),
+      };
     // #1600 C8d — a Wait until's reason names the path, as a failure would.
     case 'node.notReady':
       return { ...event, reason: SECURE_ERROR_WITHHELD };
@@ -202,13 +216,7 @@ export function redactSecureEvent(node: Node | undefined, event: EngineEvent): E
         : {
             ...event,
             ...(event.userProperties !== undefined
-              ? {
-                  userProperties: event.userProperties.map(({ name, error }) =>
-                    error !== undefined
-                      ? { name, error: SECURE_REDACTED }
-                      : { name, value: SECURE_REDACTED },
-                  ),
-                }
+              ? { userProperties: redactUserProperties(event.userProperties) }
               : {}),
             ...(event.input !== undefined
               ? { input: { text: SECURE_REDACTED, chars: event.input.chars } }

@@ -5196,6 +5196,10 @@ describe('createExecutor — node.dispatched.input, the input a node ran with (#
     fakeHttpAdapter(async function* () {
       yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
     });
+  const fails = () =>
+    fakeHttpAdapter(async function* () {
+      yield { type: 'failed', kind: 'permanent', error: 'boom' } satisfies ActivityEvent;
+    });
 
   it('records the config AFTER ${} substitution, not the authored template', async () => {
     const db = freshDb().db;
@@ -5259,6 +5263,58 @@ describe('createExecutor — node.dispatched.input, the input a node ran with (#
       { name: 'Who', value: SECURE_REDACTED },
       { name: 'Kind', value: SECURE_REDACTED },
     ]);
+  });
+
+  it('#1673 an attempt refused before dispatch records its user properties on node.failed, withheld on a secure node', async () => {
+    const db = freshDb().db;
+    const authored = {
+      ...httpNode('n1', 'conn-does-not-exist', { url: 'https://x/y', outputs: [] }),
+      userProperties: [{ name: 'Who', value: 'user ${params.who}' }],
+    };
+    const who = [{ name: 'who', type: 'string' as const, required: true }];
+    const failedOf = async (n: typeof authored) => {
+      const run = createRun(db, {
+        ownerId: 'local',
+        pipelineVersionId: seedVersion(db, [n], who),
+        triggerId: null,
+        parentRunId: null,
+        params: { who: 'alice' },
+      });
+      await startRun(deps(db, { adapters: succeeds() }), run);
+      const events = loadEngineEvents(db, run.id);
+      expect(events.some((e) => e.type === 'node.dispatched')).toBe(false);
+      const failed = events.find((e) => e.type === 'node.failed');
+      if (failed?.type !== 'node.failed') throw new Error('no node.failed');
+      expect(failed.code).toBe(FAILURE_CODES.CONNECTION_NOT_FOUND);
+      return failed.userProperties;
+    };
+    expect(await failedOf(authored)).toEqual([{ name: 'Who', value: 'user alice' }]);
+    expect(
+      await failedOf({ ...authored, policy: { secureInput: true, secureOutput: true } }),
+    ).toEqual([{ name: 'Who', value: SECURE_REDACTED }]);
+  });
+
+  it('#1673 a failure after node.dispatched does not repeat the user properties', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const run = seedRun(
+      db,
+      seedVersion(db, [
+        {
+          ...httpNode('n1', connId, { url: 'https://x/y', outputs: [] }),
+          userProperties: [{ name: 'Kind', value: 'nightly' }],
+        },
+      ]),
+    );
+    await startRun(deps(db, { adapters: fails() }), run);
+    const events = loadEngineEvents(db, run.id);
+    const dispatched = events.find((e) => e.type === 'node.dispatched');
+    const failed = events.find((e) => e.type === 'node.failed');
+    expect(dispatched?.type === 'node.dispatched' && dispatched.userProperties).toEqual([
+      { name: 'Kind', value: 'nightly' },
+    ]);
+    expect(failed).toBeDefined();
+    expect(failed).not.toHaveProperty('userProperties');
   });
 
   it('records NO parameters for a node that bound none — absent, not an empty record', async () => {

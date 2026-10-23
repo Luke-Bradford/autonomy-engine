@@ -124,7 +124,7 @@ describe('CX2 — cancelling a run through the server driver', () => {
     const ids = ['a', 'b', 'c', 'd', 'e'];
     const run = seedRun(
       db,
-      [node('r'), ...ids.map((id) => node(id))],
+      [node('r'), ...ids.map((id) => node(id, { userProperties: [{ name: 'Who', value: id }] }))],
       ids.map((id) => edge('r', id)),
     );
     const cancels = createRunCancels();
@@ -145,6 +145,14 @@ describe('CX2 — cancelling a run through the server driver', () => {
     );
     expect(fifth).toHaveLength(1);
     expect(fifth[0]).toMatchObject({ kind: 'cancelled', code: FAILURE_CODES.RUN_CANCELLED });
+    // #1673 — it never dispatched, so its failure is where its row reads them.
+    expect(fifth[0]?.userProperties).toEqual([{ name: 'Who', value: 'e' }]);
+    // One that did dispatch recorded them there; its failure does not repeat them.
+    const first = loadEngineEvents(db, run.id).find(
+      (e) => e.type === 'node.failed' && e.nodeId === 'a',
+    );
+    expect(first).toBeDefined();
+    expect(first).not.toHaveProperty('userProperties');
   });
 
   it('a parked (waiting) run is cancelled by the serialized drive: nothing is in flight, so it finishes at once', async () => {

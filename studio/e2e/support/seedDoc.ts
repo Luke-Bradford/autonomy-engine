@@ -35,7 +35,10 @@ export interface SeedNode {
   /** The Connection this node dispatches through — a TOP-LEVEL field on the
    * node, not part of `config` (`schemas/pipeline.ts`). Checked at DISPATCH,
    * never at version save, so a seed may mint a version naming a connection and
-   * only find out at fire time whether it resolves. */
+   * only find out at fire time whether it resolves. A `${}` id is a dynamic
+   * reference that may resolve to ANY connection, so every later connection
+   * delete in the same server asks for the typed name (#1673's spec tripped
+   * `row-menus.spec.ts` that way); seed a literal id unless the `${}` is the point. */
   connectionId?: string;
   /**
    * The structural call blob (#953). A TOP-LEVEL field like `connectionId`, and

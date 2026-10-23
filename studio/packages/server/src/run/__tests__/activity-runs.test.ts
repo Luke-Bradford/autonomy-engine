@@ -188,6 +188,20 @@ describe('#1484 activity runs — one row per attempt', () => {
     expect(rows.find((r) => r.activityId === 'b')?.userProperties).toBeNull();
   });
 
+  it('#1673 — an attempt refused before dispatch carries the user properties its dispatch resolved', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [
+      node('a', { userProperties: [{ name: 'Run', value: '${run.runId}' }] }),
+    ]);
+    const runId = await drive(db, pvId, stub({ a: { preflightError: 'no connection' } }));
+    expect(loadEngineLog(db, runId).some(({ event: e }) => e.type === 'node.dispatched')).toBe(
+      false,
+    );
+    const [a] = project(db, pvId, runId);
+    expect(a).toMatchObject({ status: 'failure', attemptId: 'a#0' });
+    expect(a?.userProperties).toEqual([{ name: 'Run', value: runId }]);
+  });
+
   it('records the branch an If took, and the branch it did not take as a skip', async () => {
     const { db } = freshDb();
     const pvId = seedVersion(
@@ -1272,6 +1286,17 @@ describe('#1557 activity runs from the log alone — the version no longer resol
       node('a', { userProperties: [{ name: 'Run', value: '${run.runId}' }] }),
     ]);
     const runId = await drive(db, pvId, stub());
+    expect(fromLog(db, runId).rows.map((r) => r.userProperties)).toEqual([
+      [{ name: 'Run', value: runId }],
+    ]);
+  });
+
+  it('#1673 — carries them from a failure before dispatch too', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [
+      node('a', { userProperties: [{ name: 'Run', value: '${run.runId}' }] }),
+    ]);
+    const runId = await drive(db, pvId, stub({ a: { preflightError: 'no connection' } }));
     expect(fromLog(db, runId).rows.map((r) => r.userProperties)).toEqual([
       [{ name: 'Run', value: runId }],
     ]);

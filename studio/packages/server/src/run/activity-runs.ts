@@ -255,9 +255,9 @@ function firstLoggedCount(
 }
 
 /** What an event says about its attempt's row: the user properties a dispatch
- * resolved, the branch an If or Switch took,
- * the child a call started, the counts a success logged, the error a failure
- * gave. The caller decides whether the row may still take it (rule 1). */
+ * resolved (on its failure, when it never dispatched), the branch an If or
+ * Switch took, the child a call started, the counts a success logged, the error
+ * a failure gave. The caller decides whether the row may still take it (rule 1). */
 function fillDetail(
   row: ProjectedActivityRun,
   e: EngineEvent,
@@ -297,6 +297,8 @@ function fillDetail(
       }
       return;
     case 'node.failed':
+      // #1673 — present only when the attempt never dispatched.
+      if (e.userProperties !== undefined) row.userProperties = e.userProperties;
       row.error = {
         message: e.error,
         kind: statedKind(payload) ? e.kind : null,

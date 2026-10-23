@@ -8,6 +8,12 @@ export interface NodePlan {
   error?: string;
   /** The `node.failed.kind` for a `failure` outcome (#1 F0). Default `permanent`. */
   kind?: FailureKind;
+  /**
+   * #1673 — fail BEFORE `node.dispatched`, as the real executor's pre-flight
+   * does (a missing connection, a secret that will not resolve): the attempt
+   * yields only a permanent `node.failed` with this error.
+   */
+  preflightError?: string;
   /** Persisted into `node.dispatched.idempotent` (default `true`). */
   idempotent?: boolean;
   /**
@@ -94,6 +100,17 @@ export function makeStubExecutor(opts: StubExecutorOptions = {}): RecordingExecu
       if (command.type === 'dispatchNode') {
         dispatched.push(command.attemptId);
         const plan = opts.nodes?.[command.nodeId] ?? {};
+        if (plan.preflightError !== undefined) {
+          yield {
+            type: 'node.failed',
+            runId,
+            nodeId: command.nodeId,
+            attemptId: command.attemptId,
+            error: plan.preflightError,
+            kind: 'permanent',
+          };
+          return;
+        }
         yield {
           type: 'node.dispatched',
           runId,

@@ -1063,6 +1063,34 @@ async function* oneEvent(event: EngineEvent): AsyncGenerator<EngineEvent> {
 }
 
 /**
+ * #1673 — an attempt that fails before `node.dispatched` (the executor's
+ * pre-flight refused it, or the cancel folded while it sat in the per-run cap's
+ * queue) records the user properties its dispatch resolved on that
+ * `node.failed`, so its activity-runs row is not blank. One seam for every
+ * executor and the queued-cancel path. A failure after the dispatch is left
+ * alone: the dispatch already recorded them.
+ */
+async function* withPreDispatchUserProperties(
+  command: ExecutorCommand,
+  stream: AsyncIterable<EngineEvent>,
+): AsyncGenerator<EngineEvent> {
+  const props = command.type === 'dispatchNode' ? command.resolvedUserProperties : undefined;
+  if (props === undefined) {
+    yield* stream;
+    return;
+  }
+  let dispatched = false;
+  for await (const event of stream) {
+    if (event.type === 'node.dispatched' && event.attemptId === command.attemptId) {
+      dispatched = true;
+    }
+    yield !dispatched && event.type === 'node.failed' && event.attemptId === command.attemptId
+      ? { ...event, userProperties: props }
+      : event;
+  }
+}
+
+/**
  * CX2 (#1320, spec D6) — the ONE hook every fold of `run.cancelRequested` calls:
  * the pump's marker, a starting drive, `startRun`, and the boot reconciler.
  * It aborts the run's live dispatches, then (CX3, D8) asks the run's live
@@ -1228,12 +1256,14 @@ export async function pump(
       // it ends with the cancelled failure instead, and the adapter never runs.
       // CX3 — a `startChild` in the same position never creates its child: the
       // call node resolves as a child the cancel stopped.
-      const streamed =
+      const streamed = withPreDispatchUserProperties(
+        command,
         state.cancelRequested === null
           ? deps.executor.perform(command, state.runId)
           : command.type === 'dispatchNode'
             ? oneEvent(runCancelledFailure(state.runId, command.nodeId, command.attemptId))
-            : oneEvent(childNeverStarted(state.runId, command));
+            : oneEvent(childNeverStarted(state.runId, command)),
+      );
       for await (const event of streamed) {
         const outcome = await new Promise<SinkOutcome>((settle) => {
           if (dropped) {
