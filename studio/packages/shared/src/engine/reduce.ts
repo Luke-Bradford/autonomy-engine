@@ -486,7 +486,7 @@ type EndpointOutcome = TerminalNodeStatus | null;
 
 /** #1673 — the commands that carry a node's resolved user properties for the
  * driver to record: every one an activity the engine evaluates, or a pipeline
- * call, is started with. */
+ * call, is started with, and an inactive activity's placeholder run. */
 type UserPropertiesCommand = Extract<
   EngineCommand,
   {
@@ -497,7 +497,8 @@ type UserPropertiesCommand = Extract<
       | 'succeedControl'
       | 'scheduleWait'
       | 'scheduleExternalWait'
-      | 'startChild';
+      | 'startChild'
+      | 'inactivateNode';
   }
 >;
 
@@ -1954,9 +1955,23 @@ export function createEngine(doc: EngineDoc): Engine {
     );
   }
 
-  /** #1600 C0c — the one place an inactive node's command is built (dispatch and resume). */
-  function inactivateCommand(node: Node, sid: string, attemptId: string): EngineCommand {
-    return { type: 'inactivateNode', nodeId: sid, attemptId, markAs: inactiveMarkAs(node) };
+  /**
+   * #1600 C0c — the one place an inactive node's command is built (dispatch and
+   * resume). #1673 — it carries the node's user properties, so the placeholder
+   * run records them as a run that did would.
+   */
+  function inactivateCommand(
+    state: RunState,
+    node: Node,
+    sid: string,
+    attemptId: string,
+  ): EngineCommand {
+    return withUserProperties(
+      { type: 'inactivateNode', nodeId: sid, attemptId, markAs: inactiveMarkAs(node) },
+      state,
+      node,
+      sid,
+    );
   }
 
   /**
@@ -2004,7 +2019,7 @@ export function createEngine(doc: EngineDoc): Engine {
       // FIRST, so no adapter, control evaluation or child is ever started for it.
       // Hold it `ready` and ask the driver for its placeholder `node.inactive`,
       // whose `markAs` becomes its terminal status (`onInactive`).
-      commands.push(inactivateCommand(node, sid, attemptId));
+      commands.push(inactivateCommand(state, node, sid, attemptId));
       return {
         state: withNode(state, sid, {
           status: 'ready',
@@ -5201,7 +5216,7 @@ export function createEngine(doc: EngineDoc): Engine {
         // `node.inactive` is owed. Checked BEFORE every type fork below, the last
         // of which is `dispatchNode`: re-deriving that would RUN a switched-off
         // activity. Idempotent for the same reason as the forks below.
-        commands.push(inactivateCommand(node, id, ns.currentAttemptId));
+        commands.push(inactivateCommand(state, node, id, ns.currentAttemptId));
         continue;
       }
       if (ns.status === 'ready' && ns.callback?.attemptId === ns.currentAttemptId) {

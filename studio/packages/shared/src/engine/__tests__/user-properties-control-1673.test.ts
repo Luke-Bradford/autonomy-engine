@@ -4,6 +4,7 @@
  * and a pipeline call never reach the executor. Their command carries the
  * node's user properties, resolved as a dispatch's are, for the driver to
  * record on the event it appends; a restart's re-emit carries the same.
+ * Part 3: so does an inactive activity's placeholder run.
  */
 import { describe, expect, it } from 'vitest';
 import type { EngineCommand, EngineEvent, Node, RunState } from '../types.js';
@@ -77,6 +78,14 @@ const CASES: [string, Node, EngineCommand['type']][] = [
     'a pipeline call',
     node('execute_pipeline', {}, { call: { pipelineVersionId: 'pv2', params: {} } }),
     'startChild',
+  ],
+  // #1673 part 3 — an inactive activity never runs, whatever its type, but its
+  // placeholder run records them as a run that did would.
+  ['an inactive If', node('if', { condition: '${true}' }, { state: 'inactive' }), 'inactivateNode'],
+  [
+    'an inactive Web',
+    node(WEB_ACTIVITY_TYPE, { url: '/jobs', method: 'GET' }, { state: 'inactive', connectionId: 'c1' }),
+    'inactivateNode',
   ],
 ];
 
@@ -175,6 +184,11 @@ describe('#1673 — withheld on a secure engine-evaluated activity', () => {
       'Fail',
       node('fail', { message: 'stop' }),
       { type: 'node.failed', ...at, error: 'stop', kind: 'permanent' },
+    ],
+    [
+      'an inactive Web',
+      node(WEB_ACTIVITY_TYPE, { url: '/jobs', method: 'GET' }, { state: 'inactive' }),
+      { type: 'node.inactive', ...at, markAs: 'success' },
     ],
   ];
 
