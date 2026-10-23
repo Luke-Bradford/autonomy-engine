@@ -24,8 +24,10 @@ export type DraftNumberParse<V extends number | undefined> =
  * read as "delete the setting". A refused value KEEPS the operator's text on
  * screen and says why, rather than reverting and losing what they typed.
  *
- * `parse` must round-trip the stored value — `parse(String(stored))` yields
+ * `parse` must round-trip the stored value — `parse(format(stored))` yields
  * `stored` — because a blur on the untouched text is not parsed at all.
+ * `format` is `String` unless the field shows its value another way (#1680: a
+ * timeout as `D.HH:MM:SS`).
  */
 export function DraftNumberField<V extends number | undefined>({
   label,
@@ -36,6 +38,8 @@ export function DraftNumberField<V extends number | undefined>({
   placeholder,
   unit,
   errorLine,
+  format = String,
+  inputMode = 'numeric',
 }: {
   /** The title alone; `unit` is drawn as the box's suffix (#1694 OR42 item 5). */
   label: string;
@@ -54,8 +58,12 @@ export function DraftNumberField<V extends number | undefined>({
    * Left out, the field keeps its own slot under it (a field on its own).
    */
   errorLine?: HTMLElement | null;
+  /** The stored value as shown; `parse` must read it back unchanged. */
+  format?: (stored: number) => string;
+  /** `text` for a value typed with `:` and `.`, which a numeric keypad lacks. */
+  inputMode?: 'numeric' | 'text';
 }) {
-  const text = stored === undefined ? '' : String(stored);
+  const text = stored === undefined ? '' : format(stored);
   const [draft, setDraft] = useState(text);
   const [error, setError] = useState<string | null>(null);
   const errorId = useId();
@@ -110,7 +118,7 @@ export function DraftNumberField<V extends number | undefined>({
               id={id}
               type="text"
               className="number-input"
-              inputMode="numeric"
+              inputMode={inputMode}
               spellCheck={false}
               placeholder={placeholder}
               value={draft}

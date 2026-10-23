@@ -63,15 +63,27 @@ test('a unit is a suffix inside an S box; the label is the title alone and the n
   // A copy times out; a wait does not.
   await nodeById(page, 'c').click();
   await properties(page).getByRole('tab', { name: 'General' }).click();
-  for (const name of ['Timeout (seconds)', 'Retry interval (seconds)']) {
-    const field = properties(page).getByRole('textbox', { name, exact: true });
-    expect(await unitGeometry(field), name).toEqual({
-      width: 120,
-      suffix: 's',
-      suffixInside: true,
-      labelLines: 1,
-    });
-  }
+  const interval = properties(page).getByRole('textbox', {
+    name: 'Retry interval (seconds)',
+    exact: true,
+  });
+  expect(await unitGeometry(interval)).toEqual({
+    width: 120,
+    suffix: 's',
+    suffixInside: true,
+    labelLines: 1,
+  });
+  // #1680 — a duration shows its units in its value (`12:00:00`), so no suffix.
+  const timeout = properties(page).getByRole('textbox', {
+    name: 'Timeout (duration)',
+    exact: true,
+  });
+  expect(await unitGeometry(timeout)).toEqual({
+    width: 120,
+    suffix: null,
+    suffixInside: false,
+    labelLines: 1,
+  });
   // The `?` keeps the field's whole name.
   await expect(
     properties(page).getByLabel('About Retry interval (seconds)', { exact: true }),

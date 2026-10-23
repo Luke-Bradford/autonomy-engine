@@ -13,7 +13,12 @@ import { useStore } from 'zustand';
 import { getSettings } from '../api/settings';
 import { getWorkspaceSettings, putWorkspaceSettings } from '../api/workspaceSettings';
 import { DraftNumberField, type DraftNumberParse } from './pipeline/DraftNumberField';
-import { parseTimeoutSeconds, parseWholeNumber } from './triggers/formFields';
+import { DURATION_UNIT } from '../lib/form/unit';
+import {
+  formatTimeoutDuration,
+  parseTimeoutDuration,
+  parseWholeNumber,
+} from './triggers/formFields';
 import { useGuardedLoad, type GuardedHandlers } from '../hooks/useGuardedLoad';
 import { FieldCell, FieldGrid } from '../lib/form/FieldGrid';
 import { displayTimeZoneName, displayTimeZoneOptions, formatTimestamp } from '../lib/displayTime';
@@ -114,13 +119,15 @@ function RunDefaults() {
           <FieldCell span="short">
             <DraftNumberField
               label="Activity timeout"
-              unit="seconds"
+              unit={DURATION_UNIT}
               stored={settings.defaultActivityTimeoutSeconds ?? undefined}
-              parse={parseTimeoutSeconds}
+              parse={parseTimeoutDuration}
+              format={formatTimeoutDuration}
+              inputMode="text"
               placeholder="none"
               about={
-                `The Timeout a new activity starts with. The default is ` +
-                `${DEFAULT_ACTIVITY_TIMEOUT_SECONDS} (12 hours). Blank creates activities with no timeout.`
+                `The Timeout a new activity starts with, as D.HH:MM:SS or whole seconds. The default is ` +
+                `${formatTimeoutDuration(DEFAULT_ACTIVITY_TIMEOUT_SECONDS)} (12 hours). Blank creates activities with no timeout.`
               }
               onCommit={(seconds) => save({ defaultActivityTimeoutSeconds: seconds ?? null })}
             />

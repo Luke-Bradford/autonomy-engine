@@ -916,6 +916,10 @@ row heights), not the layout.
   unit stays in the field's accessible name, out of sight ("Timeout (seconds)"), so its name, its
   `?` and its validation messages are unchanged. This applies to a top-level number or one-line
   field, which is an S on every surface, Settings included. A table's column header keeps "(ms)".
+  - **The one exception is a duration (#1680).** A timeout shown as `D.HH:MM:SS` (`12:00:00`)
+    carries its units in its value, so `DURATION_UNIT` draws no suffix and only names it:
+    "Timeout (duration)". Its value IS converted for display, which `unit` never does elsewhere, so
+    the field's `format` and `parse` must round-trip (`DraftNumberField`).
 
 **A drawer has no two-column grid.** #1396 first asked for one on wide screens. At 460px two columns
 would make controls about 100px wide beside their labels, too narrow for a URL, a JSON box or a time

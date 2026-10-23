@@ -116,16 +116,36 @@ describe('PolicyEditor (#1312)', () => {
 
   it('#1600 C0a — the timeout is a field on an execution activity, written as timeoutSeconds', () => {
     const { field, policy } = mount([node('a', 'http_request', { policy: { retry: 1 } })]);
-    expect(field('Timeout (seconds)')).toHaveProperty('value', '');
-    enter(field('Timeout (seconds)'), ' 300 ');
+    expect(field('Timeout (duration)')).toHaveProperty('value', '');
+    enter(field('Timeout (duration)'), ' 300 ');
     expect(policy()).toEqual({ retry: 1, timeoutSeconds: 300 });
-    enter(field('Timeout (seconds)'), '');
+    enter(field('Timeout (duration)'), '');
     expect(policy()).toEqual({ retry: 1 });
+  });
+
+  it('#1680 — the timeout takes D.HH:MM:SS and shows the stored seconds as one', () => {
+    const { field, policy } = mount([
+      node('a', 'http_request', { policy: { timeoutSeconds: 300 } }),
+    ]);
+    expect(field('Timeout (duration)')).toHaveProperty('value', '00:05:00');
+    enter(field('Timeout (duration)'), '1.02:03:04');
+    expect(policy()).toEqual({ timeoutSeconds: 93_784 });
+    expect(field('Timeout (duration)')).toHaveProperty('value', '1.02:03:04');
+    enter(field('Timeout (duration)'), '12:00');
+    expect(policy()).toEqual({ timeoutSeconds: 93_784 });
+  });
+
+  it('#1680 — a stored timeout changed underneath the field (an undo) re-shows as a duration', () => {
+    const { field, store } = mount([
+      node('a', 'http_request', { policy: { timeoutSeconds: 300 } }),
+    ]);
+    act(() => store.getState().setNodePolicy('a', { timeoutSeconds: 86_400 }));
+    expect(field('Timeout (duration)')).toHaveProperty('value', '1.00:00:00');
   });
 
   it('#1600 C0f — a timeout of 0 is refused at the field, and nothing is written', () => {
     const { field, policy, section } = mount([node('a', 'http_request', { policy: { retry: 1 } })]);
-    enter(field('Timeout (seconds)'), '0');
+    enter(field('Timeout (duration)'), '0');
     expect(policy()).toEqual({ retry: 1 });
     expect(within(section).getByText(/above 0/)).toBeTruthy();
   });
@@ -134,7 +154,7 @@ describe('PolicyEditor (#1312)', () => {
     const { field, section } = mount([
       node('a', 'http_request', { policy: { timeoutSeconds: 40_000_000 } }),
     ]);
-    expect(field('Timeout (seconds)')).toHaveProperty('value', '40000000');
+    expect(field('Timeout (duration)')).toHaveProperty('value', '462.23:06:40');
     expect(within(section).getByText(/timeoutSeconds: .*one year/)).toBeTruthy();
     expect(within(section).queryByText(/not enforced/)).toBeNull();
   });
@@ -146,7 +166,7 @@ describe('PolicyEditor (#1312)', () => {
         policy: { timeoutSeconds: 60, retry: 1 },
       }),
     ]);
-    expect(within(section).queryByLabelText('Timeout (seconds)')).toBeNull();
+    expect(within(section).queryByLabelText('Timeout (duration)')).toBeNull();
     expect(
       within(section).getByText(/policy\.timeoutSeconds is not supported on 'webhook'/),
     ).toBeTruthy();
