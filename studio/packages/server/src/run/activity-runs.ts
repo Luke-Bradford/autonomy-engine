@@ -255,9 +255,9 @@ function firstLoggedCount(
 }
 
 /** What an event says about its attempt's row: the user properties a dispatch
- * resolved (on a failure, when it never dispatched), the branch an If or Switch took,
- * the child a call started, the counts a success logged, the error a failure
- * gave. The caller decides whether the row may still take it (rule 1). */
+ * resolved (on its failure, when it never dispatched), the branch an If or
+ * Switch took, the child a call started, the counts a success logged, the error
+ * a failure gave. The caller decides whether the row may still take it (rule 1). */
 function fillDetail(
   row: ProjectedActivityRun,
   e: EngineEvent,

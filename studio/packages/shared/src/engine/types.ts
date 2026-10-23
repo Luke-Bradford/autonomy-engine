@@ -1517,7 +1517,11 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
      * on the failure of an attempt that never reached `node.dispatched` (a
      * pre-flight refusal, or a cancel that folded while it was queued), so its
      * activity-runs row is not blank. A dispatched attempt keeps them on
-     * `node.dispatched` alone. Redacted on a secure node as there. The reducer
+     * `node.dispatched` alone. Redacted on a secure node as there. NOT scrubbed
+     * against the attempt's held secrets as `node.dispatched`'s copy is (the
+     * stamp is the driver's, which holds none): the save refuses a secret ref or
+     * a secure-output read in a value, so only a plaintext the author typed into
+     * the doc could appear, and the version already stores that. The reducer
      * never reads it; additive + optional, so an older build reading a newer log
      * strips it.
      */

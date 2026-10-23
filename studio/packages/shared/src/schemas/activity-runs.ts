@@ -107,8 +107,9 @@ export const ActivityRunSchema = z.object({
    * reads its reason from the reducer's `resetSkips` (#1546). */
   skipReason: SkipReasonSchema.nullable(),
   /** #1600 OR41 C0d — the user properties this attempt's dispatch resolved
-   * (`node.dispatched.userProperties`), which the grid shows as columns; `null`
-   * for an attempt with none or that was never dispatched. */
+   * (`node.dispatched.userProperties`, or `node.failed.userProperties` for an
+   * attempt refused before dispatch, #1673), which the grid shows as columns;
+   * `null` for an attempt with none, and for a row a rerun reused. */
   userProperties: z.array(ResolvedUserPropertySchema).nullable(),
 });
 export type ActivityRun = z.infer<typeof ActivityRunSchema>;
