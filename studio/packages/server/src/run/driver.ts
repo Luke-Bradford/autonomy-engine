@@ -1072,7 +1072,7 @@ async function* oneEvent(event: EngineEvent): AsyncGenerator<EngineEvent> {
  */
 async function* withPreDispatchUserProperties(
   command: ExecutorCommand,
-  stream: AsyncGenerator<EngineEvent>,
+  stream: AsyncIterable<EngineEvent>,
 ): AsyncGenerator<EngineEvent> {
   const props = command.type === 'dispatchNode' ? command.resolvedUserProperties : undefined;
   if (props === undefined) {

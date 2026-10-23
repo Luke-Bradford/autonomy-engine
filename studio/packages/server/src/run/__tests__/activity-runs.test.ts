@@ -194,9 +194,9 @@ describe('#1484 activity runs — one row per attempt', () => {
       node('a', { userProperties: [{ name: 'Run', value: '${run.runId}' }] }),
     ]);
     const runId = await drive(db, pvId, stub({ a: { preflightError: 'no connection' } }));
-    expect(
-      loadEngineLog(db, runId).some(({ event: e }) => e.type === 'node.dispatched'),
-    ).toBe(false);
+    expect(loadEngineLog(db, runId).some(({ event: e }) => e.type === 'node.dispatched')).toBe(
+      false,
+    );
     const [a] = project(db, pvId, runId);
     expect(a).toMatchObject({ status: 'failure', attemptId: 'a#0' });
     expect(a?.userProperties).toEqual([{ name: 'Run', value: runId }]);

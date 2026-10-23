@@ -124,10 +124,7 @@ describe('CX2 — cancelling a run through the server driver', () => {
     const ids = ['a', 'b', 'c', 'd', 'e'];
     const run = seedRun(
       db,
-      [
-        node('r'),
-        ...ids.map((id) => node(id, { userProperties: [{ name: 'Who', value: id }] })),
-      ],
+      [node('r'), ...ids.map((id) => node(id, { userProperties: [{ name: 'Who', value: id }] }))],
       ids.map((id) => edge('r', id)),
     );
     const cancels = createRunCancels();
