@@ -1049,8 +1049,9 @@ export const ContainerSchema = z.object({
   /**
    * #1600 OR41 C0e — the container's General fields, the same ones an activity
    * has (`Node.description`, `Node.state`, `Node.onInactiveMarkAs`, and since
-   * #1673 `userProperties`, below) with the same meaning. They are not config: `CONTAINER_GENERAL_FIELD_NAMES` lists them, and
-   * the panel's General tab edits them outside the derived config form.
+   * #1673 `userProperties`, below) with the same meaning. They are not config:
+   * `CONTAINER_GENERAL_FIELD_NAMES` lists them, and the panel's General tab
+   * edits them outside the derived config form.
    *
    * `description` is free text, never evaluated, and absent rather than `''`.
    * Read-tolerant here; bounded by `StrictContainerSchema`.
