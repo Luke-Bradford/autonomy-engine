@@ -449,11 +449,14 @@ export function projectActivityRuns(
           durationMs: null,
           itemCount: null,
           iterations: [],
+          userProperties: null,
           position: rows.length,
         };
         groups.set(c.id, group);
       }
       group.status = now.status;
+      // #1673 — set once, as it entered (or was copied), and never changed.
+      group.userProperties = now.userProperties ?? null;
       group.reason = now.reason ?? null;
       group.skipReason = now.skipReason ?? null;
       if (c.kind === 'foreach') group.itemCount = now.items?.length ?? null;

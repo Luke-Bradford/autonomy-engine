@@ -15,6 +15,7 @@ import {
   type Param,
   type VariableDef,
   type GlobalRead,
+  type UserProperty,
 } from '@autonomy-studio/shared';
 import { ConfigFieldControl, type FieldPicker } from './ConfigFieldControl';
 import { activityLabels } from './activityLabel';
@@ -42,6 +43,7 @@ import { SubjectIssues } from './SubjectIssues';
 import { PanelTabs, type PanelTab } from './PanelTabs';
 import { containerTabs } from './containerTabs';
 import { GeneralBasics } from './NodeGeneral';
+import { UserPropertiesSection } from './NodeUserProperties';
 import { refusalLead, tabStatusMark } from './tabStatus';
 import { fieldSpan } from './configForm';
 import { FieldCell, FieldGrid } from '../../lib/form/FieldGrid';
@@ -114,6 +116,7 @@ function sameSeededInputs(a: Record<string, FieldInput>, b: Record<string, Field
 
 /** #1600 C0e — the General tab's key: not a config tab, so not in `containerTabs`. */
 const GENERAL_TAB = 'general';
+const NO_USER_PROPERTIES: readonly UserProperty[] = [];
 
 export function ContainerPanel({
   container,
@@ -125,6 +128,7 @@ export function ContainerPanel({
   globals,
   onApply,
   onGeneral,
+  onUserProperties,
   onCopy,
   onDuplicate,
 }: {
@@ -140,6 +144,9 @@ export function ContainerPanel({
   /** #1600 C0e — write the General tab's fields through (`setContainerGeneral`),
    * outside the config form's draft-and-Apply. */
   onGeneral: (patch: GeneralPatch) => void;
+  /** #1673 — write the General tab's user properties through
+   * (`setContainerUserProperties`). */
+  onUserProperties: (rows: readonly UserProperty[], coalesceKey?: string) => void;
   /** #935 — put this container and its body on the canvas clipboard. */
   onCopy: () => void;
   /** U21 (#935) — copy this container and its body; the store owns every rule. */
@@ -421,15 +428,22 @@ export function ContainerPanel({
     key: GENERAL_TAB,
     label: 'General',
     content: (
-      <GeneralBasics
-        owner="container"
-        descriptionLabel="Container description"
-        description={container.description ?? ''}
-        onDescription={(description) => onGeneral({ description })}
-        inactive={isInactive(container)}
-        markAs={inactiveMarkAs(container)}
-        onMarkAs={(markAs) => onGeneral({ markAs })}
-      />
+      <>
+        <GeneralBasics
+          owner="container"
+          descriptionLabel="Container description"
+          description={container.description ?? ''}
+          onDescription={(description) => onGeneral({ description })}
+          inactive={isInactive(container)}
+          markAs={inactiveMarkAs(container)}
+          onMarkAs={(markAs) => onGeneral({ markAs })}
+        />
+        {/* #1673 — no ƒx flyout yet: a typed `${}` is checked by the save. */}
+        <UserPropertiesSection
+          rows={container.userProperties ?? NO_USER_PROPERTIES}
+          write={onUserProperties}
+        />
+      </>
     ),
   };
   const configTabs = tabs.map(({ key, fields: onTab, ...tab }): PanelTab<string> => {

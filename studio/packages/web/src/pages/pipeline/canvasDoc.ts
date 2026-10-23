@@ -4,6 +4,7 @@ import {
   DELETE_ACTIVITY_TYPE,
   SCRIPT_ACTIVITY_TYPE,
   SCRIPT_NON_QUERY_BLOCK,
+  StrictContainerSchema,
   StrictNodeSchema,
   isInactive,
   validatePipelineDoc,
@@ -253,11 +254,23 @@ export function writeAccessWarnings(
  * row, an empty or duplicate name, or over-long text becomes a badge naming the
  * node and the row, read through `StrictNodeSchema.shape.userProperties`. The
  * row is its index (`userProperties[1].name`), as the ref check names it.
+ * #1673 — and a container's, under its own `container '<id>'` subject.
  */
-export function userPropertiesIssues(nodes: Node[]): string[] {
-  const schema = StrictNodeSchema.shape.userProperties;
-  return nodes.flatMap((n) => {
-    const check = schema.safeParse(n.userProperties);
+export function userPropertiesIssues(nodes: Node[], containers: Container[] = []): string[] {
+  const owners = [
+    ...nodes.map((n) => ({
+      subject: `node '${n.id}'`,
+      schema: StrictNodeSchema.shape.userProperties,
+      rows: n.userProperties,
+    })),
+    ...containers.map((c) => ({
+      subject: `container '${c.id}'`,
+      schema: StrictContainerSchema.shape.userProperties,
+      rows: c.userProperties,
+    })),
+  ];
+  return owners.flatMap(({ subject, schema, rows }) => {
+    const check = schema.safeParse(rows);
     return check.success
       ? []
       : check.error.issues.map((issue) => {
@@ -266,7 +279,7 @@ export function userPropertiesIssues(nodes: Node[]): string[] {
             row === undefined
               ? 'userProperties'
               : `userProperties[${String(row)}]${field.map((f) => `.${String(f)}`).join('')}`;
-          return `node '${n.id}': ${where}: ${issue.message}`;
+          return `${subject}: ${where}: ${issue.message}`;
         });
   });
 }

@@ -305,7 +305,7 @@ export function ActivityRunsTable({
     () => (rows === null ? [] : activityRunEntries(rows, groups)),
     [rows, groups],
   );
-  const propColumns = useMemo(() => userPropertyColumns(rows ?? []), [rows]);
+  const propColumns = useMemo(() => userPropertyColumns(rows ?? [], groups), [rows, groups]);
   const propPadding = propColumns.map((name) => <td key={`up:${name}`} />);
   const [searchParams, setSearchParams] = useLatestSearchParams();
   const view = readActivityRunsView(searchParams);
@@ -572,7 +572,14 @@ export function ActivityRunsTable({
                           </OneLine>
                         )}
                       </td>
-                      {propPadding}
+                      {/* #1673 — what the container resolved as it entered. */}
+                      {propColumns.map((name) => (
+                        <td key={`up:${name}`}>
+                          <UserPropertyCell
+                            prop={group.userProperties?.find((p) => p.name === name)}
+                          />
+                        </td>
+                      ))}
                     </tr>
                   );
                 }

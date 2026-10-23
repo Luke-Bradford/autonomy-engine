@@ -1,4 +1,4 @@
-import type { ActivityRun, ContainerKind } from '@autonomy-studio/shared';
+import type { ActivityRun, ActivityRunGroup, ContainerKind } from '@autonomy-studio/shared';
 
 /** The column headers, in order — the one list the header row and a test read. */
 export const ACTIVITY_RUN_COLUMNS = [
@@ -20,13 +20,17 @@ export const ACTIVITY_RUN_COLUMNS = [
 
 /**
  * #1600 OR41 C0d — the user-property columns that follow the fixed ones: each
- * distinct name any row of the run carries, in first-seen order. Read from every
- * row, not the filtered view, so a column does not come and go as filters
- * change.
+ * distinct name any row of the run carries, in first-seen order, then any only
+ * a container's group line carries (#1673). Read from every row and group, not
+ * the filtered view, so a column does not come and go as filters change.
  */
-export function userPropertyColumns(rows: readonly ActivityRun[]): string[] {
+export function userPropertyColumns(
+  rows: readonly ActivityRun[],
+  groups: readonly ActivityRunGroup[] = [],
+): string[] {
   const names = new Set<string>();
-  for (const row of rows) for (const p of row.userProperties ?? []) names.add(p.name);
+  for (const owner of [...rows, ...groups])
+    for (const p of owner.userProperties ?? []) names.add(p.name);
   return [...names];
 }
 

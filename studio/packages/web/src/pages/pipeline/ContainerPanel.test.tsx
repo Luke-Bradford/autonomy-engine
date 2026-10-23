@@ -49,6 +49,7 @@ function mount(container: Container, before: Container[] = []) {
       globals={[]}
       onApply={onApply}
       onGeneral={() => {}}
+      onUserProperties={() => {}}
       onCopy={() => {}}
       onDuplicate={() => {}}
     />,
@@ -364,6 +365,7 @@ describe('ContainerPanel — following an undo without losing a draft (U17)', ()
         globals={[]}
         onApply={onApply}
         onGeneral={() => {}}
+        onUserProperties={() => {}}
         onCopy={() => {}}
         onDuplicate={() => {}}
       />,
@@ -380,6 +382,7 @@ describe('ContainerPanel — following an undo without losing a draft (U17)', ()
           globals={[]}
           onApply={onApply}
           onGeneral={() => {}}
+          onUserProperties={() => {}}
           onCopy={() => {}}
           onDuplicate={() => {}}
         />,
@@ -448,6 +451,7 @@ describe('ContainerPanel — the expression flyout on exitWhen and items (#864)'
         globals={[]}
         onApply={onApply}
         onGeneral={() => {}}
+        onUserProperties={() => {}}
         onCopy={() => {}}
         onDuplicate={() => {}}
       />,
@@ -514,6 +518,7 @@ describe('ContainerPanel — Copy and Duplicate container (U21 #935)', () => {
     const handlers = {
       onApply: vi.fn(),
       onGeneral: vi.fn(),
+      onUserProperties: vi.fn(),
       onCopy: vi.fn(),
       onDuplicate: vi.fn(),
     };
@@ -684,8 +689,10 @@ describe('ContainerPanel — properties on tabs (#1477 OR29)', () => {
 });
 
 describe('ContainerPanel — the General tab (#1600 C0e)', () => {
+  const onUserProperties = vi.fn();
   function mountGeneral(container: Container) {
     const onGeneral = vi.fn();
+    onUserProperties.mockClear();
     render(
       <ContainerPanel
         container={container}
@@ -697,6 +704,7 @@ describe('ContainerPanel — the General tab (#1600 C0e)', () => {
         globals={[]}
         onApply={() => {}}
         onGeneral={onGeneral}
+        onUserProperties={onUserProperties}
         onCopy={() => {}}
         onDuplicate={() => {}}
       />,
@@ -741,5 +749,26 @@ describe('ContainerPanel — the General tab (#1600 C0e)', () => {
       target: { value: 'x' },
     });
     expect(onGeneral.mock.calls).toEqual([[{ markAs: 'failure' }], [{ description: 'x' }]]);
+  });
+
+  it('#1673 — shows its user properties and writes each edit through, outside Apply', () => {
+    mountGeneral({ ...LOOP, userProperties: [{ name: 'Batch', value: '${params.day}' }] });
+    expect(screen.getByRole('textbox', { name: 'User property 1 name' })).toHaveValue('Batch');
+    expect(screen.getByRole('textbox', { name: 'User property 1 value' })).toHaveValue(
+      '${params.day}',
+    );
+    fireEvent.change(screen.getByRole('textbox', { name: 'User property 1 value' }), {
+      target: { value: 'nightly' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add user property' }));
+    expect(onUserProperties.mock.calls).toEqual([
+      [[{ name: 'Batch', value: 'nightly' }], '0:value'],
+      [
+        [
+          { name: 'Batch', value: '${params.day}' },
+          { name: '', value: '' },
+        ],
+      ],
+    ]);
   });
 });

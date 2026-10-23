@@ -1079,6 +1079,39 @@ describe('#1484 activity runs — containers are groups', () => {
     expect(g!.startedAt).not.toBeNull();
   });
 
+  it('#1673 — a group carries the user properties its container resolved as it entered', async () => {
+    const { db } = freshDb();
+    const userProperties = [
+      { name: 'Run', value: '${run.runId}' },
+      { name: 'Kind', value: 'nightly' },
+    ];
+    const pvId = seedVersion(db, [node('inner')], [], [foreach({ userProperties })], [1, 2]);
+    const runId = await drive(db, pvId, stub());
+
+    const [g] = groupsOf(db, pvId, runId);
+    expect(g!.userProperties).toEqual([
+      { name: 'Run', value: runId },
+      { name: 'Kind', value: 'nightly' },
+    ]);
+    const none = seedVersion(db, [node('inner')], [], [foreach()], [1]);
+    expect(groupsOf(db, none, await drive(db, none, stub()))[0]!.userProperties).toBeNull();
+    // An inactive one never enters: its literals only, on its group line.
+    const off = seedVersion(
+      db,
+      [node('inner')],
+      [],
+      [foreach({ state: 'inactive', userProperties })],
+      [1],
+    );
+    expect(groupsOf(db, off, await drive(db, off, stub()))[0]).toMatchObject({
+      inactive: true,
+      userProperties: [
+        { name: 'Run', error: 'the activity is inactive' },
+        { name: 'Kind', value: 'nightly' },
+      ],
+    });
+  });
+
   it('fails the item a body failure ended, and gives the group the engine’s reason', async () => {
     const { db } = freshDb();
     const pvId = seedVersion(db, [node('inner')], [], [foreach()], [1, 2]);

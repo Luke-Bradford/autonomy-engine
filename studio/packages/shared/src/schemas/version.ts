@@ -522,6 +522,12 @@
 // NO BUMP for #1673 (part 3): an inactive activity's literal user properties
 // on `node.inactive`, and a rerun's copies on `run.reseeded.copiedUserProperties`.
 // Run-log fields only, additive and optional; the reducer reads neither.
+// NO BUMP for #1673 (part 4): `ContainerSchema.userProperties`, a container's
+// user properties. A pre-part-4 build strips them (plain `z.object`) and runs
+// the container exactly as authored: they are resolved into its run state
+// (`ContainerRunState.userProperties`, also stripped by an older build) and read
+// only by the activity runs grid. No event type or event field was added, so
+// an older build still parses every run a newer one logged.
 // BUMP 34→35 for #1600 OR41 C0e: `ContainerSchema.state` + `onInactiveMarkAs`
 // (and `description`), a container switched off. C0c's reason, for a box: a
 // pre-C0e build strips `state` and ENTERS the container for real, running its

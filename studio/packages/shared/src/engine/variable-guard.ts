@@ -147,9 +147,10 @@ export function variableGuardErrors(doc: ValidatedDoc, reads: VariableReads): st
         if (!writers.has(a) && !writers.has(b)) continue;
         const sa = owner.get(a);
         const sb = owner.get(b);
-        // A container's own field against a child of that container: `items` is
-        // evaluated once, before any child (`enterForeachStep`); `exitWhen` only
-        // once every child of the round is terminal (`stepContainers`).
+        // A container's own field against a child of that container: `items` and
+        // its user properties (#1673) are evaluated once, before any child
+        // (`enterForeachStep`); `exitWhen` only once every child of the round is
+        // terminal (`stepContainers`).
         if (sb === a || sa === b) continue;
         // Lift across scopes: containers do not nest, so a child stands in for
         // its container and the pair is compared at top level.

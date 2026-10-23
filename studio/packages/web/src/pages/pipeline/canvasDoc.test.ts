@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   type ConnectionPublic,
+  type Container,
   type Edge,
   type EdgeOn,
   type Node,
@@ -391,6 +392,18 @@ describe('userPropertiesIssues (#1600 OR41 C0d)', () => {
       ]),
     ).toEqual([
       "node 'a': userProperties[1].name: duplicate user property name 'x' (user property names must be unique within the activity)",
+    ]);
+  });
+
+  it("#1673 — names a container's under its own subject", () => {
+    const box: Container = {
+      id: 'c',
+      kind: 'stage',
+      children: [],
+      userProperties: [{ name: ' ', value: '' }],
+    };
+    expect(userPropertiesIssues([node('a')], [box])).toEqual([
+      "container 'c': userProperties[0].name: a user property needs a name",
     ]);
   });
 });

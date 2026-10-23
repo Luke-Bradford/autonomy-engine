@@ -27,6 +27,7 @@ import {
   terminalStatusOf,
 } from './types.js';
 import { literalOnly, resolveUserProperties } from './user-properties.js';
+import type { UserProperty } from '../schemas/pipeline.js';
 import {
   FAIL_ACTIVITY_TYPE,
   FILTER_ACTIVITY_TYPE,
@@ -1791,7 +1792,19 @@ export function createEngine(doc: EngineDoc): Engine {
     node: Node,
     item: { value: unknown } | undefined,
   ): ResolvedUserProperty[] | undefined {
-    const props = node.userProperties;
+    return resolveUserPropertiesIn(state, node.userProperties, item);
+  }
+
+  /**
+   * C0d's resolution for any owner's user properties: an activity's (in its
+   * scope) or a container's (#1673, in its outer scope, with no item). Never
+   * throws; `undefined` for none or an empty list.
+   */
+  function resolveUserPropertiesIn(
+    state: RunState,
+    props: readonly UserProperty[] | undefined,
+    item: { value: unknown } | undefined,
+  ): ResolvedUserProperty[] | undefined {
     if (props === undefined || props.length === 0) return undefined;
     const ctx = buildCtx(state);
     return resolveUserProperties(props, (template) => substitute(template, ctx, 0, item));
@@ -3433,14 +3446,27 @@ export function createEngine(doc: EngineDoc): Engine {
             // has none). Pure, like enter and skip: the outcome is a function of
             // the pinned doc, so replay re-derives it and no event is needed. Its
             // children stay `pending`, exactly as a skipped container's do.
+            //
+            // #1673 — its user properties, literals only, as an inactive
+            // activity's: an inactive container is never validated.
             const markAs = inactiveMarkAs(cc);
+            const props = cc.userProperties;
             state = withContainer(state, id, {
               status: markAs,
               inactive: true,
               ...(markAs === 'failure' && { reason: INACTIVE_CONTAINER_REASON }),
+              ...(props !== undefined &&
+                props.length > 0 && {
+                  userProperties: resolveUserProperties(props, literalOnly),
+                }),
             });
             changed = true;
           } else if (r === 'ready') {
+            // #1673 — the container's user properties, resolved ONCE as it enters,
+            // against the state it enters from (its outer scope: no `${item}`,
+            // none of its children yet). Pure state, like the entry itself, so
+            // replay re-derives them and no event records them.
+            const userProperties = resolveUserPropertiesIn(state, cc.userProperties, undefined);
             if (cc.kind === 'foreach') {
               // Foreach entry resolves `items` and may finish (bad items →
               // invalid_event) or exit immediately (zero items → success), so it
@@ -3448,9 +3474,13 @@ export function createEngine(doc: EngineDoc): Engine {
               const step = enterForeachStep(state, cc, diagnostics);
               if (step.finish) return { state: step.state, commands: [step.finish], diagnostics };
               state = step.state;
+              if (userProperties !== undefined)
+                state = withContainer(state, id, { userProperties });
               changed = true;
             } else {
               state = enterContainer(state, id);
+              if (userProperties !== undefined)
+                state = withContainer(state, id, { userProperties });
               // #4 A17 — a `loop` with a wall-clock `timeout` arms its durable
               // safety alarm the moment it goes `active`. Emitted HERE (the
               // pending→active transition, guarded above) so it fires EXACTLY once
@@ -3965,6 +3995,8 @@ export function createEngine(doc: EngineDoc): Engine {
           `impossible run.reseeded: inactive mark for container '${containerId}', which is not inactive in the pinned version`,
         );
         delete containers[containerId]!.inactive;
+        // #1673 — and the literal-only user properties that inactive run recorded.
+        delete containers[containerId]!.userProperties;
       }
       // Mirror the container's outputs into `state.outputs` — the SOLE source
       // `buildCtx` reads for `${nodes.<container>.output.*}`, exactly as
