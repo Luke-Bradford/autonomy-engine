@@ -12,6 +12,7 @@ import {
   type EngineEvent,
   type NodeRunStatus,
   type PipelineVersion,
+  type ResolvedUserProperty,
   type RunState,
   webCallbackOutcome,
 } from '@autonomy-studio/shared';
@@ -256,7 +257,7 @@ function firstLoggedCount(
 
 /** What an event says about its attempt's row: the user properties a dispatch
  * resolved (on its failure, when it never dispatched), or an engine-evaluated
- * activity or a call recorded on its own event (#1673), the branch an If or
+ * activity, a call or an inactive activity recorded on its own event (#1673), the branch an If or
  * Switch took, the child a call started, the counts a success logged, the error
  * a failure gave. The caller decides whether the row may still take it (rule 1). */
 function fillDetail(
@@ -468,8 +469,11 @@ export function projectActivityRuns(
   };
 
   let state = engine.seedState();
+  /** #1673 — the last reseed's copied user properties, for the reused rows. */
+  let copiedUserProperties: Record<string, ResolvedUserProperty[]> = {};
   for (const { event: e, ts, payload } of log) {
     openedNow.clear();
+    if (e.type === 'run.reseeded') copiedUserProperties = e.copiedUserProperties ?? {};
     const before = state;
     const reduced = engine.reduce(before, e);
     state = reduced.state;
@@ -600,6 +604,9 @@ export function projectActivityRuns(
       reused: true,
       // #1669 — the fold carried a copied inactive node's flag from the reseed.
       inactive: state.nodes[n.id]?.inactive === true,
+      userProperties: Object.hasOwn(copiedUserProperties, n.id)
+        ? copiedUserProperties[n.id]!
+        : null,
     }));
   // The carried rows lead, so every group made while stepping moves down past
   // them; a reused group leads with them.
@@ -614,6 +621,27 @@ export function projectActivityRuns(
     rows: [...carried, ...rows],
     groups: [...groups.values()].sort((a, b) => a.position - b.position),
   };
+}
+
+/**
+ * #1673 — what a rerun's reused rows show: for each node the reseed copies, the
+ * user properties on the source run's own last row for it. That is the row of
+ * the attempt whose success was copied (a Wait until's re-checks share one row,
+ * which keeps its first check's), or, for a node the source itself reused, the
+ * copy its reused row carries. Nodes with none are left out.
+ */
+export function copiedUserPropertiesOf(
+  sourceRows: readonly ProjectedActivityRun[],
+  frontier: readonly string[],
+): Record<string, ResolvedUserProperty[]> {
+  const last = new Map<string, ResolvedUserProperty[] | null>();
+  for (const row of sourceRows) last.set(row.nodeId, row.userProperties);
+  return Object.fromEntries(
+    frontier.flatMap((id) => {
+      const props = last.get(id);
+      return props === undefined || props === null ? [] : [[id, props] as const];
+    }),
+  );
 }
 
 /**
@@ -649,6 +677,7 @@ export function projectActivityRunsFromLog(
   const open = new Set<ProjectedActivityRun>();
   let frontier: readonly string[] = [];
   let copiedInactive: ReadonlySet<string> = new Set();
+  let copiedUserProperties: Record<string, ResolvedUserProperty[]> = {};
   /** #1600 C8d — a Wait until's row, by node, awaiting its next check's attempt. */
   const rechecks = new Map<string, ProjectedActivityRun>();
   for (const { event: e, ts, payload } of log) {
@@ -657,6 +686,7 @@ export function projectActivityRunsFromLog(
       // Trusted as logged, like `frontier`: this path has no doc to apply the
       // reducer's "inactive in the pinned version" guard against (#1669).
       copiedInactive = new Set(e.copiedInactive);
+      copiedUserProperties = e.copiedUserProperties ?? {};
     }
     if (e.type === 'node.recheckDue') {
       const row = byAttempt.get(e.previousAttemptId);
@@ -702,6 +732,7 @@ export function projectActivityRunsFromLog(
     ...emptyRow(`reused:${id}`, id, 'success', null),
     reused: true,
     inactive: copiedInactive.has(id),
+    userProperties: Object.hasOwn(copiedUserProperties, id) ? copiedUserProperties[id]! : null,
   }));
   return { rows: [...reusedRows, ...rows], groups: [] };
 }

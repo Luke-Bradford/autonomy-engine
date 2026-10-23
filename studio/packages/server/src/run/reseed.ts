@@ -6,11 +6,12 @@ import {
   type VariableWrite,
 } from '@autonomy-studio/shared';
 import { createRun, findLiveRerunOf, getRun } from '../repo/runs.js';
-import { loadEngineEvents, terminalFactFromLog } from './events.js';
+import { loadEngineLog, terminalFactFromLog } from './events.js';
 import { buildEngine, type DriveDeps } from './driver.js';
 import { GlobalStartError, resolveRunGlobals } from './globals.js';
 import type { Db } from '../repo/types.js';
 import { foldOutOfBand, publishThenDrive } from './out-of-band.js';
+import { copiedUserPropertiesOf, projectActivityRuns } from './activity-runs.js';
 
 /**
  * RS2 — the LIVE rerun-from-failed PRODUCER: start a NEW run `R2` that skips the
@@ -111,7 +112,8 @@ export function createReseedService(deps: DriveDeps): ReseedService {
       // terminality (#443) — never a re-fold. `success` is deliberately excluded:
       // rerun-from-failed resumes from a failure; a fully-successful run would copy
       // its entire graph and finish immediately (a simple rerun's job, F11).
-      const sourceEvents = loadEngineEvents(db, sourceRunId);
+      const sourceLog = loadEngineLog(db, sourceRunId);
+      const sourceEvents = sourceLog.map((entry) => entry.event);
       if (sourceEvents.length === 0) {
         throw new RerunNotEligibleError(sourceRunId, 'the run has no event log');
       }
@@ -164,6 +166,21 @@ export function createReseedService(deps: DriveDeps): ReseedService {
       // 3. The PURE frontier over R1's projection (strict successful prefix).
       const reseed = engine.reseedFrontier(sourceState);
       const { frontier, copiedOutputs, copiedContainers, childLinks, copiedInactive } = reseed;
+      // #1673 — the user properties R1 recorded for each copied node, so the
+      // rerun's reused rows show what the work it reused ran with. Display only:
+      // a projection that throws costs the reused rows their cells, never the rerun.
+      let copiedUserProperties: ReturnType<typeof copiedUserPropertiesOf> = {};
+      try {
+        copiedUserProperties = copiedUserPropertiesOf(
+          projectActivityRuns(doc, engine, sourceLog).rows,
+          frontier,
+        );
+      } catch (err) {
+        deps.log?.warn?.(
+          { err, sourceRunId },
+          'rerun: the source run’s activity runs would not project; reused rows show no user properties',
+        );
+      }
       // #844 V5 (spec V-D7) — exactly the COPIED nodes' variable writes, in R1's
       // log order (R1's own carried writes first, for a rerun of a rerun).
       const copiedVariableWrites = copiedVariableWritesOf(
@@ -228,6 +245,8 @@ export function createReseedService(deps: DriveDeps): ReseedService {
           copiedVariableWrites,
           // #1669 — likewise omitted when no copied node is inactive.
           ...(copiedInactive.length > 0 ? { copiedInactive } : {}),
+          // #1673 — likewise omitted when no copied node recorded any.
+          ...(Object.keys(copiedUserProperties).length > 0 ? { copiedUserProperties } : {}),
         };
 
         const { records: recs } = foldOutOfBand(

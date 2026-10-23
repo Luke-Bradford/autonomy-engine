@@ -26,7 +26,7 @@ import {
   VARIABLE_MAX_BYTES,
   terminalStatusOf,
 } from './types.js';
-import { resolveUserProperties } from './user-properties.js';
+import { literalOnly, resolveUserProperties } from './user-properties.js';
 import {
   FAIL_ACTIVITY_TYPE,
   FILTER_ACTIVITY_TYPE,
@@ -1954,9 +1954,22 @@ export function createEngine(doc: EngineDoc): Engine {
     );
   }
 
-  /** #1600 C0c — the one place an inactive node's command is built (dispatch and resume). */
+  /**
+   * #1600 C0c — the one place an inactive node's command is built (dispatch and
+   * resume). #1673 — it carries the node's user properties for its placeholder
+   * run to record, literals only (`literalOnly`): an inactive node was never
+   * validated, so none of its `${}`s is evaluated.
+   */
   function inactivateCommand(node: Node, sid: string, attemptId: string): EngineCommand {
-    return { type: 'inactivateNode', nodeId: sid, attemptId, markAs: inactiveMarkAs(node) };
+    const command: Extract<EngineCommand, { type: 'inactivateNode' }> = {
+      type: 'inactivateNode',
+      nodeId: sid,
+      attemptId,
+      markAs: inactiveMarkAs(node),
+    };
+    const props = node.userProperties;
+    if (props === undefined || props.length === 0) return command;
+    return { ...command, resolvedUserProperties: resolveUserProperties(props, literalOnly) };
   }
 
   /**

@@ -4,11 +4,13 @@
  * and a pipeline call never reach the executor. Their command carries the
  * node's user properties, resolved as a dispatch's are, for the driver to
  * record on the event it appends; a restart's re-emit carries the same.
+ * Part 3: so does an inactive activity's placeholder run, literals only.
  */
 import { describe, expect, it } from 'vitest';
 import type { EngineCommand, EngineEvent, Node, RunState } from '../types.js';
 import { createEngine } from '../reduce.js';
 import { SECURE_REDACTED } from '../secure.js';
+import { INACTIVE_USER_PROPERTY_UNRESOLVED } from '../user-properties.js';
 import { WEB_ACTIVITY_TYPE } from '../../catalog/types.js';
 import { getActivity } from '../../catalog/registry.js';
 
@@ -176,6 +178,11 @@ describe('#1673 — withheld on a secure engine-evaluated activity', () => {
       node('fail', { message: 'stop' }),
       { type: 'node.failed', ...at, error: 'stop', kind: 'permanent' },
     ],
+    [
+      'an inactive Web',
+      node(WEB_ACTIVITY_TYPE, { url: '/jobs', method: 'GET' }, { state: 'inactive' }),
+      { type: 'node.inactive', ...at, markAs: 'success' },
+    ],
   ];
 
   it.each(EVENTS)('%s, on either flag', (_label, n, event) => {
@@ -185,5 +192,124 @@ describe('#1673 — withheld on a secure engine-evaluated activity', () => {
     }
     const plain = engineFor(n).redact(event);
     expect('userProperties' in plain && plain.userProperties).toEqual(props);
+  });
+});
+
+describe('#1673 — an inactive activity records its literal user properties, and evaluates none', () => {
+  const MIXED: Node['userProperties'] = [
+    { name: 'Kind', value: 'nightly' },
+    { name: 'Escaped', value: 'cost $${x}' },
+    { name: 'Source', value: 'in/${params.file}' },
+    { name: 'Whole', value: '${params.file}' },
+    { name: 'Unterminated', value: 'in/${params.file' },
+  ];
+  const RECORDED = [
+    { name: 'Kind', value: 'nightly' },
+    { name: 'Escaped', value: 'cost ${x}' },
+    { name: 'Source', error: INACTIVE_USER_PROPERTY_UNRESOLVED },
+    { name: 'Whole', error: INACTIVE_USER_PROPERTY_UNRESOLVED },
+    { name: 'Unterminated', error: INACTIVE_USER_PROPERTY_UNRESOLVED },
+  ];
+  const off = (type: string, config: Record<string, unknown>, over: Partial<Node> = {}) =>
+    node(type, config, { state: 'inactive', userProperties: MIXED, ...over });
+  const OFF: [string, Node][] = [
+    ['an inactive If', off('if', { condition: '${true}' })],
+    [
+      'an inactive Web',
+      off(WEB_ACTIVITY_TYPE, { url: '/jobs', method: 'GET' }, { connectionId: 'c1' }),
+    ],
+  ];
+
+  it.each(OFF)('%s, on its command and on a restart’s re-emit', (_label, n) => {
+    const eng = engineFor(n);
+    const first = eng.reduce(eng.seedState(), started);
+    const cmd = first.commands.find((c) => c.type === 'inactivateNode');
+    expect(cmd, JSON.stringify(first.commands)).toBeDefined();
+    expect(carried(cmd)).toEqual(RECORDED);
+    const again = eng
+      .reduce(first.state, { type: 'run.resumed', runId: 'r1', reason: 'boot_reconcile' })
+      .commands.find((c) => c.type === 'inactivateNode');
+    expect(carried(again)).toEqual(RECORDED);
+  });
+
+  it('carries nothing when the node has none', () => {
+    const n = off('if', { condition: '${true}' }, { userProperties: undefined });
+    const cmd = engineFor(n)
+      .reduce(engineFor(n).seedState(), started)
+      .commands.find((c) => c.type === 'inactivateNode');
+    expect(cmd).toBeDefined();
+    expect(cmd).not.toHaveProperty('resolvedUserProperties');
+  });
+
+  it('never reads a secure activity’s output into the log, though save never checked it', () => {
+    const secret: Node = {
+      id: 's',
+      type: 'test_activity',
+      config: {},
+      position: { x: 0, y: 0 },
+      policy: { secureOutput: true },
+    };
+    const reader = off(
+      'if',
+      { condition: '${true}' },
+      {
+        id: 'r',
+        userProperties: [{ name: 'Leak', value: '${nodes.s.outputs.text}' }],
+      },
+    );
+    const eng = createEngine({
+      nodes: [secret, reader],
+      edges: [{ id: 's->r', from: 's', to: 'r', on: 'success' }],
+      containers: [],
+      variables: [],
+    });
+    let s = eng.reduce(eng.seedState(), started).state;
+    s = eng.reduce(s, {
+      type: 'node.dispatched',
+      runId: 'r1',
+      nodeId: 's',
+      attemptId: 's#0',
+      idempotent: true,
+    }).state;
+    const r = eng.reduce(s, {
+      type: 'node.succeeded',
+      runId: 'r1',
+      nodeId: 's',
+      attemptId: 's#0',
+      outputs: { text: 'plaintext secret' },
+    });
+    const cmd = r.commands.find((c) => c.type === 'inactivateNode');
+    expect(cmd, JSON.stringify(r.commands)).toBeDefined();
+    expect(carried(cmd)).toEqual([{ name: 'Leak', error: INACTIVE_USER_PROPERTY_UNRESOLVED }]);
+    expect(JSON.stringify(r.commands)).not.toContain('plaintext secret');
+  });
+
+  it('inside a ForEach body, records each item’s literals and evaluates no `${item}`', () => {
+    const child = off(
+      'if',
+      { condition: '${true}' },
+      {
+        id: 'c',
+        userProperties: [
+          { name: 'Kind', value: 'nightly' },
+          { name: 'Item', value: '${item}' },
+        ],
+      },
+    );
+    const eng = createEngine({
+      nodes: [child],
+      edges: [],
+      containers: [{ id: 'fe', kind: 'foreach', children: ['c'], items: '${createArray(1, 2)}' }],
+      variables: [],
+    } as never);
+    const r = eng.reduce(eng.seedState(), started);
+    const cmds = r.commands.filter((c) => c.type === 'inactivateNode');
+    expect(cmds.length, JSON.stringify(r.commands)).toBeGreaterThan(0);
+    for (const c of cmds) {
+      expect(carried(c)).toEqual([
+        { name: 'Kind', value: 'nightly' },
+        { name: 'Item', error: INACTIVE_USER_PROPERTY_UNRESOLVED },
+      ]);
+    }
   });
 });

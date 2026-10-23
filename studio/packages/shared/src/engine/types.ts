@@ -1248,7 +1248,8 @@ export type ResolvedUserProperty = z.infer<typeof ResolvedUserPropertySchema>;
  * for an activity the executor runs; for one the engine evaluates, the event
  * its command appends (`condition.evaluated`, `switch.evaluated`,
  * `variable.set`, `variable.append`, `node.succeeded`, `node.failed`,
- * `timer.waitScheduled`, `externalWait.created`); for a pipeline call, its
+ * `timer.waitScheduled`, `externalWait.created`); for an inactive activity,
+ * its placeholder `node.inactive`; for a pipeline call, its
  * attempt's first event (`call.started`, or the `call.returned`,
  * `call.detached` or `node.failed` that came first, as for a call that never
  * started). On a command (`resolvedUserProperties`), what
@@ -1402,6 +1403,14 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
      * of `frontier`. Absent on older logs and on a reseed that copied none.
      */
     copiedInactive: z.array(z.string()).optional(),
+    /**
+     * #1673 — for each copied node, the user properties the source run recorded
+     * for the attempt it copies (or carried, for one it had itself copied), so
+     * a reused row shows what that work ran with. Already redacted, as the
+     * source logged them under the same version. Read only by the activity runs
+     * grid, never the reducer. Absent on older logs and when none recorded any.
+     */
+    copiedUserProperties: z.record(z.string(), z.array(ResolvedUserPropertySchema)).optional(),
   }),
   z.object({
     type: z.literal('node.dispatched'),
@@ -1486,6 +1495,7 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     nodeId: z.string(),
     attemptId: z.string(),
     markAs: InactiveMarkAsSchema,
+    userProperties: RecordedUserPropertiesSchema,
   }),
   z.object({
     type: z.literal('node.failed'),
@@ -2780,6 +2790,7 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
     nodeId: z.string(),
     attemptId: z.string(),
     markAs: InactiveMarkAsSchema,
+    resolvedUserProperties: RecordedUserPropertiesSchema,
   }),
   z.object({
     /**

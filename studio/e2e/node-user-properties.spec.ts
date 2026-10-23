@@ -4,7 +4,13 @@ import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { activityRowById, activityRuns, properties } from './support/panels';
-import { fireAndSettle, nodeById, openSeededCanvas, seedVersion } from './support/seedDoc';
+import {
+  fireAndSettle,
+  nodeById,
+  openSeededCanvas,
+  seedVersion,
+  waitForRunToSettle,
+} from './support/seedDoc';
 import { seedConnection } from './support/seedResources';
 import { fluentRootReady } from './support/theme';
 
@@ -185,6 +191,71 @@ test('user properties: an activity the engine evaluates takes them and shows the
   await expect(headers.filter({ hasText: /^Why$/ })).toHaveCount(1);
   const texts = await headers.allTextContents();
   await expect(row.locator('td').nth(texts.indexOf('Why'))).toHaveText('gate nightly');
+
+  await expectQuiet(page, problems);
+});
+
+/**
+ * #1673 part 3 — an inactive activity records its literal user properties and
+ * evaluates none of its `${}`s, and a rerun's reused rows show what the source
+ * run recorded for the work they copy. `off` (inactive, marked Succeeded) and
+ * `gate` are copied; `stop` fails R1 and runs again in R2.
+ */
+test('user properties: a rerun’s reused rows show the source’s, and an inactive activity records only literals', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const { pipelineVersionId } = await seedVersion(page, 'user properties on a rerun', {
+    params: [{ name: 'label', type: 'string' as const, required: false, default: 'nightly' }],
+    nodes: [
+      {
+        id: 'off',
+        type: 'if',
+        config: { condition: '${true}' },
+        position: { x: 0, y: 0 },
+        state: 'inactive',
+        userProperties: [
+          { name: 'Kind', value: 'batch' },
+          { name: 'Why', value: 'off ${params.label}' },
+        ],
+      },
+      {
+        id: 'gate',
+        type: 'if',
+        config: { condition: '${equals(1, 1)}' },
+        position: { x: 0, y: 160 },
+        userProperties: [{ name: 'Why', value: 'gate ${params.label}' }],
+      },
+      { id: 'stop', type: 'fail', config: { message: 'planned' }, position: { x: 300, y: 160 } },
+    ],
+    edges: [{ id: 'e1', from: 'gate', to: 'stop', on: 'success' }],
+  });
+  const source = await fireAndSettle(page, pipelineVersionId, 'user properties on a rerun');
+  // The inactive activity's own run records its literal and refuses its `${}`.
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(source)}`);
+  await fluentRootReady(page);
+  const sourceHeaders = await activityRuns(page).locator('thead th').allTextContents();
+  await expect(
+    activityRowById(page, 'off').locator('td').nth(sourceHeaders.indexOf('Why')),
+  ).toHaveText('Not resolved: the activity is inactive');
+
+  const res = await page.request.post(`/api/runs/${encodeURIComponent(source)}/rerun-from-failed`);
+  expect(res.status()).toBe(202);
+  const { runId } = (await res.json()) as { runId: string };
+  await waitForRunToSettle(page, runId);
+
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+  await fluentRootReady(page);
+  const headers = activityRuns(page).locator('thead th');
+  await expect(headers.filter({ hasText: /^Why$/ })).toHaveCount(1);
+  const texts = await headers.allTextContents();
+  const cell = (id: string, name: string) =>
+    activityRowById(page, id).locator('td').nth(texts.indexOf(name));
+  await expect(activityRowById(page, 'gate')).toHaveCount(1);
+  await expect(cell('gate', 'Why')).toHaveText('gate nightly');
+  await expect(cell('off', 'Kind')).toHaveText('batch');
+  await expect(cell('off', 'Why')).toHaveText('Not resolved: the activity is inactive');
 
   await expectQuiet(page, problems);
 });

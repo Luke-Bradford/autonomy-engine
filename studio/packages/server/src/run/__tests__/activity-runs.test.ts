@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CATALOG_VERSION,
+  INACTIVE_USER_PROPERTY_UNRESOLVED,
   type Container,
   type Edge,
   type EngineEvent,
@@ -18,6 +19,7 @@ import {
   INACTIVE_FAILED_MESSAGE,
   projectActivityRuns,
   projectActivityRunsFromLog,
+  copiedUserPropertiesOf,
 } from '../activity-runs.js';
 import {
   buildEngine,
@@ -240,6 +242,50 @@ describe('#1484 activity runs — one row per attempt', () => {
       expect(byId(rows, id), id).toEqual(want(name));
       expect(byId(logRows, id), `${id} (log basis)`).toEqual(want(name));
     }
+  });
+
+  it('#1673 — an inactive activity carries its literal ones from its placeholder run', async () => {
+    const { db } = freshDb();
+    const props = [
+      { name: 'Kind', value: 'nightly' },
+      { name: 'Run', value: '${run.runId}' },
+    ];
+    const pvId = seedVersion(db, [
+      node('a', { state: 'inactive', userProperties: props }),
+      node('b', { state: 'inactive', onInactiveMarkAs: 'failure', userProperties: props }),
+    ]);
+    const runId = await drive(db, pvId, stub());
+    const want = [
+      { name: 'Kind', value: 'nightly' },
+      { name: 'Run', error: INACTIVE_USER_PROPERTY_UNRESOLVED },
+    ];
+    const inactive = loadEngineLog(db, runId).filter(({ event: e }) => e.type === 'node.inactive');
+    expect(inactive).toHaveLength(2);
+    for (const rows of [
+      project(db, pvId, runId),
+      projectActivityRunsFromLog(loadEngineLog(db, runId)).rows,
+    ]) {
+      expect(rows.map((r) => [r.activityId, r.status, r.inactive, r.userProperties])).toEqual([
+        ['a', 'success', true, want],
+        ['b', 'failure', true, want],
+      ]);
+    }
+  });
+
+  it('#1673 — withholds an inactive activity’s on a secure node in the log itself', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [
+      node('a', {
+        state: 'inactive',
+        policy: { secureInput: true },
+        userProperties: [{ name: 'Kind', value: 'nightly' }],
+      }),
+    ]);
+    const runId = await drive(db, pvId, stub());
+    const inactive = loadEngineLog(db, runId).find(({ event: e }) => e.type === 'node.inactive');
+    expect(inactive?.event).toMatchObject({
+      userProperties: [{ name: 'Kind', value: SECURE_REDACTED }],
+    });
   });
 
   it('#1673 — a Switch, a Filter, a call that started and a Webhook carry them too', async () => {
@@ -792,6 +838,39 @@ describe('#1484 activity runs — one row per attempt', () => {
       inactive: true,
       status: 'success',
     });
+  });
+
+  it('#1673 — a reused row shows the user properties the reseed copied', () => {
+    const doc = {
+      nodes: [node('a'), node('b')],
+      edges: [edge('a', 'b')],
+      containers: [],
+      variables: [],
+    } as never as Parameters<typeof buildEngine>[0];
+    const at = (ts: number, event: EngineEvent) => ({ ts, event, payload: event });
+    const log = [
+      at(1, {
+        type: 'run.started',
+        runId: 'R2',
+        pipelineVersionId: 'pv',
+        params: {},
+        rerunOf: 'R1',
+      } satisfies EngineEvent),
+      at(2, {
+        type: 'run.reseeded',
+        runId: 'R2',
+        sourceRunId: 'R1',
+        frontier: ['a', 'b'],
+        copiedOutputs: { a: {}, b: {} },
+        copiedContainers: {},
+        copiedUserProperties: { b: [{ name: 'Run', value: 'R1' }] },
+      } satisfies EngineEvent),
+    ];
+    const rows = projectActivityRuns(doc, buildEngine(doc), log).rows;
+    expect(rows.map((r) => [r.key, r.userProperties])).toEqual([
+      ['reused:a', null],
+      ['reused:b', [{ name: 'Run', value: 'R1' }]],
+    ]);
   });
 
   it('shows what a rerun reused, and the refusal of a called pipeline as its error', () => {
@@ -1609,6 +1688,25 @@ describe('#1557 activity runs from the log alone — the version no longer resol
     ]);
   });
 
+  it('#1673 — a reused row shows the user properties the reseed copied', () => {
+    const { rows } = projectActivityRunsFromLog([
+      at(1, { ...started, rerunOf: 'R0' }),
+      at(2, {
+        type: 'run.reseeded',
+        runId: 'R',
+        sourceRunId: 'R0',
+        frontier: ['a', 'b'],
+        copiedOutputs: { a: {}, b: {} },
+        copiedContainers: {},
+        copiedUserProperties: { a: [{ name: 'Run', value: 'R0' }] },
+      }),
+    ]);
+    expect(rows.map((r) => [r.key, r.userProperties])).toEqual([
+      ['reused:a', [{ name: 'Run', value: 'R0' }]],
+      ['reused:b', null],
+    ]);
+  });
+
   it("leads with a rerun's reused frontier, and gives a refused call its reason", () => {
     const { rows } = projectActivityRunsFromLog([
       at(1, { ...started, rerunOf: 'R0' }),
@@ -1718,5 +1816,21 @@ describe('#1600 OR41 C7d — a Lookup’s count fills the Rows read column', () 
     const pvId = seedVersion(db, [node('lk')]);
     const runId = await drive(db, pvId, stub({ lk: { outputs: { count: 7 } } }));
     expect(projectActivityRunsFromLog(loadEngineLog(db, runId)).rows[0]?.rowsRead).toBeNull();
+  });
+});
+
+describe('#1673 — copiedUserPropertiesOf, the user properties a rerun copies', () => {
+  const row = (nodeId: string, value: string | null) => ({
+    nodeId,
+    userProperties: value === null ? null : [{ name: 'p', value }],
+  });
+  it('takes each copied node’s last row, and leaves out a node with none or not copied', () => {
+    const rows = [
+      row('a', 'retry'),
+      row('a', 'kept'),
+      row('b', null),
+      row('c', 'not copied'),
+    ] as never as Parameters<typeof copiedUserPropertiesOf>[0];
+    expect(copiedUserPropertiesOf(rows, ['a', 'b'])).toEqual({ a: [{ name: 'p', value: 'kept' }] });
   });
 });

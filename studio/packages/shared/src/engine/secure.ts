@@ -255,6 +255,7 @@ export function secureEventNodeId(event: EngineEvent): string | undefined {
     case 'activity.agentTelemetry':
     case 'activity.toolCalled':
     case 'timer.waitScheduled': // #1673 — a Wait's user properties are on the event that parks it.
+    case 'node.inactive': // #1673 — any activity can be switched off, a secure one included.
       return event.nodeId;
     // #844 V5 (spec V-D8) — listed EXPLICITLY as never secure rather than left to
     // the default: a `set`/`append` node cannot carry a secure flag
