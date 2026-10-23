@@ -17,7 +17,8 @@ import { FAILURE_CODES, MAX_TIMER_DELAY_MS, type EngineEvent } from '@autonomy-s
  *
  * Cooperative: the timeout is enforced through the attempt's `AbortSignal`, so an
  * adapter that cannot stop mid-call overruns it. A Postgres read checks the signal
- * between batches, and better-sqlite3 is synchronous, so a long SQLite statement
+ * between batches (a Postgres Script also cancels its block in flight at the
+ * server, #1800), and better-sqlite3 is synchronous, so a long SQLite statement
  * blocks the event loop the timer runs on. There is deliberately no watchdog
  * (the run-cancellation spec settles the same for cancel): the pump waits for
  * the adapter so that no adapter work outlives the drive lock.

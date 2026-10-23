@@ -1,3 +1,4 @@
+import net from 'node:net';
 import pg from 'pg';
 import {
   DEFAULT_POSTGRES_CONNECT_TIMEOUT_MS,
@@ -109,6 +110,13 @@ export interface PostgresClient {
    * "skipping"). A Script under *Capture messages* listens.
    */
   on?(event: 'notice', listener: (notice: PostgresNotice) => void): unknown;
+  /**
+   * #1800 — the session's key from the server's BackendKeyData, which
+   * `pg.Client` keeps once connected. A CancelRequest names the session by it
+   * (`armPostgresCancel`). Optional, so a fake need not carry one.
+   */
+  readonly processID?: unknown;
+  readonly secretKey?: unknown;
 }
 
 /**
@@ -305,14 +313,128 @@ const PG_CLIENT_QUERY_TIMEOUT_MESSAGE = 'Query read timeout';
 /**
  * #1600 OR41 C10b-2b — whether a `pg` throw is a statement timeout: the
  * server's `57014` or pg's own code-less client timer. A Script names its Block
- * timeout when it was the bound. (`57014` is also a `pg_cancel_backend`, which
- * nothing here sends, or a lower `statement_timeout` a block set through
- * `set_config`, which then reads as the Timeout per block.)
+ * timeout when it was the bound. (`57014` is also a cancel: the Script's own
+ * CancelRequest (#1800), which it tells apart by its aborted signal and checks
+ * first, or a lower `statement_timeout` a block set through `set_config`, which
+ * then reads as the Timeout per block.)
  */
 export function isPostgresStatementTimeout(err: unknown): boolean {
   const code = (err as { code?: unknown } | null)?.code;
   if (typeof code === 'string') return code === QUERY_CANCELED;
   return err instanceof Error && err.message === PG_CLIENT_QUERY_TIMEOUT_MESSAGE;
+}
+
+/** Where a CancelRequest goes, and how long it may take. */
+export interface PostgresCancelTarget {
+  readonly host: string;
+  readonly port: number;
+  readonly timeoutMs: number;
+}
+
+/** Sends one CancelRequest. Resolves whatever happens; it never rejects. */
+export type PostgresCancelSender = (
+  target: PostgresCancelTarget,
+  processID: number,
+  secretKey: number,
+) => Promise<void>;
+
+/** The CancelRequest's request code (protocol 3.0, `1234 << 16 | 5678`). */
+const CANCEL_REQUEST_CODE = 80877102;
+
+/** The connection's server, its port and connect timeout as the session's own. */
+export function postgresCancelTargetOf(config: {
+  host: string;
+  port?: number;
+  connectTimeoutMs?: number;
+}): PostgresCancelTarget {
+  return {
+    host: config.host,
+    port: config.port ?? DEFAULT_POSTGRES_PORT,
+    timeoutMs: config.connectTimeoutMs ?? DEFAULT_POSTGRES_CONNECT_TIMEOUT_MS,
+  };
+}
+
+/**
+ * #1800 — ask the server to cancel the statement a session is running: the
+ * protocol's CancelRequest, on a new connection, naming the session by its
+ * BackendKeyData. The server answers nothing and closes; the statement then
+ * fails `57014`, or has already finished, in which case the request is
+ * ignored.
+ *
+ * Why this and not the alternatives:
+ * - Destroying the session's socket stops nothing on the server, and outside a
+ *   transaction the statement could still commit while the run reports it
+ *   cancelled.
+ * - `pg_cancel_backend(pid)` from a second session needs a fresh login, and
+ *   behind a transaction-pooling pooler a remembered backend pid can belong to
+ *   another client by then. A pooler routes a CancelRequest to the right one.
+ * - `pg.Client#cancel` attaches no `error` listener to its connection, so a
+ *   refused connection would be an uncaught `error` that ends the server.
+ *
+ * Plaintext, as `pg.Client#cancel` (pg 8.23 writes it on TCP connect, before
+ * any SSL negotiation) and libpq before 17 send it: the key travels in the
+ * clear and the server is not verified. An on-path party could then cancel
+ * this session's statements, which resetting its TCP connection already
+ * allows. A unix-socket host is reached at `<dir>/.s.PGSQL.<port>`, as pg does.
+ *
+ * Best effort: every error is swallowed, and the socket is destroyed at
+ * `timeoutMs`, so a host that never answers cannot hold it open.
+ */
+export const sendPostgresCancelRequest: PostgresCancelSender = (target, processID, secretKey) =>
+  new Promise((resolve) => {
+    const request = Buffer.alloc(16);
+    request.writeInt32BE(16, 0);
+    request.writeInt32BE(CANCEL_REQUEST_CODE, 4);
+    request.writeInt32BE(processID, 8);
+    request.writeInt32BE(secretKey, 12);
+    const socket = target.host.startsWith('/')
+      ? net.connect(`${target.host}/.s.PGSQL.${String(target.port)}`)
+      : net.connect(target.port, target.host);
+    const done = (): void => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve();
+    };
+    const timer = setTimeout(done, target.timeoutMs);
+    timer.unref();
+    socket.once('connect', () => socket.write(request));
+    // `on`, not `once`: a second `error` with no listener would end the server.
+    socket.on('error', done);
+    socket.once('close', done);
+  });
+
+function isInt32(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) >= -(2 ** 31) && (value as number) < 2 ** 31;
+}
+
+/**
+ * #1800 — send `client`'s session a CancelRequest when `signal` aborts, or at
+ * once if it already has. Returns the disarm, called when the statement ends,
+ * so a later abort sends nothing. Arms nothing when the client carries no
+ * protocol-3.0 key (a fake, or a longer key from a later protocol). The send is
+ * not awaited: the statement's own failure is what the caller waits on.
+ */
+export function armPostgresCancel(
+  client: PostgresClient,
+  target: PostgresCancelTarget,
+  signal: AbortSignal,
+  send: PostgresCancelSender = sendPostgresCancelRequest,
+): () => void {
+  const { processID, secretKey } = client;
+  if (!isInt32(processID) || !isInt32(secretKey)) return () => undefined;
+  const fire = (): void => {
+    try {
+      send(target, processID, secretKey).catch(() => undefined);
+    } catch {
+      // Best effort: a throw from a listener would surface as uncaught.
+    }
+  };
+  if (signal.aborted) {
+    fire();
+    return () => undefined;
+  }
+  signal.addEventListener('abort', fire, { once: true });
+  return () => signal.removeEventListener('abort', fire);
 }
 
 /** Whether a `pg` throw is retryable: a named code, or, on a read only, pg's own

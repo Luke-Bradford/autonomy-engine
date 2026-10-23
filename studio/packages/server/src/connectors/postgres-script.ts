@@ -18,10 +18,14 @@ import {
   type PostgresStatement,
 } from './postgres-named-parameters.js';
 import {
+  QUERY_CANCELED,
+  armPostgresCancel,
   isPostgresStatementTimeout,
   openSession,
+  postgresCancelTargetOf,
   readFailure,
   statementTimeoutMsOf,
+  type PostgresCancelSender,
   type PostgresClient,
   type PostgresClientFactory,
   type PostgresClientOptions,
@@ -78,9 +82,20 @@ import type { ActivityContext, ActivityEvent } from './types.js';
  *
  * **Bounded by the connection's statement timeout.** Each block is one
  * statement under the connection's `statementTimeoutMs` (30 s by default), both
- * the server's and pg's own timer (`clientOptionsFor`). Cancel is checked
- * between blocks and before a COMMIT; a block in flight runs to completion or
- * to that timeout, which it cannot lift (`SCRIPT_POSTGRES_STATEMENTS`).
+ * the server's and pg's own timer (`clientOptionsFor`), which it cannot lift
+ * (`SCRIPT_POSTGRES_STATEMENTS`).
+ *
+ * **Cancel reaches the block in flight (#1800).** Cancel and the activity
+ * timeout are checked between blocks and before a COMMIT, and while a block
+ * runs an abort sends the server a CancelRequest for the session
+ * (`armPostgresCancel`). The block then fails `57014`, read as `cancelled`;
+ * a cancelled statement applied nothing, so only a `CALL` or `DO` counts as
+ * possibly applied, as for any other refusal. The server cancels whatever the
+ * session is running when the request lands. One that lands after the block
+ * finished finds the session idle, which ignores it, or in this script's own
+ * ROLLBACK, which the closing session undoes anyway; the next check stops the
+ * script before anything else is sent. None is sent during BEGIN, COMMIT or
+ * ROLLBACK.
  *
  * **Out and In-out parameters (C10b-2a).** An Out parameter binds NULL, whatever
  * value it was given (ADF ignores it too); an In-out one sends its value. Both
@@ -287,6 +302,8 @@ export async function executePostgresScript(args: {
   stream: PostgresStatementStream;
   /** C10b-2b — the Block timeout, when it is the session's statement bound. */
   blockTimeoutSeconds?: number | null;
+  /** #1800 — armed while each block runs, so an abort cancels it at the server; returns the disarm. */
+  armCancel?: () => () => void;
 }): Promise<{
   capture: ResultCapture;
   recordsAffected: number;
@@ -337,6 +354,7 @@ export async function executePostgresScript(args: {
       let firstRow: Record<string, unknown> | undefined;
 
       let result: PostgresStreamedResult;
+      const disarm = args.armCancel?.();
       try {
         result = await stream(client, prepared.statement, (row) => {
           if (reads && ++rowsSeen === 1) firstRow = row;
@@ -351,6 +369,12 @@ export async function executePostgresScript(args: {
         if (!inTransaction && (sqlStateOf(err) === null || prepared.mayCommitPartway)) {
           // The server may have committed it before the failure reached us.
           applied += 1;
+        }
+        // #1800 — our own CancelRequest, checked before any other reading of
+        // the failure: `cancelled` survives `notRetried`, where a transient
+        // 57014 would turn permanent and hide an activity timeout.
+        if (signal.aborted && sqlStateOf(err) === QUERY_CANCELED) {
+          throw new DatasetIoError('cancelled', SCRIPT_ABORTED);
         }
         if (readOnly && sqlStateOf(err) === READ_ONLY_SQL_TRANSACTION) {
           // The server's own words follow, for a store that is read-only itself
@@ -368,6 +392,8 @@ export async function executePostgresScript(args: {
             ? `${blockName(i)} ran past the Timeout per block of ${String(blockTimeoutSeconds)} seconds`
             : `${blockName(i)} failed`;
         throw readFailure(err, context, secret, path);
+      } finally {
+        disarm?.();
       }
 
       if (!inTransaction) applied += 1;
@@ -533,6 +559,8 @@ export async function* runPostgresScript(
     secret: string | null;
     types: PostgresClientOptions['types'];
     stream?: PostgresStatementStream;
+    /** #1800 — injected by tests; a run sends the real CancelRequest. */
+    sendCancel?: PostgresCancelSender;
   },
 ): AsyncGenerator<ActivityEvent> {
   const parsed = scriptDispatchConfigSchema.safeParse(ctx.input);
@@ -637,6 +665,8 @@ export async function* runPostgresScript(
       signal: ctx.signal,
       stream: deps.stream ?? streamPostgresStatement,
       blockTimeoutSeconds,
+      armCancel: () =>
+        armPostgresCancel(client, postgresCancelTargetOf(cfg.data), ctx.signal, deps.sendCancel),
     });
   } catch (err) {
     failure = scriptFailure(err);
