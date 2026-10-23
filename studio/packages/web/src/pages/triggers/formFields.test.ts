@@ -80,7 +80,20 @@ describe('formatTimeoutDuration', () => {
   // `DraftNumberField` does not parse a blur on untouched text, so the shown
   // text must read back as exactly the stored value.
   it('round-trips through the parser', () => {
-    const samples = [1, 59, 60, 61, 3_599, 3_600, 86_399, 86_400, 86_401, 31_536_000, 40_000_000];
+    const samples = [
+      1,
+      59,
+      60,
+      61,
+      3_599,
+      3_600,
+      86_399,
+      86_400,
+      86_401,
+      31_536_000,
+      40_000_000,
+      Number.MAX_SAFE_INTEGER,
+    ];
     for (let s = 1; s < 200_000; s += 997) samples.push(s);
     for (const seconds of samples) {
       expect(parseTimeoutDuration(formatTimeoutDuration(seconds)), String(seconds)).toEqual({

@@ -17,6 +17,7 @@ import {
   parseWholeNumber,
 } from '../triggers/formFields';
 import { DraftNumberField } from './DraftNumberField';
+import { DURATION_UNIT } from '../../lib/form/unit';
 import { enclosingContainers, nodePolicyIssues, policyIssues, validateCanvas } from './canvasDoc';
 import type { createCanvasStore } from './canvasStore';
 import { readableIssue } from './containerRules';
@@ -104,7 +105,7 @@ export function PolicyEditor({
           <FieldCell span="short">
             <DraftNumberField
               label="Timeout"
-              unit="duration"
+              unit={DURATION_UNIT}
               stored={policy?.timeoutSeconds}
               parse={parseTimeoutDuration}
               format={formatTimeoutDuration}

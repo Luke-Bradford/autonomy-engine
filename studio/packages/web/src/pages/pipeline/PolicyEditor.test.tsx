@@ -128,14 +128,19 @@ describe('PolicyEditor (#1312)', () => {
       node('a', 'http_request', { policy: { timeoutSeconds: 300 } }),
     ]);
     expect(field('Timeout (duration)')).toHaveProperty('value', '00:05:00');
-    // Tabbing through the untouched duration writes nothing.
-    enter(field('Timeout (duration)'), '00:05:00');
-    expect(policy()).toEqual({ timeoutSeconds: 300 });
     enter(field('Timeout (duration)'), '1.02:03:04');
     expect(policy()).toEqual({ timeoutSeconds: 93_784 });
     expect(field('Timeout (duration)')).toHaveProperty('value', '1.02:03:04');
     enter(field('Timeout (duration)'), '12:00');
     expect(policy()).toEqual({ timeoutSeconds: 93_784 });
+  });
+
+  it('#1680 — a stored timeout changed underneath the field (an undo) re-shows as a duration', () => {
+    const { field, store } = mount([
+      node('a', 'http_request', { policy: { timeoutSeconds: 300 } }),
+    ]);
+    act(() => store.getState().setNodePolicy('a', { timeoutSeconds: 86_400 }));
+    expect(field('Timeout (duration)')).toHaveProperty('value', '1.00:00:00');
   });
 
   it('#1600 C0f — a timeout of 0 is refused at the field, and nothing is written', () => {

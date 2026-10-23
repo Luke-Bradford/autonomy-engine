@@ -13,6 +13,7 @@ import { useStore } from 'zustand';
 import { getSettings } from '../api/settings';
 import { getWorkspaceSettings, putWorkspaceSettings } from '../api/workspaceSettings';
 import { DraftNumberField, type DraftNumberParse } from './pipeline/DraftNumberField';
+import { DURATION_UNIT } from '../lib/form/unit';
 import {
   formatTimeoutDuration,
   parseTimeoutDuration,
@@ -118,7 +119,7 @@ function RunDefaults() {
           <FieldCell span="short">
             <DraftNumberField
               label="Activity timeout"
-              unit="duration"
+              unit={DURATION_UNIT}
               stored={settings.defaultActivityTimeoutSeconds ?? undefined}
               parse={parseTimeoutDuration}
               format={formatTimeoutDuration}
