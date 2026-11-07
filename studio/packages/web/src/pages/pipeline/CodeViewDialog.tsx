@@ -15,7 +15,7 @@ import { UnsavedChangesPrompt } from '../../lib/form/UnsavedChangesPrompt';
 import { useUnsavedChangesGuard } from '../../lib/form/useUnsavedChangesGuard';
 import type { WorkingDocSource } from './canvasStore';
 import { checkCodeText } from './codeView';
-import { portalRoot } from './ExpressionEditor';
+import { portalRoot } from '../../lib/portalRoot';
 
 /**
  * #1573 OR38 — the editor's Code view: the whole pipeline as JSON, edited and
