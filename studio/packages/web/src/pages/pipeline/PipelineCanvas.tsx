@@ -1854,25 +1854,28 @@ export function PipelineCanvas({
         ? 'Wait for the current action to finish.'
         : null;
 
+  // #1396 — over the editor, not in its flow: asking must not move the canvas
+  // (#1393). Escape keeps editing, as it does in a drawer. #1573 — inside the
+  // Code view while that is open (see `CodeViewDialog`'s `children`).
+  const leavePromptNode = (
+    <div
+      className="editor-leave-prompt"
+      // Only catches Escape bubbling up from the alertdialog inside.
+      role="presentation"
+      onKeyDown={(e) => {
+        if (!isUnhandledEscape(e)) return;
+        e.preventDefault();
+        leaveGuard.keep();
+      }}
+    >
+      <UnsavedChangesPrompt guard={leavePrompt} keepRef={leaveKeepRef} />
+    </div>
+  );
+
   return (
     <section aria-labelledby="canvas-heading" className="canvas-page">
       {leaveGuard.routeHold}
-      {/* #1396 — over the editor, not in its flow: asking must not move the
-          canvas (#1393). Escape keeps editing, as it does in a drawer. */}
-      {leaveGuard.confirming && (
-        <div
-          className="editor-leave-prompt"
-          // Only catches Escape bubbling up from the alertdialog inside.
-          role="presentation"
-          onKeyDown={(e) => {
-            if (!isUnhandledEscape(e)) return;
-            e.preventDefault();
-            leaveGuard.keep();
-          }}
-        >
-          <UnsavedChangesPrompt guard={leavePrompt} keepRef={leaveKeepRef} />
-        </div>
-      )}
+      {leaveGuard.confirming && codeText === null && leavePromptNode}
       <PageHeader
         title={pipelineName}
         headingId="canvas-heading"
@@ -2246,7 +2249,9 @@ export function PipelineCanvas({
             onApply={(doc) => store.getState().applyDoc(doc)}
             onClose={() => setCodeText(null)}
             onDirtyChange={setCodeDirty}
-          />
+          >
+            {leaveGuard.confirming && leavePromptNode}
+          </CodeViewDialog>
         )}
         {/* #1397 — everything the header does less often, in one ⋯ menu.
               Fluent's default body portal, like the Factory resources row

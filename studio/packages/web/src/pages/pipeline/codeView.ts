@@ -84,8 +84,19 @@ function droppedKeys(raw: Json, parsed: unknown, path: JsonPathStep[] = []): Jso
   }
   if (!isObject(raw) || !isObject(parsed)) return [];
   return Object.entries(raw).flatMap(([key, value]) =>
-    key in parsed ? droppedKeys(value, parsed[key], [...path, key]) : [[...path, key]],
+    Object.hasOwn(parsed, key) ? droppedKeys(value, parsed[key], [...path, key]) : [[...path, key]],
   );
+}
+
+/**
+ * The paths of numbers JSON cannot carry: `1e999` is valid JSON TEXT, and
+ * `JSON.parse` reads it as `Infinity`, which a save would write as `null`.
+ */
+function nonFinite(raw: Json, path: JsonPathStep[] = []): JsonPathStep[][] {
+  if (typeof raw === 'number') return Number.isFinite(raw) ? [] : [path];
+  if (Array.isArray(raw)) return raw.flatMap((item, i) => nonFinite(item, [...path, i]));
+  if (isObject(raw)) return Object.entries(raw).flatMap(([k, v]) => nonFinite(v, [...path, k]));
+  return [];
 }
 
 /** Each id that appears more than once, with the index of every repeat after the first. */
@@ -110,6 +121,16 @@ export function checkCodeText(text: string, globals: readonly GlobalRead[]): Cod
   const raw = JSON.parse(text) as Json;
   if (!isObject(raw)) {
     return blocked([{ message: 'the pipeline must be a JSON object', line: 1, blocking: true }]);
+  }
+  const huge = nonFinite(raw);
+  if (huge.length > 0) {
+    return blocked(
+      huge.map((path) => ({
+        message: `${pathText(path)}: the number is too large`,
+        line: at(path),
+        blocking: true,
+      })),
+    );
   }
 
   const known = new Set<string>(CODE_VIEW_KEYS);

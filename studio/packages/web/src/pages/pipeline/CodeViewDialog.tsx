@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
+  type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
 import type { GlobalRead } from '@autonomy-studio/shared';
@@ -32,6 +33,7 @@ export function CodeViewDialog({
   onApply,
   onClose,
   onDirtyChange,
+  children,
 }: {
   /** The doc as the view opens it (`codeViewText`). */
   initial: string;
@@ -41,6 +43,12 @@ export function CodeViewDialog({
   onClose: () => void;
   /** Whether the text differs from `initial`: the editor's leave guard holds it. */
   onDirtyChange: (dirty: boolean) => void;
+  /**
+   * The editor's own leave prompt while it asks. Rendered in here because the
+   * dialog is in the top layer: anywhere on the page, the prompt would sit inert
+   * under the modal and the held navigation could never be answered.
+   */
+  children?: ReactNode;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const boxRef = useRef<HTMLTextAreaElement>(null);
@@ -153,7 +161,7 @@ export function CodeViewDialog({
                     Line {p.line}
                   </button>
                 ) : (
-                  <span />
+                  <span aria-hidden="true" />
                 )}
                 <span className="code-view-message">{p.message}</span>
               </li>
@@ -162,6 +170,7 @@ export function CodeViewDialog({
         )}
       </section>
       {guard.confirming && <UnsavedChangesPrompt guard={guard} keepRef={keepRef} />}
+      {children}
       <div className="code-view-actions">
         <button type="button" onClick={requestClose}>
           Cancel
@@ -170,7 +179,7 @@ export function CodeViewDialog({
           type="button"
           className="primary"
           disabled={applyReason !== null}
-          title={applyReason ?? 'Load this JSON into the canvas. Undo reverts it'}
+          title={applyReason ?? 'Load into the canvas as one undoable edit'}
           onClick={() => {
             if (check.doc === null) return;
             onApply(check.doc);

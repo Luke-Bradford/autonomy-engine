@@ -188,6 +188,22 @@ describe('what keeps Apply off, and where it is shown', () => {
     ]);
   });
 
+  it('a number JSON cannot carry', () => {
+    const bad = edited(text, '"x": 10.5', '"x": 1e999');
+    expect(blocking(bad)).toEqual([
+      {
+        message: 'nodes[0].position.x: the number is too large',
+        line: lineOf(bad, '1e999'),
+        blocking: true,
+      },
+    ]);
+  });
+
+  it('an extra key named like an Object method', () => {
+    const bad = edited(text, '"id": "n_wait",', '"id": "n_wait",\n      "toString": 1,');
+    expect(blocking(bad).map((p) => p.message)).toEqual(['nodes[1].toString: not a field here']);
+  });
+
   it('an unknown top-level key, the server-stamped ones included', () => {
     const bad = edited(text, '{\n', '{\n  "catalogVersion": 3,\n  "basedOnVersionId": "v",\n');
     expect(blocking(bad).map((p) => [p.message, p.line])).toEqual([

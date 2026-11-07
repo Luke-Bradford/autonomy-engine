@@ -103,6 +103,10 @@ test.describe('#1573 the Code view', () => {
     await expect(problemsList.getByRole('button', { name: `Line ${unknownLine}` })).toBeVisible();
     await expect(dialog.getByRole('button', { name: 'Apply' })).toBeDisabled();
 
+    // Accessible with problems listed, too.
+    const axeProblems = await new AxeBuilder({ page }).include('dialog.code-view').analyze();
+    expect(axeProblems.violations.map((v) => v.id)).toEqual([]);
+
     // Line N moves the caret to that line.
     await problemsList.getByRole('button', { name: `Line ${unknownLine}` }).click();
     const selected = await codeBox(dialog).evaluate((el: HTMLTextAreaElement) =>
@@ -126,12 +130,27 @@ test.describe('#1573 the Code view', () => {
     await expect(nodeById(page, 'n_if')).toContainText("equals(params.mode, 'full')");
     await expect(page.locator('.dirty-dot')).toHaveCSS('visibility', 'hidden');
 
-    // Cancel with edits asks first, and Keep editing keeps the text.
+    // Escape with edits asks first, inside the dialog, and Keep editing keeps the text.
     dialog = await openCode(page);
     await codeBox(dialog).fill(edited);
-    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    await page.keyboard.press('Escape');
+    await expect(dialog.getByRole('alertdialog', { name: 'Unsaved changes' })).toBeVisible();
+    const axePrompt = await new AxeBuilder({ page }).include('dialog.code-view').analyze();
+    expect(axePrompt.violations.map((v) => v.id)).toEqual([]);
     await dialog.getByRole('button', { name: 'Keep editing' }).click();
     await expect(codeBox(dialog)).toHaveValue(edited);
+
+    // Leaving the editor while it holds edits: the editor's own prompt, inside
+    // the modal where it can be answered.
+    await page.evaluate(() => {
+      window.location.hash = '#/author/pipelines';
+    });
+    await expect(dialog.getByRole('alertdialog', { name: 'Unsaved changes' })).toBeVisible();
+    await dialog.getByRole('button', { name: 'Keep editing' }).click();
+    await expect(page).toHaveURL(new RegExp(`/author/pipelines/${pipelineId}`));
+    await expect(codeBox(dialog)).toHaveValue(edited);
+
+    // Cancel asks too; Discard closes and leaves the canvas as it was.
     await dialog.getByRole('button', { name: 'Cancel' }).click();
     await dialog.getByRole('button', { name: 'Discard changes' }).click();
     await expect(dialog).toBeHidden();
