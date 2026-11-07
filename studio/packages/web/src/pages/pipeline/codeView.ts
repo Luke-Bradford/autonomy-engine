@@ -18,11 +18,7 @@
  * Every problem is located on a line of the text where it can be: a Zod issue
  * by its path, an issue that names a node, edge or container by that element.
  */
-import {
-  PipelineDraftBodySchema,
-  getActivity,
-  type GlobalRead,
-} from '@autonomy-studio/shared';
+import { PipelineDraftBodySchema, getActivity, type GlobalRead } from '@autonomy-studio/shared';
 import { lineOfPath, positionOf, scanJson, type JsonPathStep } from '../../lib/json/jsonText';
 import { workingDocOf, type WorkingDoc, type WorkingDocSource } from './canvasStore';
 import { validateCanvas } from './canvasDoc';
@@ -71,7 +67,10 @@ const isObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 
 const pathText = (path: readonly PropertyKey[]): string =>
-  path.map((s) => (typeof s === 'number' ? `[${s}]` : `.${String(s)}`)).join('').replace(/^\./, '');
+  path
+    .map((s) => (typeof s === 'number' ? `[${s}]` : `.${String(s)}`))
+    .join('')
+    .replace(/^\./, '');
 
 /**
  * The paths of keys `raw` holds and `parsed` does not: what a non-strict schema
@@ -168,7 +167,11 @@ export function checkCodeText(text: string, globals: readonly GlobalRead[]): Cod
     });
   });
   for (const { id, index } of repeats(doc.nodes.map((n) => n.id))) {
-    structural.push({ message: `node id '${id}' is used twice`, line: at(['nodes', index, 'id']), blocking: true });
+    structural.push({
+      message: `node id '${id}' is used twice`,
+      line: at(['nodes', index, 'id']),
+      blocking: true,
+    });
   }
   const nodeIds = new Set(doc.nodes.map((n) => n.id));
   doc.containers.forEach((c, i) => {
@@ -188,7 +191,11 @@ export function checkCodeText(text: string, globals: readonly GlobalRead[]): Cod
     });
   }
   for (const { id, index } of repeats(source.edges.map((e) => e.id))) {
-    structural.push({ message: `edge id '${id}' is used twice`, line: at(['edges', index, 'id']), blocking: true });
+    structural.push({
+      message: `edge id '${id}' is used twice`,
+      line: at(['edges', index, 'id']),
+      blocking: true,
+    });
   }
   // Against the TYPED edges, not `doc.edges`: `workingDocOf` drops an edge to
   // nothing, which on open repairs a stored row, and here would hide the typo.

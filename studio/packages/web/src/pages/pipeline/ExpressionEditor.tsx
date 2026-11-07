@@ -98,7 +98,7 @@ export function ExpressionEditor({
  * and an open Fluent dialog unmounted leaves `aria-hidden` on the whole app
  * (`useConfirm`), where removing a `<dialog>` takes it out of the top layer.
  */
-function portalRoot(): Element {
+export function portalRoot(): Element {
   return document.querySelector(`.${FLUENT_ROOT_CLASS}:not([data-portal-node])`) ?? document.body;
 }
 

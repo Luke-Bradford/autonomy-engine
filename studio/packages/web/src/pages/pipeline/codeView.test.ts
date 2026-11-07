@@ -18,7 +18,12 @@ function version(overrides: Partial<PipelineVersion> = {}): PipelineVersion {
     params: [],
     outputs: [],
     nodes: [
-      { id: 'n_if', type: 'if', config: { condition: '${equals(1, 1)}' }, position: { x: 10, y: 20 } },
+      {
+        id: 'n_if',
+        type: 'if',
+        config: { condition: '${equals(1, 1)}' },
+        position: { x: 10, y: 20 },
+      },
       { id: 'n_wait', type: 'wait', config: { seconds: 1 }, position: { x: 200, y: 20 } },
     ],
     edges: [{ id: 'e_1', from: 'n_if', to: 'n_wait', on: 'success' }],
@@ -57,8 +62,7 @@ function opened(v: PipelineVersion) {
   return store;
 }
 
-const blocking = (text: string) =>
-  checkCodeText(text, []).problems.filter((p) => p.blocking);
+const blocking = (text: string) => checkCodeText(text, []).problems.filter((p) => p.blocking);
 
 /** Replace the first `from` in the text, asserting it was there. */
 function edited(text: string, from: string, to: string): string {
@@ -104,7 +108,9 @@ describe('round-trip: canvas → JSON → canvas', () => {
       'containers',
     ]);
     expect(text).toContain('"x": 10.5');
-    expect(shown['containers']).toEqual([expect.objectContaining({ id: 'stage', children: ['n_wait'] })]);
+    expect(shown['containers']).toEqual([
+      expect.objectContaining({ id: 'stage', children: ['n_wait'] }),
+    ]);
   });
 });
 
@@ -128,7 +134,9 @@ describe('Apply', () => {
   it('treats a Format-only or reordered text as no change', () => {
     const store = opened(RICH);
     const doc = workingDocOfState(store.getState());
-    const reordered = JSON.stringify({ nodes: doc.nodes, ...doc });
+    // The graph first and the general fields last: the reverse of the view's order.
+    const { nodes, edges, containers, ...rest } = doc;
+    const reordered = JSON.stringify({ containers, edges, nodes, ...rest });
     expect(store.getState().applyDoc(checkCodeText(reordered, []).doc!)).toBe(false);
     expect(store.getState().past).toHaveLength(0);
   });
@@ -172,7 +180,11 @@ describe('what keeps Apply off, and where it is shown', () => {
   it('a key the schema would silently drop', () => {
     const bad = edited(text, '"id": "n_wait",', '"id": "n_wait",\n      "colour": "red",');
     expect(blocking(bad)).toEqual([
-      { message: 'nodes[1].colour: not a field here', line: lineOf(bad, '"colour"'), blocking: true },
+      {
+        message: 'nodes[1].colour: not a field here',
+        line: lineOf(bad, '"colour"'),
+        blocking: true,
+      },
     ]);
   });
 

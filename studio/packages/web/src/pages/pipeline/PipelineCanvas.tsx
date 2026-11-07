@@ -32,6 +32,7 @@ import {
   ChevronRightRegular,
   ChevronUpRegular,
   FormRegular,
+  CodeRegular,
   MoreHorizontalRegular,
   PanelBottomRegular,
   PanelRightRegular,
@@ -113,6 +114,8 @@ import { ConnectionPicker } from './ConnectionPicker';
 import { ConnectionColumn } from './ConnectionColumn';
 import type { ConnectionColumnRequest } from './connectionColumnRequest';
 import { ActivityToolbox } from './ActivityToolbox';
+import { CodeViewDialog } from './CodeViewDialog';
+import { codeViewText } from './codeView';
 import {
   createCanvasStore,
   selectionAllInactive,
@@ -317,7 +320,6 @@ interface PipelineCanvasProps {
      line above it. */
 }
 
-
 /**
  * The working graph as Debug and Validate send it: the SAME body a save sends.
  * Its `basedOnVersionId` is a save's CAS basis and means nothing to either —
@@ -415,6 +417,10 @@ export function PipelineCanvas({
   // #1395 slice 3 — the Debug form's. Opening one form closes the other: both
   // hang from the same anchor over the canvas.
   const [debugOpen, setDebugOpen] = useState(false);
+  // #1573 OR38 — the Code view: the text it opened with (null = closed), and
+  // whether it holds edits, which the leave guard below holds like a form.
+  const [codeText, setCodeText] = useState<string | null>(null);
+  const [codeDirty, setCodeDirty] = useState(false);
   // #1476 OR28 — the last Validate's server-only findings, with the draft they
   // describe (see `sameDraft`).
   const [serverCheck, setServerCheck] = useState<{
@@ -685,16 +691,19 @@ export function PipelineCanvas({
   const [triggerFormDirty, setTriggerFormDirty] = useState(false);
   // #1477 slice 5 — and so is the connection column's (New or Edit).
   const [connectionFormDirty, setConnectionFormDirty] = useState(false);
-  useShellUnsaved(dirty || triggerFormDirty || connectionFormDirty);
+  useShellUnsaved(dirty || triggerFormDirty || connectionFormDirty || codeDirty);
   // #1396 — the draft lives in this mount's store, so leaving the editor's path
   // (Back, another pipeline in the tree, Open run) throws it away. Hold that at
   // the shared prompt. A same-path change keeps this instance, and the draft.
   //
   // #1476 — the Triggers column's form holds no route of its own (the router
   // consults one blocker), so it is folded in here: one prompt for either.
-  const leaveGuard = useUnsavedChangesGuard(dirty || triggerFormDirty || connectionFormDirty, {
-    holdRoute: leavesPath,
-  });
+  const leaveGuard = useUnsavedChangesGuard(
+    dirty || triggerFormDirty || connectionFormDirty || codeDirty,
+    {
+      holdRoute: leavesPath,
+    },
+  );
   // The prompt takes focus while it asks and, on Keep, hands it back to wherever
   // the operator was: a field, a node, the tree link they clicked. Not on
   // Discard: the editor is on its way out, and focusing into it would only
@@ -2218,6 +2227,27 @@ export function PipelineCanvas({
             />
           )}
         </span>
+        {/* #1573 OR38 — Code, ADF's {}: the whole pipeline as JSON. Off while a
+              save is in flight, whose answer may replace the doc under it. */}
+        <button
+          type="button"
+          className="icon-button editor-header__icon-button"
+          aria-label="Code"
+          title={saving ? 'Wait for the save to finish' : 'Code: the pipeline as JSON'}
+          disabled={saving}
+          onClick={() => setCodeText(codeViewText(workingDocOfState(store.getState())))}
+        >
+          <CodeRegular aria-hidden="true" />
+        </button>
+        {codeText !== null && (
+          <CodeViewDialog
+            initial={codeText}
+            globals={globals}
+            onApply={(doc) => store.getState().applyDoc(doc)}
+            onClose={() => setCodeText(null)}
+            onDirtyChange={setCodeDirty}
+          />
+        )}
         {/* #1397 — everything the header does less often, in one ⋯ menu.
               Fluent's default body portal, like the Factory resources row
               menu: the U0 spike forbids reparenting a surface into the React
