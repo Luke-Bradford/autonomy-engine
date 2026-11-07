@@ -45,7 +45,7 @@ const RICH = version({
     {
       id: 'n_if',
       type: 'if',
-      config: { condition: "${equals(pipeline.params.mode, 'full')}" },
+      config: { condition: "${equals(params.mode, 'full')}" },
       position: { x: 10.5, y: -20 },
       description: 'branch on mode',
       policy: { retry: 2, retryIntervalSeconds: 30 },
@@ -122,13 +122,13 @@ describe('Apply', () => {
     const check = checkCodeText(changed, []);
     expect(store.getState().applyDoc(check.doc!)).toBe(true);
     const ifNode = () => store.getState().nodes.find((n) => n.id === 'n_if')!;
-    expect(ifNode().config['condition']).toBe("${equals(pipeline.params.mode, 'delta')}");
+    expect(ifNode().config['condition']).toBe("${equals(params.mode, 'delta')}");
     expect(store.getState().dirty).toBe(true);
     expect(store.getState().past).toHaveLength(1);
     store.getState().undo();
-    expect(ifNode().config['condition']).toBe("${equals(pipeline.params.mode, 'full')}");
+    expect(ifNode().config['condition']).toBe("${equals(params.mode, 'full')}");
     store.getState().redo();
-    expect(ifNode().config['condition']).toBe("${equals(pipeline.params.mode, 'delta')}");
+    expect(ifNode().config['condition']).toBe("${equals(params.mode, 'delta')}");
   });
 
   it('treats a Format-only or reordered text as no change', () => {
@@ -234,12 +234,12 @@ describe('what keeps Apply off, and where it is shown', () => {
   });
 
   it('lets through what the canvas holds as a badge, on its node’s line', () => {
-    const bad = edited(text, '"seconds": 5', '"seconds": "${pipeline.params.nope}"');
+    const bad = edited(text, '"seconds": 5', '"seconds": "${params.nope}"');
     const check = checkCodeText(bad, []);
     expect(check.doc).not.toBeNull();
     expect(check.problems.length).toBeGreaterThan(0);
     expect(check.problems.every((p) => !p.blocking)).toBe(true);
-    const nope = check.problems.find((p) => p.message.includes('pipeline.params.nope'));
+    const nope = check.problems.find((p) => p.message.includes('params.nope'));
     expect(nope).toMatchObject({ line: lineOf(bad, '"id": "n_wait"') - 1 });
   });
 });

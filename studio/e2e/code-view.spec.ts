@@ -63,14 +63,14 @@ test.describe('#1573 the Code view', () => {
         {
           id: 'n_if',
           type: 'if',
-          config: { condition: "${equals(pipeline.params.mode, 'full')}" },
+          config: { condition: "${equals(params.mode, 'full')}" },
           position: { x: 0, y: 0 },
         },
-        { id: 'n_wait', type: 'wait', config: { seconds: 1 }, position: { x: 320, y: 0 } },
+        { id: 'n_wait', type: 'wait', config: { seconds: '${1}' }, position: { x: 320, y: 0 } },
       ],
       edges: [{ id: 'e_1', from: 'n_if', to: 'n_wait', on: 'success' }],
     });
-    await expect(nodeById(page, 'n_if')).toContainText("equals(pipeline.params.mode, 'full')");
+    await expect(nodeById(page, 'n_if')).toContainText("equals(params.mode, 'full')");
 
     // Opened on the doc the canvas holds: the saved one, exactly.
     let dialog = await openCode(page);
@@ -117,13 +117,13 @@ test.describe('#1573 the Code view', () => {
     await expect(dialog.getByText('No problems')).toBeVisible();
     await dialog.getByRole('button', { name: 'Apply' }).click();
     await expect(dialog).toBeHidden();
-    await expect(nodeById(page, 'n_if')).toContainText("equals(pipeline.params.mode, 'delta')");
+    await expect(nodeById(page, 'n_if')).toContainText("equals(params.mode, 'delta')");
     await expect(page.locator('.dirty-dot')).toHaveCSS('visibility', 'visible');
 
     // One Undo takes the whole Apply back.
     await nodeById(page, 'n_wait').focus();
     await page.keyboard.press('ControlOrMeta+z');
-    await expect(nodeById(page, 'n_if')).toContainText("equals(pipeline.params.mode, 'full')");
+    await expect(nodeById(page, 'n_if')).toContainText("equals(params.mode, 'full')");
     await expect(page.locator('.dirty-dot')).toHaveCSS('visibility', 'hidden');
 
     // Cancel with edits asks first, and Keep editing keeps the text.
@@ -135,9 +135,9 @@ test.describe('#1573 the Code view', () => {
     await dialog.getByRole('button', { name: 'Cancel' }).click();
     await dialog.getByRole('button', { name: 'Discard changes' }).click();
     await expect(dialog).toBeHidden();
-    await expect(nodeById(page, 'n_if')).toContainText("equals(pipeline.params.mode, 'full')");
+    await expect(nodeById(page, 'n_if')).toContainText("equals(params.mode, 'full')");
 
-    expectQuiet(problems);
+    await expectQuiet(page, problems);
   });
 
   test.describe('the demo pipelines', () => {
@@ -149,13 +149,15 @@ test.describe('#1573 the Code view', () => {
     test('each opens in the Code view as exactly its saved doc', async ({ page }) => {
       test.setTimeout(90_000);
       const problems = collectPageProblems(page);
+      // 201 on a first load, 200 when another spec left it loaded.
       const seeded = await page.request.post('/api/demo/seed');
-      expect(seeded.status(), await seeded.text()).toBe(200);
-      const list = await page.request.get('/api/pipelines?limit=200');
-      const { items } = (await list.json()) as { items: { id: string; name: string }[] };
-      for (const name of DEMO_NAMES) {
-        const pipeline = items.find((p) => p.name === name);
-        expect(pipeline, name).toBeDefined();
+      expect([200, 201], await seeded.text()).toContain(seeded.status());
+      const { pipelines } = (await seeded.json()) as {
+        pipelines: { name: string; pipelineId: string }[];
+      };
+      expect(pipelines.map((p) => p.name)).toEqual(DEMO_NAMES);
+      for (const { name, pipelineId } of pipelines) {
+        const pipeline = { id: pipelineId };
         await page.goto(`/#/author/pipelines/${encodeURIComponent(pipeline!.id)}`);
         await fluentRootReady(page);
         await page.locator('.react-flow__renderer').waitFor();
@@ -167,7 +169,7 @@ test.describe('#1573 the Code view', () => {
         await dialog.getByRole('button', { name: 'Cancel' }).click();
         await expect(dialog).toBeHidden();
       }
-      expectQuiet(problems);
+      await expectQuiet(page, problems);
     });
   });
 });
