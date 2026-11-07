@@ -1,5 +1,6 @@
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import {
+  canonicalStringify,
   ContainerSchema,
   INACTIVE_STATE,
   formatZodIssues,
@@ -867,14 +868,7 @@ interface CanvasDocSnapshot {
 
 function snapshotOf(s: CanvasState): CanvasDocSnapshot {
   return {
-    nodes: s.nodes,
-    edges: s.edges,
-    containers: s.containers,
-    params: s.params,
-    outputs: s.outputs,
-    variables: s.variables,
-    description: s.description,
-    annotations: s.annotations,
+    ...workingDocOfState(s),
     dirty: s.dirty,
     loadedId: s.loaded?.id ?? null,
   };
@@ -1133,6 +1127,15 @@ export interface CanvasState {
    * in-flight request, so their edits are not clobbered by the just-saved graph.
    */
   rebaseLoaded(v: PipelineVersion): void;
+  /**
+   * #1573 OR38 — the Code view's Apply: replace the working doc with `doc` as ONE
+   * undoable edit, through `workingDocOf`, so the doc is lowered and copied as it
+   * would be on open. `false`, and no edit at all, when `doc` is the doc already
+   * on the canvas (a Format or a key reorder in the text): an Apply that changed
+   * nothing must not push an undo step or mark the draft unsaved. The caller
+   * checks the doc first (`checkCodeText`); this trusts it.
+   */
+  applyDoc(doc: WorkingDocSource): boolean;
   /**
    * Append a node of `type`. `position` is the FLOW-coordinate placement for a
    * node dropped from the toolbox (U5); omit it and the node takes the next
@@ -1647,6 +1650,145 @@ export interface CanvasState {
   redo(): void;
 }
 
+/** The doc fields of a version, as `workingDocOf` reads them. */
+export type WorkingDocSource = Pick<
+  PipelineVersion,
+  'nodes' | 'edges' | 'containers' | 'params' | 'outputs' | 'variables' | 'description' | 'annotations'
+>;
+/** The doc slices of the store's state; what one undo step records, less its bookkeeping. */
+export type WorkingDoc = Omit<CanvasDocSnapshot, 'dirty' | 'loadedId'>;
+
+/**
+ * The store's working doc, picked: the doc slices an undo step records, and what
+ * a save, the Code view and `docUnchanged` read. Picked, so a held copy keeps no
+ * undo history alive.
+ */
+export function workingDocOfState(s: CanvasState): WorkingDoc {
+  return {
+    nodes: s.nodes,
+    edges: s.edges,
+    containers: s.containers,
+    params: s.params,
+    outputs: s.outputs,
+    variables: s.variables,
+    description: s.description,
+    annotations: s.annotations,
+  };
+}
+
+const EMPTY_WORKING_DOC: WorkingDoc = {
+  nodes: [],
+  edges: [],
+  containers: [],
+  params: [],
+  outputs: [],
+  variables: [],
+  description: '',
+  annotations: [],
+};
+
+/**
+ * The working graph a doc opens as: the doc fields `loadVersion` seeds, and the
+ * ones the Code view's Apply (#1573 OR38) replaces them with — ONE derivation,
+ * so a doc typed into the Code view is lowered, copied and reconciled exactly as
+ * the same doc opened from the server would be.
+ */
+export function workingDocOf(v: WorkingDocSource): WorkingDoc {
+        // Built ONCE rather than per edge, and from `connectRules`' own helper so
+        // the set the load filter trusts is the SAME set `connect` refuses an
+        // unknown endpoint against — see `edgeEndpointIds` for why containers
+        // belong in it.
+        const endpointIds = edgeEndpointIds(v.nodes, v.containers);
+        // #1600 C1b/C8b — a node of a RETIRED type opens as its replacement. Over
+        // the doc, not the nodes alone: List directory's `entries` is Get
+        // metadata's `childItems`, and a ForEach's `items` reads it too.
+        const retiredLowered = lowerRetiredTypes(v);
+  return {
+          // #526 (F13b follow-up) — LOWER on load, with the same composition the
+          // server applies on write. A version created BEFORE F13b persisted its
+          // known-type nodes with `config.outputs` ABSENT, and versions are
+          // immutable, so that row can never be repaired in place. Loading it raw
+          // showed the author an empty contract: `validateRefs` name-checked
+          // nothing and the badges/output pills disagreed with what the server
+          // WILL store the moment they save. Lowering here makes the canvas show
+          // the contract that save will mint. It deliberately does NOT set
+          // `dirty` — this is a display fix, not an author edit, and marking every
+          // legacy pipeline dirty on open would prompt a save nobody made.
+          //
+          // Deep-ish copy: fresh arrays with fresh node/edge objects so editing
+          // the working graph never mutates the loaded version in place. Still
+          // load-bearing after the lowering — `lowerPipelineNodes` is
+          // copy-on-write and hands back an unchanged node BY REFERENCE.
+          //
+          // #1600 C1b — and a node of a RETIRED type (Copy file, Move file, List
+          // directory) opens as its replacement, so the next Save writes it
+          // (catalogue §8). Not `dirty` either, for the reason above; the stored
+          // version still runs as the type it holds.
+          nodes: lowerPipelineNodes(refreshFormerOutputs(retiredLowered.nodes)).map((n) => ({
+                ...n,
+              })),
+          // #786 — DROP an edge whose endpoint resolves to nothing, for the same
+          // reason as the lowering above: the row is immutable, so it can never be
+          // repaired in place, and loading it raw makes the canvas disagree with
+          // what Save mints. Sharper here than a display mismatch, though — the
+          // #786 write-gate rule now REFUSES such a doc, and React Flow silently
+          // drops an edge whose endpoint is missing from its lookup, so an author
+          // opening a version minted before that rule would meet a red badge and a
+          // dead Save over an edge they can neither see, select nor delete: exactly
+          // the one-way trap #748 closed, re-created by the rule that closes the
+          // hole. Not authorable from here (`connect` refuses an unknown endpoint
+          // and both delete paths cascade), and the API and git-import routes are
+          // now closed by that same rule — so the ONLY remaining source is a row
+          // minted BEFORE it. A closed set that shrinks to nothing over time.
+          //
+          // This is deliberately the OPPOSITE call to `pruneContainerChild`'s (see
+          // its docblock: a general normalise would hide `child 'Y' is not a node
+          // in this pipeline`, a real defect report about a doc that arrived
+          // broken). The asymmetry is the AFFORDANCE, not the principle: a dangling
+          // child's error names a container the author can see and — since #748 —
+          // delete, so surfacing it leads somewhere. A dangling edge is invisible
+          // and unselectable, so surfacing it leads nowhere and only blocks Save.
+          // Repair silently where the operator has no move; report where they do.
+          //
+          // The resolvable set is nodes UNION containers: a container id is a legal
+          // edge endpoint. Node ids alone would strip every container edge on load,
+          // and `toVersionBody` reads `edges` from the WORKING graph, so the next
+          // Save would mint that loss. Like the lowering, this deliberately does
+          // NOT set `dirty` — a reconciliation, not an author edit — and `loaded`
+          // keeps the server's doc verbatim as the record of what was stored.
+          edges: v.edges
+                .filter((e) => endpointIds.has(e.from) && endpointIds.has(e.to))
+                .map((e) => ({ ...e })),
+          // #746 — containers are seeded as WORKING state, and the copy goes one
+          // level deeper than the spread: `{...c}` alone would ALIAS `c.children`
+          // into the SERVER's version object, which this store does not own and
+          // must never write through. (`children` is the only array or object
+          // field on `ContainerSchema`, so one level is the whole copy.) The prune
+          // below is copy-on-write, so the alias would be harmless today and a
+          // live hazard the moment anything edits membership IN PLACE — U6d does
+          // not (`assignContainerChild` is copy-on-write), so this stays a standing
+          // invariant rather than a bug waiting on U23 — latent sharing
+          // that is free to rule out here.
+          containers: retiredLowered.containers.map((c) => ({ ...c, children: [...c.children] })),
+          // U16 — seeded as working state, and the copy is DEEPER than the
+          // containers copy above rather than a spread. `children` is a flat array
+          // of strings, so one level covers it; a param's `default` is
+          // `z.unknown()` and a `json` param's can nest arbitrarily, so `{ ...p }`
+          // would alias a live sub-object into the SERVER's version object, which
+          // this store does not own and must never write through.
+          //
+          // `structuredClone` is safe here specifically because the value arrived
+          // as parsed JSON over the wire — there is no function or class instance
+          // it could choke on.
+          params: v.params.map((p) => structuredClone(p)),
+          outputs: v.outputs.map((o) => ({ ...o })),
+          // #844 V1 — deep for the reason `params` is: an `array` default nests.
+          variables: v.variables.map((d) => structuredClone(d)),
+          description: v.description,
+          annotations: [...v.annotations],
+  };
+}
+
 /**
  * A vanilla (framework-free) zustand store holding the canvas working graph.
  * Vanilla — not a React hook — so every mutation is unit-testable without a DOM
@@ -1740,113 +1882,17 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         // it: that re-points the basis WITHOUT touching the working graph, so
         // every recorded step is still a step of the doc on screen.)
         coalescing = null;
-        // Built ONCE rather than per edge, and from `connectRules`' own helper so
-        // the set the load filter trusts is the SAME set `connect` refuses an
-        // unknown endpoint against — see `edgeEndpointIds` for why containers
-        // belong in it.
-        const endpointIds = v ? edgeEndpointIds(v.nodes, v.containers) : new Set<string>();
-        // #1600 C1b/C8b — a node of a RETIRED type opens as its replacement. Over
-        // the doc, not the nodes alone: List directory's `entries` is Get
-        // metadata's `childItems`, and a ForEach's `items` reads it too.
-        const retiredLowered = v ? lowerRetiredTypes(v) : undefined;
         set({
           // #526 — `loaded` keeps the SERVER's doc, un-lowered. It is the rebase
           // basis and the carry-forward source for the parts of the doc this slice
           // has no UI for; only the WORKING graph below is lowered.
           loaded: v,
-          // #526 (F13b follow-up) — LOWER on load, with the same composition the
-          // server applies on write. A version created BEFORE F13b persisted its
-          // known-type nodes with `config.outputs` ABSENT, and versions are
-          // immutable, so that row can never be repaired in place. Loading it raw
-          // showed the author an empty contract: `validateRefs` name-checked
-          // nothing and the badges/output pills disagreed with what the server
-          // WILL store the moment they save. Lowering here makes the canvas show
-          // the contract that save will mint. It deliberately does NOT set
-          // `dirty` — this is a display fix, not an author edit, and marking every
-          // legacy pipeline dirty on open would prompt a save nobody made.
-          //
-          // Deep-ish copy: fresh arrays with fresh node/edge objects so editing
-          // the working graph never mutates the loaded version in place. Still
-          // load-bearing after the lowering — `lowerPipelineNodes` is
-          // copy-on-write and hands back an unchanged node BY REFERENCE.
-          //
-          // #1600 C1b — and a node of a RETIRED type (Copy file, Move file, List
-          // directory) opens as its replacement, so the next Save writes it
-          // (catalogue §8). Not `dirty` either, for the reason above; the stored
-          // version still runs as the type it holds.
-          nodes: retiredLowered
-            ? lowerPipelineNodes(refreshFormerOutputs(retiredLowered.nodes)).map((n) => ({
-                ...n,
-              }))
-            : [],
+          ...(v === null ? EMPTY_WORKING_DOC : workingDocOf(v)),
           // #1139 — a half-picked binding names a node in the doc being REPLACED,
           // so it cannot outlive it. Cleared here rather than left to be masked,
           // because "masked" and "gone" look identical right up until a new doc
           // reuses a node id.
           pendingBindings: {},
-          // #786 — DROP an edge whose endpoint resolves to nothing, for the same
-          // reason as the lowering above: the row is immutable, so it can never be
-          // repaired in place, and loading it raw makes the canvas disagree with
-          // what Save mints. Sharper here than a display mismatch, though — the
-          // #786 write-gate rule now REFUSES such a doc, and React Flow silently
-          // drops an edge whose endpoint is missing from its lookup, so an author
-          // opening a version minted before that rule would meet a red badge and a
-          // dead Save over an edge they can neither see, select nor delete: exactly
-          // the one-way trap #748 closed, re-created by the rule that closes the
-          // hole. Not authorable from here (`connect` refuses an unknown endpoint
-          // and both delete paths cascade), and the API and git-import routes are
-          // now closed by that same rule — so the ONLY remaining source is a row
-          // minted BEFORE it. A closed set that shrinks to nothing over time.
-          //
-          // This is deliberately the OPPOSITE call to `pruneContainerChild`'s (see
-          // its docblock: a general normalise would hide `child 'Y' is not a node
-          // in this pipeline`, a real defect report about a doc that arrived
-          // broken). The asymmetry is the AFFORDANCE, not the principle: a dangling
-          // child's error names a container the author can see and — since #748 —
-          // delete, so surfacing it leads somewhere. A dangling edge is invisible
-          // and unselectable, so surfacing it leads nowhere and only blocks Save.
-          // Repair silently where the operator has no move; report where they do.
-          //
-          // The resolvable set is nodes UNION containers: a container id is a legal
-          // edge endpoint. Node ids alone would strip every container edge on load,
-          // and `toVersionBody` reads `edges` from the WORKING graph, so the next
-          // Save would mint that loss. Like the lowering, this deliberately does
-          // NOT set `dirty` — a reconciliation, not an author edit — and `loaded`
-          // keeps the server's doc verbatim as the record of what was stored.
-          edges: v
-            ? v.edges
-                .filter((e) => endpointIds.has(e.from) && endpointIds.has(e.to))
-                .map((e) => ({ ...e }))
-            : [],
-          // #746 — containers are seeded as WORKING state, and the copy goes one
-          // level deeper than the spread: `{...c}` alone would ALIAS `c.children`
-          // into the SERVER's version object, which this store does not own and
-          // must never write through. (`children` is the only array or object
-          // field on `ContainerSchema`, so one level is the whole copy.) The prune
-          // below is copy-on-write, so the alias would be harmless today and a
-          // live hazard the moment anything edits membership IN PLACE — U6d does
-          // not (`assignContainerChild` is copy-on-write), so this stays a standing
-          // invariant rather than a bug waiting on U23 — latent sharing
-          // that is free to rule out here.
-          containers: retiredLowered
-            ? retiredLowered.containers.map((c) => ({ ...c, children: [...c.children] }))
-            : [],
-          // U16 — seeded as working state, and the copy is DEEPER than the
-          // containers copy above rather than a spread. `children` is a flat array
-          // of strings, so one level covers it; a param's `default` is
-          // `z.unknown()` and a `json` param's can nest arbitrarily, so `{ ...p }`
-          // would alias a live sub-object into the SERVER's version object, which
-          // this store does not own and must never write through.
-          //
-          // `structuredClone` is safe here specifically because the value arrived
-          // as parsed JSON over the wire — there is no function or class instance
-          // it could choke on.
-          params: v ? v.params.map((p) => structuredClone(p)) : [],
-          outputs: v ? v.outputs.map((o) => ({ ...o })) : [],
-          // #844 V1 — deep for the reason `params` is: an `array` default nests.
-          variables: v ? v.variables.map((d) => structuredClone(d)) : [],
-          description: v ? v.description : '',
-          annotations: v ? [...v.annotations] : [],
           selected: [],
           dirty: false,
           addCount: 0,
@@ -1858,6 +1904,15 @@ export function createCanvasStore(): StoreApi<CanvasState> {
 
       rebaseLoaded(v) {
         set({ loaded: v });
+      },
+
+      applyDoc(doc) {
+        const next = workingDocOf(doc);
+        if (canonicalStringify(next) === canonicalStringify(workingDocOfState(get()))) return false;
+        // The doc being replaced is what a selection or a half-picked binding
+        // names, so neither outlives it (as on `loadVersion`).
+        edit(() => ({ ...next, selected: [], pendingBindings: {} }));
+        return true;
       },
 
       addNode(type, position, containerId) {

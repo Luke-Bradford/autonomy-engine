@@ -117,6 +117,7 @@ import {
   createCanvasStore,
   selectionAllInactive,
   singleSelection,
+  workingDocOfState,
   type Selection,
   type CanvasState,
 } from './canvasStore';
@@ -316,20 +317,6 @@ interface PipelineCanvasProps {
      line above it. */
 }
 
-/** The doc slices `docUnchanged` compares — picked, so a held snapshot keeps
- * no undo history alive. */
-function docOf(s: CanvasState): DocSnapshot {
-  return {
-    nodes: s.nodes,
-    edges: s.edges,
-    containers: s.containers,
-    params: s.params,
-    outputs: s.outputs,
-    variables: s.variables,
-    description: s.description,
-    annotations: s.annotations,
-  };
-}
 
 /**
  * The working graph as Debug and Validate send it: the SAME body a save sends.
@@ -1389,7 +1376,7 @@ export function PipelineCanvas({
    */
   async function onValidate() {
     const s = store.getState();
-    const checked = docOf(s);
+    const checked = workingDocOfState(s);
     const clientRaw = new Set(located.map((issue) => issue.raw));
     const clientCount = clientIssues.length;
     // #1694 OR42 — Validate opens Problems on its answer, and only when the
