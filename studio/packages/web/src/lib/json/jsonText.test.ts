@@ -3,6 +3,7 @@ import {
   MAX_LAYOUT_DEPTH,
   describeJsonProblem,
   formatJsonText,
+  lineOfPath,
   notValidJson,
   scanJson,
 } from './jsonText';
@@ -200,5 +201,40 @@ describe('notValidJson (#1396)', () => {
     expect(notValidJson('[1 2]', ' [1 2]')).toBe(
       "not valid JSON (line 1, column 5: expected ',' or ']')",
     );
+  });
+});
+
+describe('lineOfPath (#1573 OR38)', () => {
+  const text = JSON.stringify(
+    { a: 1, nodes: [{ id: 'x', config: { k: [10, { deep: true }] } }, { id: 'y' }], z: [] },
+    null,
+    2,
+  );
+  const lineOf = (needle: string) => text.split('\n').findIndex((l) => l.includes(needle)) + 1;
+
+  it('locates an object member at its key', () => {
+    expect(lineOfPath(text, ['a'])).toBe(lineOf('"a"'));
+    expect(lineOfPath(text, ['z'])).toBe(lineOf('"z"'));
+  });
+
+  it('locates an array element, counting past nested containers', () => {
+    expect(lineOfPath(text, ['nodes', 1])).toBe(lineOf('"y"') - 1);
+    expect(lineOfPath(text, ['nodes', 1, 'id'])).toBe(lineOf('"y"'));
+    expect(lineOfPath(text, ['nodes', 0, 'config', 'k', 1, 'deep'])).toBe(lineOf('"deep"'));
+    expect(lineOfPath(text, ['nodes', 0, 'config', 'k', 0])).toBe(lineOf('10'));
+  });
+
+  it('falls back to the deepest value the text has', () => {
+    expect(lineOfPath(text, ['nodes', 0, 'missing'])).toBe(lineOf('"id": "x"') - 1);
+    expect(lineOfPath(text, ['nodes', 7])).toBe(lineOf('"nodes"'));
+    expect(lineOfPath(text, [])).toBe(1);
+  });
+
+  it('reads a duplicate key at its last occurrence, as JSON.parse does', () => {
+    expect(lineOfPath('{\n"a": 1,\n"a": 2\n}', ['a'])).toBe(3);
+  });
+
+  it('is null for text that is not JSON', () => {
+    expect(lineOfPath('{"a": ', ['a'])).toBeNull();
   });
 });

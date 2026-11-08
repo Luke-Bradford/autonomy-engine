@@ -114,9 +114,10 @@ function unexpected(text: string, at: number): Refusal {
 
 /**
  * Walk the text once, calling `emit` with each token's source slice and the
- * nesting depth AFTER it. Throws a `Refusal` at the first mistake.
+ * nesting depth AFTER it, and the offset it starts at. Throws a `Refusal` at the
+ * first mistake.
  */
-function walk(text: string, emit: (token: string, depth: number) => void): void {
+function walk(text: string, emit: (token: string, depth: number, offset: number) => void): void {
   const stack: Container[] = [];
   let expect: Expect = 'value';
   let i = 0;
@@ -133,7 +134,7 @@ function walk(text: string, emit: (token: string, depth: number) => void): void 
 
     if (expect === 'colon') {
       if (ch !== ':') throw new Refusal(i, "expected ':'");
-      emit(':', stack.length);
+      emit(':', stack.length, i);
       i += 1;
       expect = 'value';
       continue;
@@ -142,12 +143,12 @@ function walk(text: string, emit: (token: string, depth: number) => void): void 
     if (expect === 'commaOrClose') {
       const close = top === '{' ? '}' : ']';
       if (ch === ',') {
-        emit(',', stack.length);
+        emit(',', stack.length, i);
         i += 1;
         expect = top === '{' ? 'key' : 'value';
       } else if (ch === close) {
         stack.pop();
-        emit(ch, stack.length);
+        emit(ch, stack.length, i);
         i += 1;
         expect = stack.length === 0 ? 'end' : 'commaOrClose';
       } else {
@@ -159,14 +160,14 @@ function walk(text: string, emit: (token: string, depth: number) => void): void 
     if (expect === 'key' || expect === 'keyOrClose') {
       if (expect === 'keyOrClose' && ch === '}') {
         stack.pop();
-        emit('}', stack.length);
+        emit('}', stack.length, i);
         i += 1;
         expect = stack.length === 0 ? 'end' : 'commaOrClose';
         continue;
       }
       if (ch !== '"') throw new Refusal(i, 'expected a property name in double quotes');
       const end = endOfString(text, i);
-      emit(text.slice(i, end), stack.length);
+      emit(text.slice(i, end), stack.length, i);
       i = end;
       expect = 'colon';
       continue;
@@ -175,14 +176,14 @@ function walk(text: string, emit: (token: string, depth: number) => void): void 
     // expect is 'value' or 'valueOrClose'.
     if (expect === 'valueOrClose' && ch === ']') {
       stack.pop();
-      emit(']', stack.length);
+      emit(']', stack.length, i);
       i += 1;
       expect = stack.length === 0 ? 'end' : 'commaOrClose';
       continue;
     }
     if (ch === '{' || ch === '[') {
       stack.push(ch);
-      emit(ch, stack.length);
+      emit(ch, stack.length, i);
       i += 1;
       expect = ch === '{' ? 'keyOrClose' : 'valueOrClose';
       continue;
@@ -208,7 +209,7 @@ function walk(text: string, emit: (token: string, depth: number) => void): void 
       }
       end = i + literal.length;
     }
-    emit(text.slice(i, end), stack.length);
+    emit(text.slice(i, end), stack.length, i);
     i = end;
     expect = stack.length === 0 ? 'end' : 'commaOrClose';
   }
@@ -272,6 +273,66 @@ export function positionOf(text: string, offset: number): { line: number; column
   const lines = before.split(/\r\n|\r|\n/);
   const last = lines[lines.length - 1] ?? '';
   return { line: lines.length, column: [...last].length + 1 };
+}
+
+/** A step into a JSON value: an object's key or an array's index (a Zod issue's `path`). */
+export type JsonPathStep = string | number;
+
+/**
+ * #1573 OR38 — the 1-based line of the value at `path` in `text`, or of the
+ * deepest value along it that the text has: a key the text lacks (a required
+ * field left out) points at the object that should hold it. An object member is
+ * located at its KEY, the line an operator reads it on. `null` when `text` is not
+ * JSON.
+ *
+ * Over the text, through `walk`, rather than a parsed value: a parsed value has
+ * no positions, and a duplicate key resolves here to its LAST occurrence, as
+ * `JSON.parse` resolves it.
+ */
+export function lineOfPath(text: string, path: readonly JsonPathStep[]): number | null {
+  // One frame per open container: an array counts its elements, an object holds
+  // the key of the member being read (null until its key has been read).
+  const frames: { kind: '{' | '['; step: JsonPathStep | null }[] = [];
+  let best = { length: -1, offset: 0 };
+  const at = (offset: number) => {
+    const here = frames.map((f) => f.step);
+    if (here.length < best.length || here.length > path.length) return;
+    if (here.every((step, k) => step === path[k])) best = { length: here.length, offset };
+  };
+  let keyNext = false;
+  try {
+    walk(text, (token, _depth, offset) => {
+      const top = frames[frames.length - 1];
+      if (token === ':') return;
+      if (token === ',') {
+        if (top?.kind === '[') top.step = (top.step as number) + 1;
+        else keyNext = true;
+        return;
+      }
+      if (token === '}' || token === ']') {
+        frames.pop();
+        keyNext = false;
+        return;
+      }
+      if (keyNext && top?.kind === '{') {
+        top.step = JSON.parse(token) as string;
+        keyNext = false;
+        at(offset);
+        return;
+      }
+      // A value. A member's was located at its key; an element's and the
+      // root's are located here.
+      if (top === undefined || top.kind === '[') at(offset);
+      if (token === '{' || token === '[') {
+        frames.push({ kind: token, step: token === '[' ? 0 : null });
+        keyNext = token === '{';
+      }
+    });
+  } catch (err) {
+    if (err instanceof Refusal) return null;
+    throw err;
+  }
+  return best.length < 0 ? null : positionOf(text, best.offset).line;
 }
 
 /**
