@@ -157,7 +157,13 @@ export function CodeViewDialog({
                   {p.blocking ? 'Blocks apply' : 'Blocks save'}
                 </span>
                 {p.line !== null ? (
-                  <button type="button" className="subtle" onClick={() => goToLine(p.line!)}>
+                  <button
+                    type="button"
+                    className="subtle"
+                    // A line read off an older text points nowhere in this one.
+                    disabled={!current}
+                    onClick={() => goToLine(p.line!)}
+                  >
                     Line {p.line}
                   </button>
                 ) : (
