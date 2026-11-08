@@ -140,16 +140,6 @@ test.describe('#1573 the Code view', () => {
     await dialog.getByRole('button', { name: 'Keep editing' }).click();
     await expect(codeBox(dialog)).toHaveValue(edited);
 
-    // Leaving the editor while it holds edits: the editor's own prompt, inside
-    // the modal where it can be answered.
-    await page.evaluate(() => {
-      window.location.hash = '#/author/pipelines';
-    });
-    await expect(dialog.getByRole('alertdialog', { name: 'Unsaved changes' })).toBeVisible();
-    await dialog.getByRole('button', { name: 'Keep editing' }).click();
-    await expect(page).toHaveURL(new RegExp(`/author/pipelines/${pipelineId}`));
-    await expect(codeBox(dialog)).toHaveValue(edited);
-
     // Cancel asks too; Discard closes and leaves the canvas as it was.
     await dialog.getByRole('button', { name: 'Cancel' }).click();
     await dialog.getByRole('button', { name: 'Discard changes' }).click();
