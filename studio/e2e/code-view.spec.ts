@@ -166,13 +166,12 @@ test.describe('#1573 the Code view', () => {
       };
       expect(pipelines.map((p) => p.name)).toEqual(DEMO_NAMES);
       for (const { name, pipelineId } of pipelines) {
-        const pipeline = { id: pipelineId };
-        await page.goto(`/#/author/pipelines/${encodeURIComponent(pipeline!.id)}`);
+        await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
         await fluentRootReady(page);
         await page.locator('.react-flow__renderer').waitFor();
         const dialog = await openCode(page);
         const text = await codeBox(dialog).inputValue();
-        expect(JSON.parse(text), name).toEqual(await savedDoc(page, pipeline!.id));
+        expect(JSON.parse(text), name).toEqual(await savedDoc(page, pipelineId));
         // Nothing in a saved doc keeps Apply off.
         await expect(dialog.getByText('Blocks apply')).toHaveCount(0);
         await dialog.getByRole('button', { name: 'Cancel' }).click();
