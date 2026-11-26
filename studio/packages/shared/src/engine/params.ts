@@ -32,6 +32,7 @@ import type { ActivityCatalog } from '../catalog/types.js';
 import { GET_METADATA_ACTIVITY_TYPE } from '../catalog/types.js';
 import { activityNodeErrors } from './activity-config-check.js';
 import { MAX_CONFIG_DEPTH } from './limits.js';
+import type { ExpressionTrace } from './expression-trace.js';
 import {
   EXECUTE_PIPELINE_ACTIVITY_TYPE,
   FAIL_ACTIVITY_TYPE,
@@ -333,6 +334,15 @@ interface Env {
    * cannot escape it — see `charge`.
    */
   budget: { spent: number };
+  /**
+   * #1567 OR36 A2 — where this field's evaluation records each reference it
+   * resolved, by source text (`nodes.a.output.rows[0].n` → `20`), for the run
+   * log's expression record. Shared by reference, like `budget`. Absent when
+   * the caller records nothing, and inside a lambda (`inLambda`), whose `item`
+   * is rebound per element and so has no single value to record.
+   */
+  operands?: Record<string, unknown>;
+  inLambda?: boolean;
 }
 
 /**
@@ -342,8 +352,17 @@ interface Env {
  * `filter`/`map`/`count` lambda still rebinds `item` in its own child `Env`, so
  * the NEAREST enclosing iteration binds it.
  */
-function newEnv(ctx: SubstitutionContext, item?: { value: unknown }): Env {
-  return item !== undefined ? { ctx, item, budget: { spent: 0 } } : { ctx, budget: { spent: 0 } };
+function newEnv(
+  ctx: SubstitutionContext,
+  item?: { value: unknown },
+  operands?: Record<string, unknown>,
+): Env {
+  return {
+    ctx,
+    ...(item !== undefined ? { item } : {}),
+    ...(operands !== undefined ? { operands } : {}),
+    budget: { spent: 0 },
+  };
 }
 
 /**
@@ -376,7 +395,11 @@ function resolveRef(expr: Extract<Expr, { kind: 'ref' }>, env: Env): unknown {
   const tooDeep = pathDepthDefect(expr);
   if (tooDeep !== null) throw new SubstituteError(tooDeep);
   const value = resolveRoot(expr, root, env);
-  return walkPath(value, expr.segments.slice(root.arity), env, expr.source);
+  const out = walkPath(value, expr.segments.slice(root.arity), env, expr.source);
+  if (env.operands !== undefined && env.inLambda !== true && !(expr.source in env.operands)) {
+    env.operands[expr.source] = out;
+  }
+  return out;
 }
 
 /** The root value a reference names, before any deep addressing. */
@@ -731,7 +754,7 @@ function evalIn(env: Env): EvalIn {
     },
     // A fresh child Env per element: `item` is rebound, never mutated, so a
     // nested array form shadows its parent and nothing leaks to a sibling arg.
-    withItem: (e, item) => evalExpr(e, { ...env, item: { value: item } }),
+    withItem: (e, item) => evalExpr(e, { ...env, item: { value: item }, inLambda: true }),
   };
 }
 
@@ -776,6 +799,10 @@ export function substitute(
   // element as a top-level one. Undefined everywhere except a foreach child's
   // dispatch → `${item}` throws "only bound inside …" (the pre-A4 behaviour).
   item?: { value: unknown },
+  // #1567 OR36 A2 — when given, each `${}` field this call resolves records its
+  // template, value and operands in `trace.into`, keyed by its path under
+  // `trace.path`. The same evaluation that produces the value records it.
+  trace?: { into: ExpressionTrace; path: string },
 ): unknown {
   // Bound the config-TREE recursion so a pathologically nested config raises a
   // clean `SubstituteError` a node-failure catch handles, never a raw stack
@@ -784,12 +811,20 @@ export function substitute(
     throw new SubstituteError(`config nested too deep (over ${MAX_CONFIG_DEPTH} levels)`);
   }
   if (Array.isArray(value)) {
-    return value.map((v) => substitute(v, ctx, depth + 1, item));
+    return value.map((v, i) =>
+      substitute(v, ctx, depth + 1, item, trace && { ...trace, path: `${trace.path}[${i}]` }),
+    );
   }
   if (value !== null && typeof value === 'object') {
     const out: Record<string, unknown> = {};
     for (const key of Object.keys(value as Record<string, unknown>).sort()) {
-      out[key] = substitute((value as Record<string, unknown>)[key], ctx, depth + 1, item);
+      out[key] = substitute(
+        (value as Record<string, unknown>)[key],
+        ctx,
+        depth + 1,
+        item,
+        trace && { ...trace, path: trace.path === '' ? key : `${trace.path}.${key}` },
+      );
     }
     return out;
   }
@@ -815,12 +850,19 @@ export function substitute(
 
   // ONE Env — and so ONE element budget — for the whole field: a field with
   // several embedded refs must not get a fresh allowance per `${}`.
-  const env = newEnv(ctx, item);
+  const operands: Record<string, unknown> | undefined = trace && {};
+  const env = newEnv(ctx, item, operands);
+  const recorded = <T>(out: T): T => {
+    if (trace !== undefined && operands !== undefined) {
+      trace.into[trace.path] = { template: value, value: out, operands };
+    }
+    return out;
+  };
 
   if (mode.mode === 'whole') {
     // Whole-value → preserve the resolved value's native type.
     const out = evalExpr(parseExpr(mode.body), env);
-    return typeof out === 'string' ? restoreEscapes(out) : out;
+    return recorded(typeof out === 'string' ? restoreEscapes(out) : out);
   }
 
   // Embedded ref(s) → coerce each to string. Walking the SCANNED (protected)
@@ -835,7 +877,7 @@ export function substitute(
     cursor = m.end + 1;
   }
   result += mode.scanned.slice(cursor);
-  return restoreEscapes(result);
+  return recorded(restoreEscapes(result));
 }
 
 // --- whole-value-REQUIRED fields (#6 E2) ------------------------------------

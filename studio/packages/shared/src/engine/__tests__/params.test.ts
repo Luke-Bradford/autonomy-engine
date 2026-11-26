@@ -29,6 +29,7 @@ import {
 import type { TriggerContext } from '../../schemas/trigger-context.js';
 import { FUNCTIONS, MAX_PATH_DEPTH } from '../functions.js';
 import { INFIX_HINTS, infixOperatorHint } from '../expr.js';
+import type { ExpressionTrace } from '../expression-trace.js';
 
 // --- helpers ---------------------------------------------------------------
 
@@ -2392,5 +2393,56 @@ describe('validateDoc — param default replay-safety (#547 / F1)', () => {
         containers: [],
       }),
     ).toEqual([]);
+  });
+});
+
+describe('#1567 OR36 A2 — substitute records how each ${} became its value', () => {
+  it('records the template, the result and each operand of a whole-value field', () => {
+    const into: ExpressionTrace = {};
+    const c = ctx({ nodeOutputs: { count_rejects: { rows: [{ n: 20 }] } } });
+    const out = substitute('${greater(nodes.count_rejects.output.rows[0].n, 0)}', c, 0, undefined, {
+      into,
+      path: 'condition',
+    });
+    expect(out).toBe(true);
+    expect(into).toEqual({
+      condition: {
+        template: '${greater(nodes.count_rejects.output.rows[0].n, 0)}',
+        value: true,
+        operands: { 'nodes.count_rejects.output.rows[0].n': 20 },
+      },
+    });
+  });
+
+  it('keys nested fields by path and records an embedded template as text', () => {
+    const into: ExpressionTrace = {};
+    const c = ctx({ nodeOutputs: { list: { path: '/landing' } } });
+    substitute(
+      {
+        datasetParams: { source: { path: "${concat(nodes.list.output.path,'/',item.name)}" } },
+        n: 1,
+        s: 'plain',
+      },
+      c,
+      0,
+      { value: { name: 'orders_2026-10.csv' } },
+      { into, path: '' },
+    );
+    expect(into).toEqual({
+      'datasetParams.source.path': {
+        template: "${concat(nodes.list.output.path,'/',item.name)}",
+        value: '/landing/orders_2026-10.csv',
+        operands: { 'nodes.list.output.path': '/landing', 'item.name': 'orders_2026-10.csv' },
+      },
+    });
+  });
+
+  it('records nothing for a lambda element, and nothing without a trace', () => {
+    const into: ExpressionTrace = {};
+    const c = ctx({ params: { nums: [1, 7, 9] } });
+    expect(
+      substitute('${count(params.nums, greater(item, 5))}', c, 0, undefined, { into, path: 'x' }),
+    ).toBe(2);
+    expect(into['x']?.operands).toEqual({ 'params.nums': [1, 7, 9] });
   });
 });

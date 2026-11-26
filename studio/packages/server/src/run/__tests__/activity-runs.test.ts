@@ -471,9 +471,54 @@ describe('#1484 activity runs — one row per attempt', () => {
 
     const rows = project(db, pvId, runId);
     expect(rows.map((r) => [r.activityId, r.status, r.attempt, r.iteration])).toEqual([
-      ['inner', 'success', 1, { containerId: 'fe', index: 0, count: 2, item: '10' }],
-      ['inner', 'success', 1, { containerId: 'fe', index: 1, count: 2, item: 'b.csv' }],
+      [
+        'inner',
+        'success',
+        1,
+        {
+          containerId: 'fe',
+          index: 0,
+          count: 2,
+          item: '10',
+          value: { text: '10', chars: 2 },
+        },
+      ],
+      [
+        'inner',
+        'success',
+        1,
+        {
+          containerId: 'fe',
+          index: 1,
+          count: 2,
+          item: 'b.csv',
+          value: { text: '{"name":"b.csv"}', chars: 16 },
+        },
+      ],
     ]);
+  });
+
+  it('#1567 records each ForEach item whole, cut at the item capture limit', async () => {
+    const { db } = freshDb();
+    const big = { name: 'big.csv', note: 'n'.repeat(500) };
+    const pvId = seedVersion(
+      db,
+      [node('inner')],
+      [],
+      [{ id: 'fe', kind: 'foreach', children: ['inner'], items: '${params.list}' }],
+      [big],
+    );
+    const runId = await drive(db, pvId, stub());
+    const doc = makeDocResolver(db)(pvId);
+    const log = loadEngineLog(db, runId);
+    const whole = projectActivityRuns(doc, buildEngine(doc), log).rows[0]!.iteration!.value;
+    expect(JSON.parse(whole!.text)).toEqual(big);
+    const cut = projectActivityRuns(doc, buildEngine(doc), log, 100).rows[0]!.iteration!.value;
+    expect(cut).toEqual({
+      text: JSON.stringify(big).slice(0, 100),
+      chars: JSON.stringify(big).length,
+      truncated: true,
+    });
   });
 
   it('#1600 C0c — an inactive activity marked Failed fails the run, and its row says why', async () => {

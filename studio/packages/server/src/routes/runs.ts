@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { FastifyPluginAsync } from 'fastify';
 import {
   computeRunCost,
+  DEFAULT_WORKSPACE_SETTINGS,
   RunsPaginationQuerySchema,
   RUNS_EXPORT_TRUNCATED_HEADER,
   RUNS_MAX_PAGE_SIZE,
@@ -33,6 +34,7 @@ import {
   getPipeline,
   getRun,
   getRunSummaryNames,
+  getWorkspaceSettings,
   isDebugVersion,
   getTrigger,
   listRunAnnotations,
@@ -229,13 +231,28 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
      (the log is append-only, so an unchanged `seq` is an unchanged log): a page
      re-reads it as the run's log grows, and a settled run is folded once. The
      bound keeps a long-lived server from holding every run anyone has opened. */
-  const activityRunsMemo = new Map<string, { lastSeq: number; runs: BasedActivityRuns }>();
-  const projectedActivityRuns = (runId: string, versionId: string): BasedActivityRuns => {
+  /* #1567 — keyed on the owner's item cap too, so a Settings change applies to
+     a settled run the next time it is read. */
+  const activityRunsMemo = new Map<
+    string,
+    { lastSeq: number; itemMaxChars: number; runs: BasedActivityRuns }
+  >();
+  const projectedActivityRuns = (
+    runId: string,
+    versionId: string,
+    ownerId: string | null,
+  ): BasedActivityRuns => {
+    const itemMaxChars = (
+      ownerId === null ? DEFAULT_WORKSPACE_SETTINGS : getWorkspaceSettings(db, ownerId).settings
+    ).runCapture.iterationItemMaxChars;
     const lastSeq = listRunLastSeqs(db, [runId]).get(runId);
     if (lastSeq === undefined) return { rows: [], groups: [], basis: 'version' };
     const hit = activityRunsMemo.get(runId);
     activityRunsMemo.delete(runId);
-    let runs = hit !== undefined && hit.lastSeq === lastSeq ? hit.runs : undefined;
+    let runs =
+      hit !== undefined && hit.lastSeq === lastSeq && hit.itemMaxChars === itemMaxChars
+        ? hit.runs
+        : undefined;
     if (runs === undefined) {
       let doc: PipelineVersion | null = null;
       try {
@@ -251,9 +268,12 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
       runs =
         doc === null
           ? { ...projectActivityRunsFromLog(log), basis: 'log' }
-          : { ...projectActivityRuns(doc, buildEngine(doc), log), basis: 'version' };
+          : {
+              ...projectActivityRuns(doc, buildEngine(doc), log, itemMaxChars),
+              basis: 'version',
+            };
     }
-    activityRunsMemo.set(runId, { lastSeq, runs });
+    activityRunsMemo.set(runId, { lastSeq, itemMaxChars, runs });
     if (activityRunsMemo.size > ACTIVITY_RUNS_MEMO_LIMIT) {
       const oldest = activityRunsMemo.keys().next().value;
       if (oldest !== undefined) activityRunsMemo.delete(oldest);
@@ -274,7 +294,11 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
     const parent = getRun(db, run.parentRunId);
     if (parent === null || parent.ownerId !== run.ownerId) return null;
     try {
-      const { rows, basis } = projectedActivityRuns(parent.id, parent.pipelineVersionId);
+      const { rows, basis } = projectedActivityRuns(
+        parent.id,
+        parent.pipelineVersionId,
+        parent.ownerId,
+      );
       // A log-only account's `activityId` may be an instance key, not a node of
       // the parent's version: name no caller rather than a wrong one (#1557).
       if (basis === 'log') return null;
@@ -533,7 +557,11 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
         'run',
         request.params.id,
       );
-      const { rows, groups, basis } = projectedActivityRuns(run.id, run.pipelineVersionId);
+      const { rows, groups, basis } = projectedActivityRuns(
+        run.id,
+        run.pipelineVersionId,
+        run.ownerId,
+      );
       // Only the children this run's own log names, read leniently so one
       // corrupt child row costs its link and not the whole table.
       const children =

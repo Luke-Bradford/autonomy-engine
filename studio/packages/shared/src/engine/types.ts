@@ -1250,6 +1250,47 @@ export const DispatchInputSchema = z.object({
 });
 export type DispatchInput = z.infer<typeof DispatchInputSchema>;
 
+/** #1567 OR36 A5 — `node.failed.detail` (`error-detail.ts` builds it). */
+export const ErrorDetailSchema = z.object({
+  causes: z.array(z.object({ message: z.string(), code: z.string().optional() })),
+  stack: z.array(z.string()).optional(),
+});
+export type ErrorDetail = z.infer<typeof ErrorDetailSchema>;
+
+/**
+ * #1567 OR36 A2 — the record of a control activity's decision, unbounded, on
+ * the command that carries it to the driver (`expression-trace.ts`).
+ */
+export const EvaluationRecordSchema = z.object({
+  field: z.string(),
+  expression: z.string(),
+  operands: z.record(z.string(), z.unknown()),
+  result: z.unknown(),
+});
+
+/**
+ * #1567 OR36 A2 — the same record as the event stores it: bounded JSON text of
+ * `{ field, expression, operands, result }`, cut at the workspace's
+ * `runCapture.inputMaxChars`. Absent when the field held no `${}`, and on every
+ * event written before this field. The reducer never reads it.
+ */
+const RecordedEvaluationSchema = DispatchInputSchema.optional();
+
+/**
+ * #1567 OR36 A2 — a dispatch's `${}` record before it is bounded: per field
+ * path, the template, the value and each reference's value
+ * (`expression-trace.ts`). Rides on `dispatchNode`, ephemeral like every
+ * command field; the executor stores it bounded as `node.dispatched.expressions`.
+ */
+export const ExpressionTraceSchema = z.record(
+  z.string(),
+  z.object({
+    template: z.string(),
+    value: z.unknown(),
+    operands: z.record(z.string(), z.unknown()),
+  }),
+);
+
 /**
  * #1673 — the user properties an attempt recorded, on whichever event is its
  * record: `node.dispatched` (or the `node.failed` of one that never dispatched)
@@ -1480,6 +1521,21 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
      * byte-identical to a pre-C0d one. The reducer never reads it.
      */
     userProperties: RecordedUserPropertiesSchema,
+    /**
+     * #1567 OR36 A2 — how each `${}` field became its value: JSON text of
+     * `{ <field path>: { template, value, operands } }` (`expression-trace.ts`),
+     * bounded, scrubbed and withheld exactly as `input` is. Absent when no
+     * field held a `${}`. The reducer never reads it.
+     */
+    expressions: DispatchInputSchema.optional(),
+    /**
+     * #1567 OR36 A1 — each dataset end as it was at dispatch: JSON text of
+     * `{ source, sink? }`, each `{ datasetId, name, rowHash, kind, config }`
+     * (or `{ inline: true, kind, config }`), the config after parameters, so a
+     * query's SQL is the text that ran. Bounded and withheld as `input` is.
+     * `datasetAddresses` says WHERE; this says WHAT. The reducer never reads it.
+     */
+    datasetSnapshots: DispatchInputSchema.optional(),
   }),
   z.object({
     type: z.literal('node.succeeded'),
@@ -1488,6 +1544,8 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     attemptId: z.string(),
     outputs: z.record(z.string(), z.unknown()),
     userProperties: RecordedUserPropertiesSchema,
+    /** #1567 OR36 A2 — a Filter's evaluation (`RecordedEvaluationSchema`). */
+    evaluation: RecordedEvaluationSchema,
   }),
   z.object({
     /**
@@ -1590,6 +1648,15 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
      * `node.failed` in a durable log stays valid.
      */
     side: z.enum(['source', 'sink']).optional(),
+    /** #1567 OR36 A2 — a Fail's message, or an unwritable variable's value, as evaluated. */
+    evaluation: RecordedEvaluationSchema,
+    /**
+     * #1567 OR36 A5 — for an error an adapter THREW: its cause chain (the
+     * error first, then each `cause`) and its stack, server frames only, paths
+     * trimmed, both capped (`error-detail.ts`). Never parsed for control flow.
+     * Withheld on a secure node, as `error` is. The reducer never reads it.
+     */
+    detail: ErrorDetailSchema.optional(),
   }),
   z.object({
     /**
@@ -1620,6 +1687,8 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     attemptId: z.string(),
     branch: z.string(),
     userProperties: RecordedUserPropertiesSchema,
+    /** #1567 OR36 A2 — how the decision was reached (`RecordedEvaluationSchema`). */
+    evaluation: RecordedEvaluationSchema,
   }),
   z.object({
     /**
@@ -1640,6 +1709,8 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     attemptId: z.string(),
     branch: z.string(),
     userProperties: RecordedUserPropertiesSchema,
+    /** #1567 OR36 A2 — how the decision was reached (`RecordedEvaluationSchema`). */
+    evaluation: RecordedEvaluationSchema,
   }),
   z.object({
     /**
@@ -1661,6 +1732,8 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     name: z.string(),
     value: z.unknown(),
     userProperties: RecordedUserPropertiesSchema,
+    /** #1567 OR36 A2 — how the decision was reached (`RecordedEvaluationSchema`). */
+    evaluation: RecordedEvaluationSchema,
   }),
   z.object({
     /**
@@ -1676,6 +1749,8 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     name: z.string(),
     value: z.unknown(),
     userProperties: RecordedUserPropertiesSchema,
+    /** #1567 OR36 A2 — how the decision was reached (`RecordedEvaluationSchema`). */
+    evaluation: RecordedEvaluationSchema,
   }),
   z.object({
     /**
@@ -1705,6 +1780,14 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     attemptId: z.string(),
     childRunId: z.string(),
     userProperties: RecordedUserPropertiesSchema,
+    /**
+     * #1567 OR36 A3 — the version the child runs, as the call resolved it, and
+     * the parameters passed to it: bounded JSON text, cut at the workspace's
+     * `runCapture.inputMaxChars`. Absent on a log written before this field;
+     * `params` also when none were passed. The reducer never reads either.
+     */
+    childPipelineVersionId: z.string().optional(),
+    params: DispatchInputSchema.optional(),
   }),
   z.object({
     /**
@@ -2538,6 +2621,12 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
     attemptId: z.string(),
     preparedInput: z.record(z.string(), z.unknown()),
     /**
+     * #1567 OR36 A2 — how each `${}` in this dispatch became its value, from
+     * the same evaluation that produced `preparedInput` and the resolved ids
+     * and parameters below. Absent when no field held a `${}`.
+     */
+    expressions: ExpressionTraceSchema.optional(),
+    /**
      * #1600 OR41 C0d — the node's user properties as this dispatch resolved them
      * (each a value or its error), for the executor to record on
      * `node.dispatched`. Absent when the node has none. Ephemeral, like every
@@ -2699,6 +2788,8 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
      * it, so forgetting the pump branch is a COMPILE error.
      */
     type: z.literal('evaluateControl'),
+    /** #1567 OR36 A2 — the evaluation that decided this; absent for a literal. */
+    evaluation: EvaluationRecordSchema.optional(),
     nodeId: z.string(),
     attemptId: z.string(),
     branch: z.string(),
@@ -2723,6 +2814,8 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
      * pre-restart evaluation) folds as a stale/terminal no-op.
      */
     type: z.literal('failNode'),
+    /** #1567 OR36 A2 — the evaluation that decided this; absent for a literal. */
+    evaluation: EvaluationRecordSchema.optional(),
     nodeId: z.string(),
     attemptId: z.string(),
     error: z.string(),
@@ -2750,6 +2843,8 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
      * stale re-emit folds as a stale/terminal no-op.
      */
     type: z.literal('writeVariable'),
+    /** #1567 OR36 A2 — the evaluation that decided this; absent for a literal. */
+    evaluation: EvaluationRecordSchema.optional(),
     nodeId: z.string(),
     attemptId: z.string(),
     op: z.enum(['set', 'append']),
@@ -2777,6 +2872,8 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
      * pre-restart evaluation) folds as a stale/terminal no-op.
      */
     type: z.literal('succeedControl'),
+    /** #1567 OR36 A2 — the evaluation that decided this; absent for a literal. */
+    evaluation: EvaluationRecordSchema.optional(),
     nodeId: z.string(),
     attemptId: z.string(),
     outputs: z.record(z.string(), z.unknown()),

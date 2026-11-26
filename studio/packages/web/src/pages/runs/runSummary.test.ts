@@ -40,6 +40,11 @@ const NO_LLM_ACTIVITY = {
   datasetAddresses: undefined,
   input: undefined,
   params: undefined,
+  expressions: undefined,
+  datasetSnapshots: undefined,
+  evaluation: undefined,
+  errorDetail: undefined,
+  callParams: undefined,
   inputInstanceId: undefined,
   /* #844 V7 — only a `set_variable`/`append_variable` node records a write. */
   variableWrite: undefined,
@@ -3590,6 +3595,64 @@ describe('deriveNodeActivity — captured prompt/completion text (#605)', () => 
 /**
  * #890 — the input a node was dispatched with (`node.dispatched.input`).
  */
+describe('deriveNodeActivity — the audit records (#1567)', () => {
+  const rec = (text: string) => ({ text, chars: text.length });
+  const find = (events: RunEvent[], nodeId: string) =>
+    deriveNodeActivity(events).find((n) => n.nodeId === nodeId);
+
+  it('carries a dispatch’s expressions and dataset snapshot, and a failure’s detail', () => {
+    const r = find(
+      [
+        envelope({
+          type: 'node.dispatched',
+          runId: 'r',
+          nodeId: 'a',
+          attemptId: 'a#0',
+          idempotent: false,
+          expressions: rec('{"url":{}}'),
+          datasetSnapshots: rec('{"source":{}}'),
+        }),
+        envelope({
+          type: 'node.failed',
+          runId: 'r',
+          nodeId: 'a',
+          attemptId: 'a#0',
+          error: 'boom',
+          kind: 'permanent',
+          detail: { causes: [{ message: 'boom' }] },
+        }),
+      ],
+      'a',
+    );
+    expect(r?.expressions).toEqual(rec('{"url":{}}'));
+    expect(r?.datasetSnapshots).toEqual(rec('{"source":{}}'));
+    expect(r?.errorDetail).toEqual({ causes: [{ message: 'boom' }] });
+  });
+
+  it('carries an If’s evaluation and a call’s parameters', () => {
+    const rows = [
+      envelope({
+        type: 'condition.evaluated',
+        runId: 'r',
+        nodeId: 'if1',
+        attemptId: 'if1#0',
+        branch: 'true',
+        evaluation: rec('{"result":"true"}'),
+      }),
+      envelope({
+        type: 'call.started',
+        runId: 'r',
+        callNodeId: 'call',
+        attemptId: 'call#0',
+        childRunId: 'child',
+        params: rec('{"region":"eu"}'),
+      }),
+    ];
+    expect(find(rows, 'if1')?.evaluation).toEqual(rec('{"result":"true"}'));
+    expect(find(rows, 'call')?.callParams).toEqual(rec('{"region":"eu"}'));
+  });
+});
+
 describe('deriveNodeActivity — the dispatched input (#890)', () => {
   const recordOf = (text: string) => ({ text, chars: text.length });
   const dispatched = (nodeId: string, attempt: number, input?: { text: string; chars: number }) =>

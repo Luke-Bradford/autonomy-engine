@@ -20,6 +20,7 @@ function ctx(over: Partial<ActivityContext> = {}): ActivityContext {
     input: over.input ?? { url: 'https://api.example.com/thing' },
     connectionConfig: over.connectionConfig ?? {},
     signal: over.signal ?? new AbortController().signal,
+    ...(over.outputMaxBytes !== undefined ? { outputMaxBytes: over.outputMaxBytes } : {}),
   };
 }
 
@@ -33,11 +34,8 @@ function fakeResponse(
   body: string,
   headers: Record<string, string> = {},
 ): Response {
-  return {
-    status,
-    text: () => Promise.resolve(body),
-    headers: new Headers(headers),
-  } as unknown as Response;
+  // Bytes, not a string, so the Response adds no content-type of its own.
+  return new Response(new TextEncoder().encode(body), { status, headers });
 }
 
 describe('httpAdapter.runActivity', () => {
@@ -69,6 +67,27 @@ describe('httpAdapter.runActivity', () => {
       { type: 'succeeded', outputs: { status: 200, body: 'hello', headers: { 'x-trace': 'abc' } } },
     ]);
     expect(fetchSpy).toHaveBeenCalledOnce();
+  });
+
+  it('#1567 cuts a body over the output cap, and says what it kept of how much', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, 'x'.repeat(5_000), { 'content-length': '5000' }),
+    );
+    const events = await drain(httpAdapter.runActivity(ctx({ outputMaxBytes: 1_024 }), null));
+    expect(events[0]).toMatchObject({
+      type: 'succeeded',
+      outputs: { status: 200, truncated: { keptBytes: 1_024, totalBytes: 5_000 } },
+    });
+    const outputs = (events[0] as unknown as { outputs: { body: string } }).outputs;
+    expect(outputs.body).toHaveLength(1_024);
+  });
+
+  it('#1567 keeps a body within the cap whole, with no truncated mark', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, 'small'));
+    const events = await drain(httpAdapter.runActivity(ctx({ outputMaxBytes: 1_024 }), null));
+    expect(
+      (events[0] as unknown as { outputs: Record<string, unknown> }).outputs,
+    ).not.toHaveProperty('truncated');
   });
 
   it('a non-2xx status is STILL succeeded (status is data, not an error)', async () => {

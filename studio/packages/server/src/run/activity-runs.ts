@@ -1,5 +1,7 @@
 import {
+  boundedJson,
   catalog,
+  DEFAULT_RUN_CAPTURE,
   parseInstanceKey,
   TERMINAL_CONTAINER,
   TERMINAL_NODE,
@@ -328,6 +330,8 @@ export function projectActivityRuns(
   doc: Doc,
   engine: Engine,
   log: readonly LoggedEngineEvent[],
+  /** #1567 OR36 A4 — the owner's `runCapture.iterationItemMaxChars`. */
+  itemMaxChars: number = DEFAULT_RUN_CAPTURE.iterationItemMaxChars,
 ): ProjectedActivityRuns {
   const docIds = new Set(doc.nodes.map((n) => n.id));
   const typeOf = new Map(doc.nodes.map((n) => [n.id, n.type]));
@@ -354,11 +358,13 @@ export function projectActivityRuns(
     const index = itemIndex ?? cs?.round;
     if (index === undefined) return null;
     const items = container.kind === 'foreach' ? cs?.items : undefined;
+    const has = items !== undefined && index < items.length;
     return {
       containerId: container.id,
       index,
       count: items?.length ?? null,
-      item: items !== undefined && index < items.length ? itemLabel(items[index]) : null,
+      item: has ? itemLabel(items[index]) : null,
+      value: has ? (boundedJson(items[index], itemMaxChars) ?? null) : null,
     };
   };
 

@@ -1,6 +1,8 @@
 import {
   AGENT_CLI_CONNECTION_KIND,
+  captureEvaluation,
   createEngine,
+  DEFAULT_WORKSPACE_SETTINGS,
   resolveRunParams,
   DEFAULT_RETRY_INTERVAL_SECONDS,
   resolveDocNode,
@@ -23,6 +25,7 @@ import {
 } from '@autonomy-studio/shared';
 import pLimit from 'p-limit';
 import { getRun, updateRun } from '../repo/runs.js';
+import { getWorkspaceSettings } from '../repo/workspace-settings.js';
 import { isDeterministicRowCorruption } from '../repo/row-corruption.js';
 import { getConnection } from '../repo/connections.js';
 import { recordConnectionQuotaExhaustion } from '../repo/connection-quota.js';
@@ -1142,6 +1145,44 @@ function withRecordedUserProperties(
 }
 
 /**
+ * #1567 OR36 A2 — `event` carrying the evaluation its command's reducer
+ * recorded (the expression, its operands and the result), bounded at the run
+ * owner's `runCapture.inputMaxChars`. Unchanged when the command recorded none.
+ * Never secure: the four commands that carry one are an If, Switch, variable
+ * write, Fail or Filter, and `redactSecureEvent` handles the secure ones.
+ */
+function withRecordedEvaluation(
+  command: Exclude<EngineCommand, ExecutorCommand>,
+  event: EngineEvent,
+  cap: () => number,
+): EngineEvent {
+  const evaluation = 'evaluation' in command ? command.evaluation : undefined;
+  if (evaluation === undefined || !('attemptId' in command)) return event;
+  switch (event.type) {
+    case 'condition.evaluated':
+    case 'switch.evaluated':
+    case 'variable.set':
+    case 'variable.append':
+    case 'node.succeeded':
+    case 'node.failed': {
+      if (event.attemptId !== command.attemptId) return event;
+      const recorded = captureEvaluation(evaluation, cap());
+      return recorded === undefined ? event : { ...event, evaluation: recorded };
+    }
+    default:
+      return event;
+  }
+}
+
+/** #1567 OR36 A4 — the JSON-record cap a run's owner set; the default for an unowned run. */
+function runCaptureCap(db: Db, runId: string): number {
+  const ownerId = getRun(db, runId)?.ownerId ?? null;
+  return ownerId === null
+    ? DEFAULT_WORKSPACE_SETTINGS.runCapture.inputMaxChars
+    : getWorkspaceSettings(db, ownerId).settings.runCapture.inputMaxChars;
+}
+
+/**
  * CX2 (#1320, spec D6) — the ONE hook every fold of `run.cancelRequested` calls:
  * the pump's marker, a starting drive, `startRun`, and the boot reconciler.
  * It aborts the run's live dispatches, then (CX3, D8) asks the run's live
@@ -1276,6 +1317,10 @@ export async function pump(
   let state = initialState;
   const queue: EngineCommand[] = [...commands];
   let steps = 0;
+  // #1567 OR36 A4 — the run owner's capture cap, read once per pump, when the
+  // first evaluation record needs it.
+  let cap: number | undefined;
+  const captureCap = (): number => (cap ??= runCaptureCap(deps.db, initialState.runId));
 
   // ---- stream plumbing (see the CONCURRENCY doc block above) ---------------
   const streamLimit = pLimit(PER_RUN_DISPATCH_CONCURRENCY);
@@ -1604,7 +1649,13 @@ export async function pump(
       for (const event of source) {
         // #1673 — the event an engine-evaluated activity's command appends
         // records the user properties the reducer resolved for it.
-        if (fold(withRecordedUserProperties(command, event))) break pumping;
+        // #1567 OR36 A2 — and the evaluation that decided it.
+        const recorded = withRecordedEvaluation(
+          command,
+          withRecordedUserProperties(command, event),
+          captureCap,
+        );
+        if (fold(recorded)) break pumping;
       }
     }
   } catch (err) {
