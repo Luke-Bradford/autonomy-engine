@@ -933,7 +933,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     ownerId: string | null,
     boundConnectionId: string | undefined,
     resolvedParams: Record<string, unknown> | undefined,
-  ): { error: string; code: string } | { dataset: ResolvedDataset } {
+  ): { error: string; code: string } | { dataset: ResolvedDataset; rowHash: string } {
     if (datasetId === undefined) {
       return {
         error: `activity '${activityType}' requires a dataset but the node has none`,
@@ -1049,8 +1049,10 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         kind: dataset.kind,
         config,
         columns: dataset.columns,
-        rowHash: datasetRowHash(dataset),
       },
+      // #1567 OR36 A1 — beside the dataset, not in it: `ctx.datasets` is a
+      // projection for the adapter, and the hash is the run log's.
+      rowHash: datasetRowHash(dataset),
     };
   }
 
@@ -1727,6 +1729,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // catalog entry declares `datasetKinds`. `undefined` for every activity that
     // is not dataset-bound (all of them at 4a — `copy` lands at 4b).
     let datasets: { source: ResolvedDataset; sink?: ResolvedDataset } | undefined;
+    // #1567 OR36 A1 — each stored end's row hash, for `datasetSnapshots`.
+    const rowHashes: { source?: string; sink?: string } = {};
     // M6 slice B (#1149) — the PHYSICAL addresses those datasets resolved to,
     // stamped on `node.dispatched` so the run log can answer "where did this
     // data go" from itself (§2.1). `undefined` in lockstep with `datasets`.
@@ -1925,6 +1929,9 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         return;
       }
       datasets = { source: resolvedSourceDs.dataset };
+      if ('rowHash' in resolvedSourceDs && typeof resolvedSourceDs.rowHash === 'string') {
+        rowHashes.source = resolvedSourceDs.rowHash;
+      }
       // A SOURCE-ONLY activity (M12 `lookup`) declares no sink kinds, so it has
       // no sink dataset to resolve. M12 slice 1 (#1220) — `NodeSchema.datasetIds`
       // no longer requires a sink, so such a node usually carries none at all;
@@ -1973,6 +1980,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           return;
         }
         datasets = { source: resolvedSourceDs.dataset, sink: resolvedSinkDs.dataset };
+        rowHashes.sink = resolvedSinkDs.rowHash;
       }
 
       // M6 slice B (#1149, spec §2.1) — resolve the PHYSICAL address of each
@@ -2173,8 +2181,10 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         ? undefined
         : boundedJson(
             scrub({
-              source: datasetSnapshot(datasets.source),
-              ...(datasets.sink !== undefined ? { sink: datasetSnapshot(datasets.sink) } : {}),
+              source: datasetSnapshot(datasets.source, rowHashes.source),
+              ...(datasets.sink !== undefined
+                ? { sink: datasetSnapshot(datasets.sink, rowHashes.sink) }
+                : {}),
             }),
             cap,
           );
@@ -2527,11 +2537,14 @@ function datasetRowHash(dataset: Dataset): string {
 }
 
 /** #1567 OR36 A1 — one dataset end as `node.dispatched.datasetSnapshots` records it. */
-function datasetSnapshot(dataset: ResolvedDataset): Record<string, unknown> {
+function datasetSnapshot(
+  dataset: ResolvedDataset,
+  rowHash: string | undefined,
+): Record<string, unknown> {
   return {
     // An inline source has no row: its id is a placeholder and it has no hash.
-    ...(dataset.rowHash !== undefined
-      ? { datasetId: dataset.id, name: dataset.name, rowHash: dataset.rowHash }
+    ...(rowHash !== undefined
+      ? { datasetId: dataset.id, name: dataset.name, rowHash }
       : { inline: true }),
     kind: dataset.kind,
     config: dataset.config,

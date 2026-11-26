@@ -187,6 +187,13 @@ describe('filter crash recovery re-emits succeedControl (#4 A8)', () => {
       nodeId: 'f',
       attemptId: 'f#0',
       outputs: { result: [3, 5] },
+      // #1567 — the re-emit records the same evaluation the first emission did.
+      evaluation: {
+        field: 'filter',
+        expression: '${filter(params.nums, greater(item, 2))}',
+        operands: { 'params.nums': [1, 3, 5] },
+        result: { result: [3, 5] },
+      },
     });
     // A control node must NEVER be re-dispatched to the executor on resume.
     expect(commands.some((c) => c.type === 'dispatchNode' && c.nodeId === 'f')).toBe(false);
@@ -221,6 +228,13 @@ describe('filter crash recovery re-emits succeedControl (#4 A8)', () => {
       nodeId: 'f',
       attemptId: 'f#0',
       outputs: { result: [4] },
+      // #1567 — the re-emit records the same evaluation the first emission did.
+      evaluation: {
+        field: 'filter',
+        expression: '${filter(item, greater(item, 2))}',
+        operands: { item: [1, 4] },
+        result: { result: [4] },
+      },
     });
     expect(commands.some((c) => c.type === 'finishRun')).toBe(false);
   });

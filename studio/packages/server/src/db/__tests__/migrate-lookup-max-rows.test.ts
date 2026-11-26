@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
+import { DEFAULT_RUN_CAPTURE } from '@autonomy-studio/shared';
 import { getWorkspaceSettings } from '../../repo/workspace-settings.js';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { MIGRATIONS_DIR, runMigrations } from '../migrate.js';
@@ -49,7 +50,12 @@ describe('0048 migration: lookup_max_rows on an upgrading DB', () => {
     expect(runMigrations(sqlite).applied).toContain(MIGRATION);
     const db = drizzle({ client: sqlite, schema });
     expect(getWorkspaceSettings(db, 'local')).toEqual({
-      settings: { defaultActivityTimeoutSeconds: 600, lookupMaxRows: 1000 },
+      settings: {
+        defaultActivityTimeoutSeconds: 600,
+        lookupMaxRows: 1000,
+        // #1567 (0051, applied by the same `runMigrations`) — the documented default.
+        runCapture: DEFAULT_RUN_CAPTURE,
+      },
       stored: true,
     });
   });

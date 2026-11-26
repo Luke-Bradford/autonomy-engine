@@ -14,13 +14,13 @@ import {
   ExternalAgentOutcomeSchema,
   ExternalWaitStatusSchema,
   GlobalParamTypeSchema,
-  RUN_CAPTURE_LEVELS,
   RunStatusSchema,
   SecretStatusSchema,
   TriggerModeSchema,
   WakeupStatusSchema,
   WebhookDeliveryOutcomeSchema,
   type Concurrency,
+  type RunCapture,
   type ConnectionKind,
   type DatasetColumn,
   type DatasetKind,
@@ -537,10 +537,7 @@ export const workspaceSettings = sqliteTable('workspace_settings', {
   /** #1600 OR41 C7d (migration 0048) — the ceiling every Lookup run is held to. */
   lookupMaxRows: integer('lookup_max_rows').notNull(),
   /** #1567 OR36 A4 (migration 0051) — how much of a run the log keeps. */
-  runCaptureLevel: text('run_capture_level', { enum: RUN_CAPTURE_LEVELS }).notNull(),
-  runCaptureInputMaxChars: integer('run_capture_input_max_chars').notNull(),
-  runCaptureOutputMaxBytes: integer('run_capture_output_max_bytes').notNull(),
-  runCaptureIterationItemMaxChars: integer('run_capture_iteration_item_max_chars').notNull(),
+  runCapture: text('run_capture', { mode: 'json' }).$type<RunCapture>().notNull(),
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
 });

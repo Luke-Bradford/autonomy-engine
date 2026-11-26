@@ -338,6 +338,13 @@ describe('crash resume re-runs the SAME evaluation and checks', () => {
       op: 'set',
       name: 'n',
       value: 4,
+      // #1567 — the re-emit records the same evaluation the first emission did.
+      evaluation: {
+        field: 'value',
+        expression: '${params.x}',
+        operands: { 'params.x': 4 },
+        result: 4,
+      },
     });
     expect(commands.some((c) => c.type === 'dispatchNode')).toBe(false);
   });
@@ -355,6 +362,13 @@ describe('crash resume re-runs the SAME evaluation and checks', () => {
       op: 'append',
       name: 'list',
       value: 4,
+      // #1567 — the re-emit records the same evaluation the first emission did.
+      evaluation: {
+        field: 'value',
+        expression: '${params.x}',
+        operands: { 'params.x': 4 },
+        result: 4,
+      },
     });
   });
 

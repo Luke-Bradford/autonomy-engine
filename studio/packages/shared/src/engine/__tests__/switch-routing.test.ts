@@ -238,6 +238,13 @@ describe('switch crash recovery re-emits evaluateControl (#4 A2)', () => {
       attemptId: 's#0',
       branch: 'gold',
       event: 'switch.evaluated',
+      // #1567 — the re-emit records the same evaluation the first emission did.
+      evaluation: {
+        field: 'on',
+        expression: '${params.tier}',
+        operands: { 'params.tier': 'gold' },
+        result: 'gold',
+      },
     });
   });
 });

@@ -36,12 +36,7 @@ export function getWorkspaceSettings(db: Db, ownerId: string): WorkspaceSettings
     settings: WorkspaceSettingsSchema.parse({
       defaultActivityTimeoutSeconds: row.defaultActivityTimeoutSeconds,
       lookupMaxRows: row.lookupMaxRows,
-      runCapture: {
-        level: row.runCaptureLevel,
-        inputMaxChars: row.runCaptureInputMaxChars,
-        outputMaxBytes: row.runCaptureOutputMaxBytes,
-        iterationItemMaxChars: row.runCaptureIterationItemMaxChars,
-      },
+      runCapture: row.runCapture,
     }),
     stored: true,
   };
@@ -53,14 +48,7 @@ export function putWorkspaceSettings(
   ownerId: string,
   input: WorkspaceSettings,
 ): WorkspaceSettingsResponse {
-  const { runCapture, ...rest } = WorkspaceSettingsSchema.parse(input);
-  const columns = {
-    ...rest,
-    runCaptureLevel: runCapture.level,
-    runCaptureInputMaxChars: runCapture.inputMaxChars,
-    runCaptureOutputMaxBytes: runCapture.outputMaxBytes,
-    runCaptureIterationItemMaxChars: runCapture.iterationItemMaxChars,
-  };
+  const columns = WorkspaceSettingsSchema.parse(input);
   const now = Date.now();
   db.insert(workspaceSettings)
     .values({ ownerId, ...columns, createdAt: now, updatedAt: now })

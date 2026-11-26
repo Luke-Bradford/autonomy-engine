@@ -252,11 +252,12 @@ function gate(): { held: Promise<void>; open: () => void } {
 
 describe('createExecutor — happy path (real http adapter, mocked fetch)', () => {
   it('dispatches (idempotent:false) then succeeds with the adapter outputs', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-      status: 200,
-      text: () => Promise.resolve('BODY'),
-      headers: new Headers({ 'x-h': '1' }),
-    } as unknown as Response);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(new TextEncoder().encode('BODY'), {
+        status: 200,
+        headers: new Headers({ 'x-h': '1' }),
+      }),
+    );
 
     const db = freshDb().db;
     const connId = await seedConnection(db, 'http', {}, null);
@@ -4201,11 +4202,12 @@ describe('createExecutor — item 7 / S4: http_request config-sink secret header
     ]);
     const run = seedRun(db, pvId);
 
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-      status: 200,
-      text: () => Promise.resolve('OK'),
-      headers: new Headers({ 'x-h': '1' }),
-    } as unknown as Response);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(new TextEncoder().encode('OK'), {
+        status: 200,
+        headers: new Headers({ 'x-h': '1' }),
+      }),
+    );
 
     const state = await startRun(deps(db), run);
     expect(state.status).toBe('success');

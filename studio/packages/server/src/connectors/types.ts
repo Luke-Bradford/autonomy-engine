@@ -81,12 +81,6 @@ export interface ResolvedDataset {
   readonly config: Record<string, unknown>;
   /** The DECLARED schema (spec §7 schema (1)) — an authoring aid, never the drift gate. */
   readonly columns: readonly DatasetColumn[];
-  /**
-   * #1567 OR36 A1 — SHA-256 of the stored dataset row this end resolved from,
-   * so the run log can tell whether the dataset was edited since. Absent for
-   * an inline dataset, which has no row. Adapters never read it.
-   */
-  readonly rowHash?: string;
 }
 
 export interface ActivityContext {

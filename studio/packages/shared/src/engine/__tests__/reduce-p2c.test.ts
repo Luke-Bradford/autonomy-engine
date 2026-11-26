@@ -1028,6 +1028,8 @@ describe('foreach crash recovery re-emits a control/call child WITH ${item} (#56
       attemptId: 'route#0',
       branch: 'b', // ${item} === 'b' matches case 'b' (not `default`)
       event: 'switch.evaluated',
+      // #1567 — the re-emit records the same evaluation the first emission did.
+      evaluation: { field: 'on', expression: '${item}', operands: { item: 'b' }, result: 'b' },
     });
     // No loud failure on resume, and never re-dispatched to the executor.
     expect(commands.some((c) => c.type === 'finishRun')).toBe(false);

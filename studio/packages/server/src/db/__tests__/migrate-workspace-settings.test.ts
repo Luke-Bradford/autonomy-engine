@@ -20,6 +20,8 @@ describe('0047 migration: workspace_settings', () => {
       'default_activity_timeout_seconds',
       'lookup_max_rows',
       'owner_id',
+      // #1567 (0051) — how much of a run the log keeps.
+      'run_capture',
       'updated_at',
     ]);
     expect(byName.get('owner_id')!.pk).toBe(1);
