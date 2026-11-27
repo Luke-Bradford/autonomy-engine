@@ -18,16 +18,20 @@
  * the parameter gate), and they get the same scrub, bound and secure treatment.
  *
  * Bounded per dispatch, because a `foreach` dispatches once per item and a retry
- * once per attempt. Each of the two records is cut separately, so the log grows
- * by at most 2 × `DISPATCH_INPUT_MAX_CHARS` per dispatch, the same order as the
- * outputs every dispatch already records. Small enough that the monitor mounts
- * the whole stored text with no disclosure (`InputSection`).
+ * once per attempt. Each record (input, params, and #1567's expressions) is cut
+ * separately at the workspace's `runCapture.inputMaxChars`, default
+ * `DISPATCH_INPUT_MAX_CHARS`.
  */
 import type { DispatchInput } from './types.js';
 import { surrogateSafeCut } from './surrogate.js';
 
-/** #890 — the most JSON text one `node.dispatched.input` keeps, in UTF-16 units. */
-export const DISPATCH_INPUT_MAX_CHARS = 4_000;
+/**
+ * #890 — the most JSON text one `node.dispatched.input` keeps, in UTF-16 units,
+ * when the workspace has not set its own `runCapture.inputMaxChars`.
+ * #1567 OR36 A4 raised it from 4,000, which cut a long SQL statement, mapping
+ * or prompt; the record is an audit fact, so the default keeps it whole.
+ */
+export const DISPATCH_INPUT_MAX_CHARS = 64_000;
 
 /**
  * Compact JSON of `config` minus its `outputs` key, cut at
@@ -41,10 +45,13 @@ export const DISPATCH_INPUT_MAX_CHARS = 4_000;
  * save-time lowering seeds from the catalog, so it would open every record with
  * a template the author may never have written.
  */
-export function captureDispatchInput(config: Record<string, unknown>): DispatchInput | undefined {
+export function captureDispatchInput(
+  config: Record<string, unknown>,
+  maxChars: number = DISPATCH_INPUT_MAX_CHARS,
+): DispatchInput | undefined {
   const input = { ...config };
   delete input['outputs'];
-  return boundedJson(input);
+  return boundedJson(input, maxChars);
 }
 
 /** The parameters one dispatch applied, as `resolvedConnectionParams`/`resolvedDatasetParams`. */
@@ -62,7 +69,10 @@ export interface AppliedDispatchParams {
  * `undefined` when nothing is left: a node that bound no parameters records none,
  * rather than an empty object that reads as "bound, and empty".
  */
-export function captureDispatchParams(applied: AppliedDispatchParams): DispatchInput | undefined {
+export function captureDispatchParams(
+  applied: AppliedDispatchParams,
+  maxChars: number = DISPATCH_INPUT_MAX_CHARS,
+): DispatchInput | undefined {
   const nonEmpty = (r: Record<string, unknown> | undefined) =>
     r !== undefined && Object.keys(r).length > 0 ? r : undefined;
   const connectionParams = nonEmpty(applied.connectionParams);
@@ -73,22 +83,30 @@ export function captureDispatchParams(applied: AppliedDispatchParams): DispatchI
       ? undefined
       : { ...(source !== undefined ? { source } : {}), ...(sink !== undefined ? { sink } : {}) };
   if (connectionParams === undefined && datasetParams === undefined) return undefined;
-  return boundedJson({
-    ...(connectionParams !== undefined ? { connectionParams } : {}),
-    ...(datasetParams !== undefined ? { datasetParams } : {}),
-  });
+  return boundedJson(
+    {
+      ...(connectionParams !== undefined ? { connectionParams } : {}),
+      ...(datasetParams !== undefined ? { datasetParams } : {}),
+    },
+    maxChars,
+  );
 }
 
-function boundedJson(value: Record<string, unknown>): DispatchInput | undefined {
-  let text: string;
+/** Compact JSON of `value`, cut at `maxChars` without splitting a surrogate pair. */
+export function boundedJson(
+  value: unknown,
+  maxChars: number = DISPATCH_INPUT_MAX_CHARS,
+): DispatchInput | undefined {
+  let text: string | undefined;
   try {
     text = JSON.stringify(value);
   } catch {
     return undefined;
   }
-  if (text.length <= DISPATCH_INPUT_MAX_CHARS) return { text, chars: text.length };
+  if (text === undefined) return undefined;
+  if (text.length <= maxChars) return { text, chars: text.length };
   return {
-    text: text.slice(0, surrogateSafeCut(text, DISPATCH_INPUT_MAX_CHARS)),
+    text: text.slice(0, surrogateSafeCut(text, maxChars)),
     chars: text.length,
     truncated: true,
   };

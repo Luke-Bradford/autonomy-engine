@@ -23,11 +23,20 @@ export function getWorkspaceSettings(db: Db, ownerId: string): WorkspaceSettings
     .from(workspaceSettings)
     .where(eq(workspaceSettings.ownerId, ownerId))
     .get();
-  if (row === undefined) return { settings: { ...DEFAULT_WORKSPACE_SETTINGS }, stored: false };
+  if (row === undefined) {
+    return {
+      settings: {
+        ...DEFAULT_WORKSPACE_SETTINGS,
+        runCapture: { ...DEFAULT_WORKSPACE_SETTINGS.runCapture },
+      },
+      stored: false,
+    };
+  }
   return {
     settings: WorkspaceSettingsSchema.parse({
       defaultActivityTimeoutSeconds: row.defaultActivityTimeoutSeconds,
       lookupMaxRows: row.lookupMaxRows,
+      runCapture: row.runCapture,
     }),
     stored: true,
   };
@@ -39,13 +48,13 @@ export function putWorkspaceSettings(
   ownerId: string,
   input: WorkspaceSettings,
 ): WorkspaceSettingsResponse {
-  const settings = WorkspaceSettingsSchema.parse(input);
+  const columns = WorkspaceSettingsSchema.parse(input);
   const now = Date.now();
   db.insert(workspaceSettings)
-    .values({ ownerId, ...settings, createdAt: now, updatedAt: now })
+    .values({ ownerId, ...columns, createdAt: now, updatedAt: now })
     .onConflictDoUpdate({
       target: workspaceSettings.ownerId,
-      set: { ...settings, updatedAt: now },
+      set: { ...columns, updatedAt: now },
     })
     .run();
   return getWorkspaceSettings(db, ownerId);

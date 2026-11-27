@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { AppSettings, MasterKeySource } from '@autonomy-studio/shared';
+import {
+  DEFAULT_RUN_CAPTURE,
+  type AppSettings,
+  type MasterKeySource,
+} from '@autonomy-studio/shared';
 import { SettingsPage } from './SettingsPage';
 import { getSettings } from '../api/settings';
 import { getWorkspaceSettings, putWorkspaceSettings } from '../api/workspaceSettings';
@@ -23,7 +27,11 @@ const putWorkspaceSettingsMock = vi.mocked(putWorkspaceSettings);
 
 beforeEach(() => {
   getWorkspaceSettingsMock.mockResolvedValue({
-    settings: { defaultActivityTimeoutSeconds: 43_200, lookupMaxRows: 1000 },
+    settings: {
+      defaultActivityTimeoutSeconds: 43_200,
+      lookupMaxRows: 1000,
+      runCapture: DEFAULT_RUN_CAPTURE,
+    },
     stored: false,
   });
 });
@@ -183,7 +191,11 @@ describe('SettingsPage — run defaults', () => {
   it('shows the stored default, and saves a new one when the field is left', async () => {
     getSettingsMock.mockResolvedValue(settings('env', null));
     putWorkspaceSettingsMock.mockResolvedValue({
-      settings: { defaultActivityTimeoutSeconds: 600, lookupMaxRows: 1000 },
+      settings: {
+        defaultActivityTimeoutSeconds: 600,
+        lookupMaxRows: 1000,
+        runCapture: DEFAULT_RUN_CAPTURE,
+      },
       stored: true,
     });
     render(<SettingsPage />);
@@ -198,6 +210,7 @@ describe('SettingsPage — run defaults', () => {
     expect(putWorkspaceSettingsMock).toHaveBeenCalledWith({
       defaultActivityTimeoutSeconds: 600,
       lookupMaxRows: 1000,
+      runCapture: DEFAULT_RUN_CAPTURE,
     });
     expect(field).toHaveValue('00:10:00');
   });
@@ -205,7 +218,11 @@ describe('SettingsPage — run defaults', () => {
   it('#1680 — takes the default as D.HH:MM:SS and saves its seconds', async () => {
     getSettingsMock.mockResolvedValue(settings('env', null));
     putWorkspaceSettingsMock.mockResolvedValue({
-      settings: { defaultActivityTimeoutSeconds: 93_784, lookupMaxRows: 1000 },
+      settings: {
+        defaultActivityTimeoutSeconds: 93_784,
+        lookupMaxRows: 1000,
+        runCapture: DEFAULT_RUN_CAPTURE,
+      },
       stored: true,
     });
     render(<SettingsPage />);
@@ -217,6 +234,7 @@ describe('SettingsPage — run defaults', () => {
     expect(putWorkspaceSettingsMock).toHaveBeenCalledWith({
       defaultActivityTimeoutSeconds: 93_784,
       lookupMaxRows: 1000,
+      runCapture: DEFAULT_RUN_CAPTURE,
     });
     expect(field).toHaveValue('1.02:03:04');
   });
@@ -224,7 +242,11 @@ describe('SettingsPage — run defaults', () => {
   it('saves a blank as the default turned off, and refuses 0 without saving', async () => {
     getSettingsMock.mockResolvedValue(settings('env', null));
     putWorkspaceSettingsMock.mockResolvedValue({
-      settings: { defaultActivityTimeoutSeconds: null, lookupMaxRows: 1000 },
+      settings: {
+        defaultActivityTimeoutSeconds: null,
+        lookupMaxRows: 1000,
+        runCapture: DEFAULT_RUN_CAPTURE,
+      },
       stored: true,
     });
     render(<SettingsPage />);
@@ -241,6 +263,7 @@ describe('SettingsPage — run defaults', () => {
     expect(putWorkspaceSettingsMock).toHaveBeenCalledWith({
       defaultActivityTimeoutSeconds: null,
       lookupMaxRows: 1000,
+      runCapture: DEFAULT_RUN_CAPTURE,
     });
   });
 
@@ -265,7 +288,11 @@ describe('SettingsPage — Lookup max rows', () => {
   it('shows the stored value, saves a new one in the whole document, and refuses out of range', async () => {
     getSettingsMock.mockResolvedValue(settings('env', null));
     putWorkspaceSettingsMock.mockResolvedValue({
-      settings: { defaultActivityTimeoutSeconds: 43_200, lookupMaxRows: 2500 },
+      settings: {
+        defaultActivityTimeoutSeconds: 43_200,
+        lookupMaxRows: 2500,
+        runCapture: DEFAULT_RUN_CAPTURE,
+      },
       stored: true,
     });
     render(<SettingsPage />);
@@ -286,6 +313,30 @@ describe('SettingsPage — Lookup max rows', () => {
     expect(putWorkspaceSettingsMock).toHaveBeenCalledWith({
       defaultActivityTimeoutSeconds: 43_200,
       lookupMaxRows: 2500,
+      runCapture: DEFAULT_RUN_CAPTURE,
+    });
+  });
+
+  it('#1567 — saves a run capture limit with the rest of the document', async () => {
+    getSettingsMock.mockResolvedValue(settings('env', null));
+    putWorkspaceSettingsMock.mockResolvedValue({
+      settings: {
+        defaultActivityTimeoutSeconds: 43_200,
+        lookupMaxRows: 1000,
+        runCapture: { ...DEFAULT_RUN_CAPTURE, inputMaxChars: 4000 },
+      },
+      stored: true,
+    });
+    render(<SettingsPage />);
+    const field = await screen.findByRole('textbox', { name: /Input capture limit/ });
+    expect(field).toHaveValue(String(DEFAULT_RUN_CAPTURE.inputMaxChars));
+    await userEvent.clear(field);
+    await userEvent.type(field, '4000');
+    await userEvent.tab();
+    expect(putWorkspaceSettingsMock).toHaveBeenCalledWith({
+      defaultActivityTimeoutSeconds: 43_200,
+      lookupMaxRows: 1000,
+      runCapture: { ...DEFAULT_RUN_CAPTURE, inputMaxChars: 4000 },
     });
   });
 
@@ -293,7 +344,11 @@ describe('SettingsPage — Lookup max rows', () => {
     getSettingsMock.mockResolvedValue(settings('env', null));
     putWorkspaceSettingsMock.mockRejectedValueOnce(new Error('refused by the server'));
     putWorkspaceSettingsMock.mockResolvedValue({
-      settings: { defaultActivityTimeoutSeconds: 600, lookupMaxRows: 1000 },
+      settings: {
+        defaultActivityTimeoutSeconds: 600,
+        lookupMaxRows: 1000,
+        runCapture: DEFAULT_RUN_CAPTURE,
+      },
       stored: true,
     });
     render(<SettingsPage />);
@@ -310,6 +365,7 @@ describe('SettingsPage — Lookup max rows', () => {
     expect(putWorkspaceSettingsMock).toHaveBeenLastCalledWith({
       defaultActivityTimeoutSeconds: 600,
       lookupMaxRows: 1000,
+      runCapture: DEFAULT_RUN_CAPTURE,
     });
   });
 
@@ -329,10 +385,12 @@ describe('SettingsPage — Lookup max rows', () => {
     expect(putWorkspaceSettingsMock).toHaveBeenNthCalledWith(1, {
       defaultActivityTimeoutSeconds: 600,
       lookupMaxRows: 1000,
+      runCapture: DEFAULT_RUN_CAPTURE,
     });
     expect(putWorkspaceSettingsMock).toHaveBeenNthCalledWith(2, {
       defaultActivityTimeoutSeconds: 600,
       lookupMaxRows: 300,
+      runCapture: DEFAULT_RUN_CAPTURE,
     });
   });
 });

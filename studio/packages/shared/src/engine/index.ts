@@ -52,6 +52,8 @@ export * from './params.js';
 export * from './surrogate.js';
 // #890 — the bounded record of a node's dispatched input.
 export * from './dispatch-input.js';
+export * from './expression-trace.js';
+export * from './error-detail.js';
 // #4 A4b — the parallel-foreach instance-key grammar (`<nodeId>@<i>`), shared
 // by the reducer, the server's doc-node lookups and the web run view.
 export * from './instance-key.js';

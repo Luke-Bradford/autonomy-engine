@@ -4,6 +4,12 @@ import {
   LOOKUP_ROW_CAP,
   LOOKUP_ROW_CEILING_MAX,
   LookupMaxRowsPutSchema,
+  DEFAULT_RUN_CAPTURE,
+  RUN_CAPTURE_CEILINGS,
+  RUN_CAPTURE_FLOORS,
+  RUN_CAPTURE_LEVELS,
+  type RunCapture,
+  type RunCaptureLevel,
   type AppSettings,
   type MasterKeySource,
   type WorkspaceSettings,
@@ -56,6 +62,52 @@ function parseLookupMaxRows(raw: string): DraftNumberParse<number> {
   }
   return { ok: true, value: parsed.value };
 }
+
+type RunCaptureCap = Exclude<keyof RunCapture, 'level'>;
+
+/** #1567 OR36 A4 — a capture limit: a whole number between its floor and ceiling. */
+function parseCaptureCap(key: RunCaptureCap) {
+  return (raw: string): DraftNumberParse<number> => {
+    const parsed = parseWholeNumber(raw);
+    if (!parsed.ok) return parsed;
+    const min = RUN_CAPTURE_FLOORS[key];
+    const max = RUN_CAPTURE_CEILINGS[key];
+    if (parsed.value === undefined || parsed.value < min || parsed.value > max) {
+      return { ok: false, reason: `Enter a whole number from ${min} to ${max}` };
+    }
+    return { ok: true, value: parsed.value };
+  };
+}
+
+const CAPTURE_LEVEL_LABELS: Record<RunCaptureLevel, string> = {
+  standard: 'Standard',
+  full: 'Full (also AI prompts and replies)',
+};
+
+const CAPTURE_CAPS: readonly { key: RunCaptureCap; label: string; about: string }[] = [
+  {
+    key: 'inputMaxChars',
+    label: 'Input capture limit (characters)',
+    about:
+      `The most characters the run log keeps of each input record: the config, parameters, ` +
+      `expressions and a decision's evaluation. The default is ${DEFAULT_RUN_CAPTURE.inputMaxChars}. ` +
+      `A record over it is cut, and the run view says by how much.`,
+  },
+  {
+    key: 'outputMaxBytes',
+    label: 'Output capture limit (bytes)',
+    about:
+      `The most bytes an HTTP response body may hold. The default is ` +
+      `${DEFAULT_RUN_CAPTURE.outputMaxBytes} (1 MiB). A longer body is cut and marked truncated.`,
+  },
+  {
+    key: 'iterationItemMaxChars',
+    label: 'ForEach item capture limit (characters)',
+    about:
+      `The most characters the run view shows of each ForEach item. The default is ` +
+      `${DEFAULT_RUN_CAPTURE.iterationItemMaxChars}.`,
+  },
+];
 
 /**
  * #1600 OR41 C0f — the workspace's run defaults: the Timeout a new activity is
@@ -145,6 +197,53 @@ function RunDefaults() {
               onCommit={(rows) => save({ lookupMaxRows: rows })}
             />
           </FieldCell>
+          {/* #1567 OR36 A4 — how much of each run the log keeps. */}
+          <FieldCell span="short">
+            <LabelledControl
+              label="Run capture"
+              about={{
+                name: 'Run capture',
+                note: 'Full also records every AI prompt and reply, unless the activity sets its own capture.',
+              }}
+            >
+              {(id, hintId) => (
+                <select
+                  id={id}
+                  aria-describedby={hintId}
+                  value={settings.runCapture.level}
+                  onChange={(e) =>
+                    save({
+                      runCapture: {
+                        ...(latest.current ?? settings).runCapture,
+                        level: e.target.value as RunCaptureLevel,
+                      },
+                    })
+                  }
+                >
+                  {RUN_CAPTURE_LEVELS.map((level) => (
+                    <option key={level} value={level}>
+                      {CAPTURE_LEVEL_LABELS[level]}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </LabelledControl>
+          </FieldCell>
+          {CAPTURE_CAPS.map(({ key, label, about }) => (
+            <FieldCell span="short" key={key}>
+              <DraftNumberField
+                label={label}
+                stored={settings.runCapture[key]}
+                parse={parseCaptureCap(key)}
+                about={about}
+                onCommit={(value) =>
+                  save({
+                    runCapture: { ...(latest.current ?? settings).runCapture, [key]: value },
+                  })
+                }
+              />
+            </FieldCell>
+          ))}
         </FieldGrid>
       )}
     </>

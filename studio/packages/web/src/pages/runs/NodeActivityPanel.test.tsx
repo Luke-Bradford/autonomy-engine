@@ -46,6 +46,11 @@ function row(over: Partial<NodeActivity> & { nodeId: string }): NodeActivity {
     datasetAddresses: undefined,
     input: undefined,
     params: undefined,
+    expressions: undefined,
+    datasetSnapshots: undefined,
+    evaluation: undefined,
+    errorDetail: undefined,
+    callParams: undefined,
     inputInstanceId: undefined,
     outputValues: undefined,
     copiedFromRunId: undefined,
@@ -770,6 +775,77 @@ describe('NodeActivityPanel — the secure marker is explained (#1312)', () => {
       }),
     );
     expect(panel.textContent).not.toMatch(HINT);
+  });
+});
+
+describe('NodeActivityPanel — what a run recorded for audit (#1567)', () => {
+  const inputSection = () => {
+    fireEvent.click(screen.getByRole('tab', { name: 'Input' }));
+    return screen.queryByRole('heading', { name: 'Input' })?.closest<HTMLElement>('.section');
+  };
+  const record = (value: unknown) => {
+    const text = JSON.stringify(value);
+    return { text, chars: text.length };
+  };
+
+  it('shows the SQL a query dataset ran, and the dataset record beside it', () => {
+    const sql = 'SELECT COUNT(*) AS n FROM rejects';
+    renderPanel(
+      row({
+        nodeId: 'count_rejects',
+        input: record({ firstRowOnly: true }),
+        datasetSnapshots: record({ source: { kind: 'query', config: { sql } } }),
+      }),
+    );
+    const section = inputSection() as HTMLElement;
+    expect(within(section).getByRole('heading', { name: 'Query' })).toBeTruthy();
+    expect(within(section).getByText(sql)).toBeTruthy();
+    expect(within(section).getByRole('heading', { name: 'Datasets' })).toBeTruthy();
+  });
+
+  it('shows an If’s evaluation, though it recorded no input', () => {
+    const evaluation = {
+      field: 'condition',
+      expression: '${greater(nodes.count_rejects.output.rows[0].n, 0)}',
+      operands: { 'nodes.count_rejects.output.rows[0].n': 20 },
+      result: 'true',
+    };
+    renderPanel(row({ nodeId: 'if1', status: 'success', evaluation: record(evaluation) }));
+    const section = inputSection() as HTMLElement;
+    expect(within(section).getByRole('heading', { name: 'Evaluation' })).toBeTruthy();
+    expect(section.textContent).toContain('nodes.count_rejects.output.rows[0].n');
+    expect(section.textContent).not.toMatch(/config was not recorded/);
+  });
+
+  it('withholds a secure node’s expressions', () => {
+    renderPanel(
+      row({
+        nodeId: 'a',
+        input: { text: SECURE_REDACTED, chars: 40 },
+        expressions: { text: SECURE_REDACTED, chars: 90 },
+      }),
+    );
+    const section = inputSection() as HTMLElement;
+    expect(within(section).getByRole('heading', { name: 'Expressions' })).toBeTruthy();
+    expect(within(section).getAllByText(/withheld from the run log/)).toHaveLength(2);
+  });
+
+  it('shows a thrown error’s causes and stack under Details', () => {
+    renderPanel(
+      row({
+        nodeId: 'a',
+        status: 'failure',
+        error: 'write failed',
+        errorDetail: {
+          causes: [{ message: 'write failed' }, { message: 'disk full', code: 'ENOSPC' }],
+          stack: ['at w (packages/server/src/a.ts:1:1)'],
+        },
+      }),
+    );
+    fireEvent.click(screen.getByRole('tab', { name: 'Error' }));
+    expect(screen.getByText('Details')).toBeTruthy();
+    expect(screen.getByText('ENOSPC')).toBeTruthy();
+    expect(screen.getByText('at w (packages/server/src/a.ts:1:1)')).toBeTruthy();
   });
 });
 

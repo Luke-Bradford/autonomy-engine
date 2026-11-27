@@ -96,3 +96,27 @@ describe('#890 captureDispatchParams', () => {
     expect(captureDispatchParams({ connectionParams: { n: 1n } })).toBeUndefined();
   });
 });
+
+describe('#1567 OR36 A4 — the capture cap is the workspace setting', () => {
+  const sql = 'SELECT ' + 'x, '.repeat(6_664) + 'y FROM t';
+
+  it('keeps a 20,000-character SQL statement whole under the default', () => {
+    expect(sql.length).toBeGreaterThanOrEqual(20_000);
+    const got = captureDispatchInput({ query: sql });
+    expect(got?.truncated).toBeUndefined();
+    expect(JSON.parse(got?.text ?? '')).toEqual({ query: sql });
+  });
+
+  it('cuts it at inputMaxChars: 4000, and says how long it was', () => {
+    const got = captureDispatchInput({ query: sql }, 4_000);
+    expect(got?.truncated).toBe(true);
+    expect(got?.text.length).toBe(4_000);
+    expect(got?.chars).toBe(JSON.stringify({ query: sql }).length);
+  });
+
+  it('cuts the applied parameters at the same cap', () => {
+    const got = captureDispatchParams({ connectionParams: { s: 'a'.repeat(5_000) } }, 4_000);
+    expect(got?.truncated).toBe(true);
+    expect(got?.text.length).toBe(4_000);
+  });
+});

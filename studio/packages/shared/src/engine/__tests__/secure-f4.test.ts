@@ -163,8 +163,13 @@ describe('#1 F4 — Engine.redact (emit-time)', () => {
       attemptId: 'i#0',
       error: 'bad input hunter2',
       kind: 'permanent',
+      // #1567 — a cause chain quotes what the error quotes.
+      detail: { causes: [{ message: 'bad input hunter2' }], stack: ['at x (a.ts:1:1)'] },
+      evaluation: { text: '{"operands":{"x":"hunter2"}}', chars: 28 },
     });
     expect(failed).toMatchObject({ error: SECURE_ERROR_WITHHELD });
+    expect(failed).not.toHaveProperty('detail');
+    expect(JSON.stringify(failed)).not.toContain('hunter2');
     const tool = e.redact({
       type: 'activity.toolCalled',
       runId: RUN,
@@ -326,6 +331,24 @@ describe('#1 F4 — Engine.redact (emit-time)', () => {
     const paramsOnly = { ...dispatched(secret.id), input: undefined } as EngineEvent;
     const got = createEngine({ nodes: [secret], edges: [], containers: [] }).redact(paramsOnly);
     expect(got).toEqual({ ...paramsOnly, params: { text: SECURE_REDACTED, chars: 70 } });
+  });
+
+  it("#1567 withholds a secure node's EXPRESSION record the same way, on either flag", () => {
+    const inOnly = node('i', { policy: { secureInput: true } });
+    const outOnly = node('o', { policy: { secureOutput: true } });
+    for (const n of [secret, inOnly, outOnly]) {
+      const ev = {
+        ...dispatched(n.id),
+        input: undefined,
+        params: undefined,
+        expressions: { text: '{"to":{"template":"${params.to}","value":"a@b"}}', chars: 50 },
+      } as EngineEvent;
+      const got = createEngine({ nodes: [n], edges: [], containers: [] }).redact(ev);
+      expect(got.type === 'node.dispatched' && got.expressions).toEqual({
+        text: SECURE_REDACTED,
+        chars: 50,
+      });
+    }
   });
 
   it('#890 resolves a foreach instance id on node.dispatched too', () => {

@@ -148,6 +148,13 @@ describe('fail crash recovery re-emits failNode (#4 A7)', () => {
       nodeId: 'f',
       attemptId: 'f#0',
       error: 'boom 1',
+      // #1567 — the re-emit records the same evaluation the first emission did.
+      evaluation: {
+        field: 'message',
+        expression: 'boom ${params.n}',
+        operands: { 'params.n': 1 },
+        result: 'boom 1',
+      },
     });
     // A control node must NEVER be re-dispatched to the executor on resume.
     expect(commands.some((c) => c.type === 'dispatchNode' && c.nodeId === 'f')).toBe(false);

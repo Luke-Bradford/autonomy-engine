@@ -50,7 +50,7 @@
  */
 import { RUN_LOG_STREAMS } from '../catalog/session-log.js';
 import type { Node } from '../schemas/pipeline.js';
-import type { CapturedContent, EngineEvent, ResolvedUserProperty } from './types.js';
+import type { CapturedContent, DispatchInput, EngineEvent, ResolvedUserProperty } from './types.js';
 import {
   outputContract,
   matchesType,
@@ -120,6 +120,11 @@ function redactCaptured<T extends CapturedContent>(field: T): T {
   return withText;
 }
 
+/** #890 / #1567 — a bounded JSON record on a secure node: the marker, its length kept. */
+function redactRecord(record: DispatchInput): DispatchInput {
+  return { text: SECURE_REDACTED, chars: record.chars };
+}
+
 /** #1600 C0d — every value and error is the marker; the names stay. */
 function redactUserProperties(props: ResolvedUserProperty[]): ResolvedUserProperty[] {
   return props.map(({ name, error }) =>
@@ -134,7 +139,13 @@ function redactUserProperties(props: ResolvedUserProperty[]): ResolvedUserProper
  */
 export function redactSecureEvent(node: Node | undefined, event: EngineEvent): EngineEvent {
   if (node === undefined || !isSecureNode(node)) return event;
-  const redacted = redactSecureFields(node, event);
+  const fields = redactSecureFields(node, event);
+  // #1567 OR36 A2 — a decision's evaluation record holds its operands and its
+  // result (a Filter's outputs, a Fail's message): EITHER flag, as for input.
+  const redacted =
+    'evaluation' in fields && fields.evaluation !== undefined
+      ? ({ ...fields, evaluation: redactRecord(fields.evaluation) } as EngineEvent)
+      : fields;
   // #1600 C0d / #1673 — user properties, on whichever event records them (a
   // dispatch, a failure before it, or an engine-evaluated activity's own
   // event): EITHER flag, as for `node.dispatched`'s input, because a `${}` in
@@ -187,8 +198,12 @@ function redactSecureFields(node: Node, event: EngineEvent): EngineEvent {
       return secureOut || RUN_LOG_STREAMS.has(event.name)
         ? { ...event, name: SECURE_REDACTED, value: SECURE_REDACTED }
         : event;
-    case 'node.failed':
-      return { ...event, error: SECURE_ERROR_WITHHELD };
+    case 'node.failed': {
+      // #1567 — the cause chain quotes what `error` quotes, so it goes too.
+      const rest = { ...event, error: SECURE_ERROR_WITHHELD };
+      delete rest.detail;
+      return rest;
+    }
     // #1600 C8d — a Wait until's reason names the path, as a failure would.
     case 'node.notReady':
       return { ...event, reason: SECURE_ERROR_WITHHELD };
@@ -213,15 +228,22 @@ function redactSecureFields(node: Node, event: EngineEvent): EngineEvent {
       // `secureInput` alone would still leave it readable on a `secureOutput`
       // node through the other half. `chars` stays, as it does there. The
       // resolved parameters (`params`) are input too, and go the same way.
-      return event.input === undefined && event.params === undefined
+      // #1567 OR36 — the expression record holds resolved input values, so it
+      // goes the same way.
+      return event.input === undefined &&
+        event.params === undefined &&
+        event.expressions === undefined &&
+        event.datasetSnapshots === undefined
         ? event
         : {
             ...event,
-            ...(event.input !== undefined
-              ? { input: { text: SECURE_REDACTED, chars: event.input.chars } }
+            ...(event.datasetSnapshots !== undefined
+              ? { datasetSnapshots: redactRecord(event.datasetSnapshots) }
               : {}),
-            ...(event.params !== undefined
-              ? { params: { text: SECURE_REDACTED, chars: event.params.chars } }
+            ...(event.input !== undefined ? { input: redactRecord(event.input) } : {}),
+            ...(event.params !== undefined ? { params: redactRecord(event.params) } : {}),
+            ...(event.expressions !== undefined
+              ? { expressions: redactRecord(event.expressions) }
               : {}),
           };
     case 'activity.agentTelemetry':

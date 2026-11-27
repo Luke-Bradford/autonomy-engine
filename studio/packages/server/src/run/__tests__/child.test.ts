@@ -219,6 +219,32 @@ describe('#796 — a call node runs a REAL child', () => {
     b.unsubscribe();
   });
 
+  it('#1567 records the params passed and the version the child pins, on call.started', async () => {
+    const { db } = freshDb();
+    const childPipeline = createPipeline(db, { ownerId: 'local', name: `P${(seq += 1)}` });
+    const childPv = createPipelineVersion(db, {
+      pipelineId: childPipeline.id,
+      params: [{ name: 'region', type: 'string', required: false }],
+      outputs: [],
+      nodes: [leaf('work')],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    }).id;
+    const caller: Node = {
+      ...callNode('caller', childPv),
+      call: { pipelineVersionId: childPv, params: { region: "eu-${concat('we', 'st')}" } },
+    };
+    const run = seedRun(db, seedVersion(db, [caller]));
+    const b = boundary(db, { work: {} });
+    await b.drives.serialize(run.id, () => startRun(b, run));
+    await settle(b.drives);
+    const announced = loadEngineEvents(db, run.id).find((e) => e.type === 'call.started');
+    expect(announced).toMatchObject({ childPipelineVersionId: childPv });
+    const params = announced?.type === 'call.started' ? announced.params : undefined;
+    expect(JSON.parse(params?.text ?? '{}')).toEqual({ region: 'eu-west' });
+    b.unsubscribe();
+  });
+
   it('a FAILING child fails the parent and still hands back what it produced', async () => {
     const { db } = freshDb();
     const childPv = seedVersion(db, [leaf('work')]);

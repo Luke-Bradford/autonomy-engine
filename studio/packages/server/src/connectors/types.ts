@@ -103,6 +103,13 @@ export interface ActivityContext {
    * the adapter keeps it out of every output and error. Omitted otherwise.
    */
   callbackUri?: string;
+  /**
+   * #1567 OR36 A4 — the most bytes one output field may hold (the workspace's
+   * `runCapture.outputMaxBytes`), read at dispatch. An adapter that reads an
+   * open-ended body bounds it here and says it cut it. Absent in tests and for
+   * an adapter that does not read one; the documented default then applies.
+   */
+  outputMaxBytes?: number;
   /** The node's prepared (substituted) config. Secret-free by construction. */
   input: Record<string, unknown>;
   /** The bound Connection's non-secret `config`. */

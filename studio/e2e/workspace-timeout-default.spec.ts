@@ -19,10 +19,20 @@ const TIMEOUT = 'Timeout (duration)';
 const DEFAULT_FIELD = 'Activity timeout (duration)';
 const SETTINGS_URL = '/api/workspace/settings';
 
-/** The PUT takes the whole document (#1600 C7d), so Lookup max rows goes back as its default. */
+/**
+ * The PUT takes the whole document (#1600 C7d), so Lookup max rows goes back as
+ * its default, and (#1567) the run capture settings go back as they are stored.
+ */
 async function putDefault(page: Page, seconds: number | null, lookupMaxRows = 1000): Promise<void> {
+  const current = (await (await page.request.get(SETTINGS_URL)).json()) as {
+    settings: { runCapture: unknown };
+  };
   const res = await page.request.put(SETTINGS_URL, {
-    data: { defaultActivityTimeoutSeconds: seconds, lookupMaxRows },
+    data: {
+      defaultActivityTimeoutSeconds: seconds,
+      lookupMaxRows,
+      runCapture: current.settings.runCapture,
+    },
   });
   expect(res.status()).toBe(200);
 }

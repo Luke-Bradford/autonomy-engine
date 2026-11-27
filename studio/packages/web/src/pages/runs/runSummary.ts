@@ -12,6 +12,7 @@ import {
   type CaptureToolTurn,
   type DispatchInput,
   type EngineEvent,
+  type ErrorDetail,
   type FailureKind,
   type MeteredTotals,
   type NodeCost,
@@ -221,6 +222,23 @@ export interface NodeActivity {
    * exactly the points `input` is, so the two always describe one dispatch.
    */
   params: DispatchInput | undefined;
+  /**
+   * #1567 OR36 — that same dispatch's record of how each `${}` became its value
+   * (`node.dispatched.expressions`), and of each dataset end as it was
+   * (`datasetSnapshots`: kind, config after parameters, a query's SQL, the row
+   * hash). Set, replaced, cleared and paired by foreach item exactly as `params`.
+   */
+  expressions: DispatchInput | undefined;
+  datasetSnapshots: DispatchInput | undefined;
+  /**
+   * #1567 OR36 — how an engine-evaluated activity decided (If, Switch, a
+   * variable write, Filter, Fail): its latest attempt's recorded evaluation.
+   */
+  evaluation: DispatchInput | undefined;
+  /** #1567 OR36 — a thrown error's cause chain and stack (`node.failed.detail`). */
+  errorDetail: ErrorDetail | undefined;
+  /** #1567 OR36 — the parameters a pipeline call passed its child (`call.started.params`). */
+  callParams: DispatchInput | undefined;
   /**
    * #890 — WHICH foreach item's dispatch `input`, `params` and `datasetAddresses`
    * describe (`'w@2'`, as `instanceId`). An item's dispatch genuinely differs
@@ -664,6 +682,8 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
     {
       input: DispatchInput | undefined;
       params: DispatchInput | undefined;
+      expressions: DispatchInput | undefined;
+      datasetSnapshots: DispatchInput | undefined;
       datasetAddresses: NodeActivity['datasetAddresses'];
     }
   >();
@@ -741,6 +761,11 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         datasetAddresses: undefined,
         input: undefined,
         params: undefined,
+        expressions: undefined,
+        datasetSnapshots: undefined,
+        evaluation: undefined,
+        errorDetail: undefined,
+        callParams: undefined,
         inputInstanceId: undefined,
         outputValues: undefined,
         copiedFromRunId: undefined,
@@ -799,6 +824,9 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
     n.inactive = undefined;
     n.variableWrite = undefined;
     n.instanceId = undefined;
+    // #1567 — each describes one result, as `error` does.
+    n.evaluation = undefined;
+    n.errorDetail = undefined;
   };
 
   /** The raw id, when this event came from a foreach ITEM INSTANCE of the node. */
@@ -982,10 +1010,14 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         // #890 — unconditionally too, for the same reason.
         n.input = e.input;
         n.params = e.params;
+        n.expressions = e.expressions;
+        n.datasetSnapshots = e.datasetSnapshots;
         n.inputInstanceId = instanceOf(e.nodeId);
         dispatchByRaw.set(e.nodeId, {
           input: e.input,
           params: e.params,
+          expressions: e.expressions,
+          datasetSnapshots: e.datasetSnapshots,
           datasetAddresses: e.datasetAddresses,
         });
         if (!recheck) openSpan(n, e.nodeId, row.ts);
@@ -1003,6 +1035,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         clearResult(n);
         n.status = 'success';
         n.outputValues = e.outputs;
+        n.evaluation = e.evaluation;
         n.instanceId = instanceOf(e.nodeId);
         closeSpan(n, e.nodeId, row.ts);
         countIfUnstarted(n); // a `filter`'s only event
@@ -1033,6 +1066,8 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         const statedKind = (row.payload as { kind?: unknown } | null)?.kind !== undefined;
         n.failureKind = statedKind ? e.kind : undefined;
         n.failureCode = e.code;
+        n.evaluation = e.evaluation;
+        n.errorDetail = e.detail;
         n.instanceId = instanceOf(e.nodeId);
         closeSpan(n, e.nodeId, row.ts);
         countIfUnstarted(n); // a `fail` control node's only event
@@ -1083,6 +1118,8 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
           // #890 — and the input: the re-dispatch records its own.
           n.input = undefined;
           n.params = undefined;
+          n.expressions = undefined;
+          n.datasetSnapshots = undefined;
           n.inputInstanceId = undefined;
         }
         dispatchByRaw.delete(e.nodeId);
@@ -1296,6 +1333,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         // `if` and `switch`, so there is never anything else to show, and the
         // branch taken is already reported by the graph and the event log.
         n.outputValues = {};
+        n.evaluation = e.evaluation;
         n.instanceId = instanceOf(e.nodeId);
         break;
       }
@@ -1317,6 +1355,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
           name: e.name,
           value: e.value,
         };
+        n.evaluation = e.evaluation;
         n.instanceId = instanceOf(e.nodeId);
         break;
       }
@@ -1330,6 +1369,8 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         const n = ensure(e.callNodeId);
         n.status = 'waiting';
         n.instanceId = instanceOf(e.callNodeId);
+        // #1567 — what the child was started with; absent on an older log.
+        n.callParams = e.params;
         countIfUnstarted(n);
         /* #932 — the ONE arm that may record a child. See `childRunIds`: this
            event is appended only after the child's row exists, while
@@ -1637,6 +1678,8 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         ? {
             input: dispatchByRaw.get(n.instanceId)?.input,
             params: dispatchByRaw.get(n.instanceId)?.params,
+            expressions: dispatchByRaw.get(n.instanceId)?.expressions,
+            datasetSnapshots: dispatchByRaw.get(n.instanceId)?.datasetSnapshots,
             datasetAddresses: dispatchByRaw.get(n.instanceId)?.datasetAddresses,
             inputInstanceId: n.instanceId,
           }
@@ -1806,6 +1849,11 @@ export function blankNodeActivity(nodeId: string, status: NodeRunStatus): NodeAc
     datasetAddresses: undefined,
     input: undefined,
     params: undefined,
+    expressions: undefined,
+    datasetSnapshots: undefined,
+    evaluation: undefined,
+    errorDetail: undefined,
+    callParams: undefined,
     inputInstanceId: undefined,
     outputValues: undefined,
     /* NO event named this node, and a copied frontier node is named by

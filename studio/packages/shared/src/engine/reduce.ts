@@ -84,6 +84,7 @@ import {
 import { utf8ByteLength } from './functions.js';
 import { docNodeIdOf, instanceKey, parseInstanceKey } from './instance-key.js';
 import { jsonClone } from './json-clone.js';
+import { evaluationOf, type ExpressionTrace } from './expression-trace.js';
 
 // ---------------------------------------------------------------------------
 // P2b + P2c — the PURE event-sourced reducer + walk (DAG, back-edges,
@@ -525,7 +526,59 @@ type PreparedDispatch = {
   resolvedInlineDatasets: InlineDatasets | undefined;
   /** #1600 C0d — the node's user properties, each `${}`-resolved (or its error). */
   resolvedUserProperties: ResolvedUserProperty[] | undefined;
+  /** #1567 OR36 A2 — how each `${}` field above became its value; `undefined` for none. */
+  expressions: ExpressionTrace | undefined;
 };
+
+/** #1567 OR36 A2 — a `substitute` trace argument: where to record, under which path. */
+type TraceAt = { into: ExpressionTrace; path: string } | undefined;
+
+/** A control field's trace argument: `field` recorded into `trace`, when recording. */
+function traceAt(trace: ExpressionTrace | undefined, field: string): TraceAt {
+  return trace && { into: trace, path: field };
+}
+
+/** The commands an engine-evaluated activity's decision rides on to the driver. */
+type EvaluationCommand = Extract<
+  EngineCommand,
+  { type: 'evaluateControl' | 'failNode' | 'writeVariable' | 'succeedControl' }
+>;
+
+/**
+ * #1567 OR36 A2 — `command` carrying the record of the evaluation that decided
+ * it: the field's expression, its operands and the result the command carries.
+ * Unchanged when the field held no `${}` (a literal decides nothing to audit)
+ * or the command is not one of these four.
+ */
+function withEvaluation<C extends EngineCommand>(command: C, trace: ExpressionTrace): C {
+  const field = Object.keys(trace)[0];
+  if (field === undefined) return command;
+  const c = command as EngineCommand;
+  let result: unknown;
+  switch (c.type) {
+    case 'evaluateControl':
+      result = c.branch;
+      break;
+    case 'failNode':
+      result = c.error;
+      break;
+    case 'writeVariable':
+      result = c.value;
+      break;
+    case 'succeedControl':
+      result = c.outputs;
+      break;
+    default:
+      return command;
+  }
+  const evaluation = evaluationOf(trace, field, result);
+  return evaluation === undefined ? command : ({ ...c, evaluation } as EvaluationCommand as C);
+}
+
+/** `at` one level down: `key` under its path, or `undefined` when not recording. */
+function traceUnder(at: TraceAt, key: string): TraceAt {
+  return at && { into: at.into, path: at.path === '' ? key : `${at.path}.${key}` };
+}
 
 /**
  * A STABLE key for an edge, from (from, to, on, branch) — NOT an array index —
@@ -744,6 +797,7 @@ export function createEngine(doc: EngineDoc): Engine {
     node: Node,
     sid: string,
     attemptId: string,
+    trace?: ExpressionTrace,
   ): UserPropertiesCommand {
     // #1600 C12a — a `set_variable`'s Operation, or `append_variable`'s append.
     const op = variableWriteOp(node);
@@ -774,6 +828,7 @@ export function createEngine(doc: EngineDoc): Engine {
       buildCtx(scopedEvalState(state, sid)),
       0,
       foreachItemOf(state, sid),
+      traceAt(trace, 'value'),
     );
 
     const fail = (code: string, error: string): UserPropertiesCommand => ({
@@ -1528,6 +1583,7 @@ export function createEngine(doc: EngineDoc): Engine {
     state: RunState,
     node: Node,
     item: { value: unknown } | undefined,
+    trace?: TraceAt,
   ): Record<string, unknown> {
     // #2 L10a — an llm_call's `tools` subtree is DEFERRED-EVAL: its expressions
     // reference `${tool.args.*}`, bound only when the model calls the tool
@@ -1538,7 +1594,7 @@ export function createEngine(doc: EngineDoc): Engine {
     // evaluates them args-only at call time).
     if (node.type === LLM_CALL_ACTIVITY_TYPE && node.config['tools'] !== undefined) {
       const { tools, ...rest } = node.config;
-      const prepared = substitute(rest, buildCtx(state), 0, item) as Record<string, unknown>;
+      const prepared = substitute(rest, buildCtx(state), 0, item, trace) as Record<string, unknown>;
       prepared['tools'] = tools;
       return prepared;
     }
@@ -1549,7 +1605,7 @@ export function createEngine(doc: EngineDoc): Engine {
     // dispatch schema then refuses it (`preCopyScriptIssue`).
     if (node.type === COPY_ACTIVITY_TYPE && node.config['preCopyScript'] !== undefined) {
       const { preCopyScript, ...rest } = node.config;
-      const prepared = substitute(rest, buildCtx(state), 0, item) as Record<string, unknown>;
+      const prepared = substitute(rest, buildCtx(state), 0, item, trace) as Record<string, unknown>;
       prepared['preCopyScript'] = preCopyScript;
       return prepared;
     }
@@ -1560,21 +1616,30 @@ export function createEngine(doc: EngineDoc): Engine {
     if (node.type === SCRIPT_ACTIVITY_TYPE && node.config['blocks'] !== undefined) {
       const { blocks, ...rest } = node.config;
       const env = buildCtx(state);
-      const prepared = substitute(rest, env, 0, item) as Record<string, unknown>;
+      const prepared = substitute(rest, env, 0, item, trace) as Record<string, unknown>;
       if (!Array.isArray(blocks)) {
         prepared['blocks'] = blocks;
         return prepared;
       }
-      prepared['blocks'] = (blocks as unknown[]).map((block) => {
+      prepared['blocks'] = (blocks as unknown[]).map((block, i) => {
         if (block === null || typeof block !== 'object' || Array.isArray(block)) return block;
         const { parameters, ...literal } = block as Record<string, unknown>;
         return parameters === undefined
           ? literal
-          : { ...literal, parameters: substitute(parameters, env, 0, item) };
+          : {
+              ...literal,
+              parameters: substitute(
+                parameters,
+                env,
+                0,
+                item,
+                traceUnder(traceUnder(trace, `blocks[${i}]`), 'parameters'),
+              ),
+            };
       });
       return prepared;
     }
-    return substitute(node.config, buildCtx(state), 0, item) as Record<string, unknown>;
+    return substitute(node.config, buildCtx(state), 0, item, trace) as Record<string, unknown>;
   }
 
   /**
@@ -1592,9 +1657,12 @@ export function createEngine(doc: EngineDoc): Engine {
     state: RunState,
     node: Node,
     item: { value: unknown } | undefined,
+    trace?: TraceAt,
   ): string | undefined {
     if (node.connectionId === undefined) return undefined;
-    return String(substitute(node.connectionId, buildCtx(state), 0, item));
+    return String(
+      substitute(node.connectionId, buildCtx(state), 0, item, traceUnder(trace, 'connectionId')),
+    );
   }
 
   /**
@@ -1700,9 +1768,16 @@ export function createEngine(doc: EngineDoc): Engine {
     state: RunState,
     node: Node,
     item: { value: unknown } | undefined,
+    trace?: TraceAt,
   ): Record<string, unknown> | undefined {
     if (node.connectionParams === undefined) return undefined;
-    return substitute(node.connectionParams, buildCtx(state), 0, item) as Record<string, unknown>;
+    return substitute(
+      node.connectionParams,
+      buildCtx(state),
+      0,
+      item,
+      traceUnder(trace, 'connectionParams'),
+    ) as Record<string, unknown>;
   }
 
   /**
@@ -1716,6 +1791,7 @@ export function createEngine(doc: EngineDoc): Engine {
     state: RunState,
     node: Node,
     item: { value: unknown } | undefined,
+    trace?: TraceAt,
   ): { source?: Record<string, unknown>; sink?: Record<string, unknown> } | undefined {
     if (node.datasetParams === undefined) return undefined;
     const ctx = buildCtx(state);
@@ -1723,7 +1799,13 @@ export function createEngine(doc: EngineDoc): Engine {
     for (const side of ['source', 'sink'] as const) {
       const binding = node.datasetParams[side];
       if (binding !== undefined) {
-        resolved[side] = substitute(binding, ctx, 0, item) as Record<string, unknown>;
+        resolved[side] = substitute(
+          binding,
+          ctx,
+          0,
+          item,
+          traceUnder(traceUnder(trace, 'datasetParams'), side),
+        ) as Record<string, unknown>;
       }
     }
     return resolved;
@@ -1772,18 +1854,22 @@ export function createEngine(doc: EngineDoc): Engine {
   function prepDispatch(state: RunState, node: Node, sid: string = node.id): PreparedDispatch {
     const es = scopedEvalState(state, sid);
     const item = foreachItemOf(state, sid);
-    return {
-      preparedInput: prepInput(es, node, item),
-      resolvedConnectionId: resolveConnectionId(es, node, item),
-      resolvedConnectionParams: resolveConnectionParams(es, node, item),
+    // #1567 OR36 A2 — the resolutions below record their `${}` fields here.
+    const into: ExpressionTrace = {};
+    const trace: TraceAt = { into, path: '' };
+    const prepared: Omit<PreparedDispatch, 'expressions'> = {
+      preparedInput: prepInput(es, node, item, trace),
+      resolvedConnectionId: resolveConnectionId(es, node, item, trace),
+      resolvedConnectionParams: resolveConnectionParams(es, node, item, trace),
       resolvedConnectionIds: resolveConnectionIds(es, node, item),
       resolvedDatasetIds: resolveDatasetIds(es, node, item),
-      resolvedDatasetParams: resolveDatasetParams(es, node, item),
+      resolvedDatasetParams: resolveDatasetParams(es, node, item, trace),
       resolvedInlineDatasets: resolveInlineDatasets(es, node, item),
       // Never throws: a failed property records its error (user-properties.ts).
       // An empty list is treated as none, so it records nothing.
       resolvedUserProperties: resolveNodeUserProperties(es, node, item),
     };
+    return { ...prepared, expressions: Object.keys(into).length === 0 ? undefined : into };
   }
 
   /** #1600 C0d — a node's user properties resolved in its scope, one context for all. */
@@ -1855,6 +1941,7 @@ export function createEngine(doc: EngineDoc): Engine {
       resolvedDatasetParams: prepared.resolvedDatasetParams,
       resolvedInlineDatasets: prepared.resolvedInlineDatasets,
       resolvedUserProperties: prepared.resolvedUserProperties,
+      ...(prepared.expressions !== undefined ? { expressions: prepared.expressions } : {}),
     };
   }
 
@@ -2060,8 +2147,14 @@ export function createEngine(doc: EngineDoc): Engine {
       // handed to the executor. A bad condition/`on` throws → `prepFailure` →
       // `finishRun{invalid_event}`, the same verdict a dispatch prep-throw reaches.
       let branch: string;
+      const trace: ExpressionTrace = {};
       try {
-        branch = evalControlBranch(node, scopedEvalState(state, sid), foreachItemOf(state, sid));
+        branch = evalControlBranch(
+          node,
+          scopedEvalState(state, sid),
+          foreachItemOf(state, sid),
+          trace,
+        );
       } catch (err) {
         return prepFailure(state, sid, err, diagnostics);
       }
@@ -2071,7 +2164,16 @@ export function createEngine(doc: EngineDoc): Engine {
         currentAttemptId: attemptId,
       });
       commands.push(
-        recorded({ type: 'evaluateControl', nodeId: sid, attemptId, branch, event: controlEvent }),
+        withEvaluation(
+          recorded({
+            type: 'evaluateControl',
+            nodeId: sid,
+            attemptId,
+            branch,
+            event: controlEvent,
+          }),
+          trace,
+        ),
       );
       return { state: next, changed: true };
     }
@@ -2082,8 +2184,9 @@ export function createEngine(doc: EngineDoc): Engine {
       // `variable.set`/`variable.append`, or `node.failed` for an unwritable
       // value), and emit that command. NEVER handed to the executor.
       let command: UserPropertiesCommand;
+      const trace: ExpressionTrace = {};
       try {
-        command = variableWriteCommand(state, node, sid, attemptId);
+        command = variableWriteCommand(state, node, sid, attemptId, trace);
       } catch (err) {
         return prepFailure(state, sid, err, diagnostics);
       }
@@ -2092,7 +2195,7 @@ export function createEngine(doc: EngineDoc): Engine {
         attempts: ns.attempts + 1,
         currentAttemptId: attemptId,
       });
-      commands.push(recorded(command));
+      commands.push(withEvaluation(recorded(command), trace));
       return { state: next, changed: true };
     }
     if (node.type === FAIL_ACTIVITY_TYPE) {
@@ -2104,8 +2207,14 @@ export function createEngine(doc: EngineDoc): Engine {
       // handed to the executor. A missing/bad `message` throws → `prepFailure` →
       // `finishRun{invalid_event}`, the same verdict a control-eval throw reaches.
       let error: string;
+      const trace: ExpressionTrace = {};
       try {
-        error = evalFailMessage(node, scopedEvalState(state, sid), foreachItemOf(state, sid));
+        error = evalFailMessage(
+          node,
+          scopedEvalState(state, sid),
+          foreachItemOf(state, sid),
+          trace,
+        );
       } catch (err) {
         return prepFailure(state, sid, err, diagnostics);
       }
@@ -2114,7 +2223,9 @@ export function createEngine(doc: EngineDoc): Engine {
         attempts: ns.attempts + 1,
         currentAttemptId: attemptId,
       });
-      commands.push(recorded({ type: 'failNode', nodeId: sid, attemptId, error }));
+      commands.push(
+        withEvaluation(recorded({ type: 'failNode', nodeId: sid, attemptId, error }), trace),
+      );
       return { state: next, changed: true };
     }
     if (node.type === FILTER_ACTIVITY_TYPE) {
@@ -2129,8 +2240,9 @@ export function createEngine(doc: EngineDoc): Engine {
       // non-boolean predicate, bad `${}` ref) throws → `prepFailure` →
       // `finishRun{invalid_event}`, the same verdict a control-eval throw reaches.
       let outputs: Record<string, unknown>;
+      const trace: ExpressionTrace = {};
       try {
-        outputs = evalFilter(node, scopedEvalState(state, sid), foreachItemOf(state, sid));
+        outputs = evalFilter(node, scopedEvalState(state, sid), foreachItemOf(state, sid), trace);
       } catch (err) {
         return prepFailure(state, sid, err, diagnostics);
       }
@@ -2139,7 +2251,12 @@ export function createEngine(doc: EngineDoc): Engine {
         attempts: ns.attempts + 1,
         currentAttemptId: attemptId,
       });
-      commands.push(recorded({ type: 'succeedControl', nodeId: sid, attemptId, outputs }));
+      commands.push(
+        withEvaluation(
+          recorded({ type: 'succeedControl', nodeId: sid, attemptId, outputs }),
+          trace,
+        ),
+      );
       return { state: next, changed: true };
     }
     if (node.type === WAIT_ACTIVITY_TYPE) {
@@ -2605,7 +2722,12 @@ export function createEngine(doc: EngineDoc): Engine {
    * condition, a mode defect, or a non-boolean result — the run-time half of
    * E6's boolean-condition rule that the write gate (#444) warns about first.
    */
-  function evalIfBranch(node: Node, state: RunState, item?: { value: unknown }): string {
+  function evalIfBranch(
+    node: Node,
+    state: RunState,
+    item?: { value: unknown },
+    trace?: ExpressionTrace,
+  ): string {
     const raw = node.config['condition'];
     if (typeof raw !== 'string') {
       throw new SubstituteError(
@@ -2616,7 +2738,7 @@ export function createEngine(doc: EngineDoc): Engine {
     const src = raw.trim();
     const defect = wholeValueDefect(src, 'condition');
     if (defect !== null) throw new SubstituteError(defect);
-    const out = substitute(src, buildCtx(state), 0, item);
+    const out = substitute(src, buildCtx(state), 0, item, traceAt(trace, 'condition'));
     if (typeof out === 'boolean') return out ? IF_BRANCH_TRUE : IF_BRANCH_FALSE;
     throw new SubstituteError(
       `if condition must resolve to a boolean, got ${typeof out} — ` +
@@ -2651,9 +2773,14 @@ export function createEngine(doc: EngineDoc): Engine {
    * `controlBranchEvent` but forgetting the evaluator here surfaces loudly, not as
    * a wrong-branch route.
    */
-  function evalControlBranch(node: Node, state: RunState, item?: { value: unknown }): string {
-    if (node.type === IF_ACTIVITY_TYPE) return evalIfBranch(node, state, item);
-    if (node.type === SWITCH_ACTIVITY_TYPE) return evalSwitchBranch(node, state, item);
+  function evalControlBranch(
+    node: Node,
+    state: RunState,
+    item?: { value: unknown },
+    trace?: ExpressionTrace,
+  ): string {
+    if (node.type === IF_ACTIVITY_TYPE) return evalIfBranch(node, state, item, trace);
+    if (node.type === SWITCH_ACTIVITY_TYPE) return evalSwitchBranch(node, state, item, trace);
     throw new SubstituteError(`no control-branch evaluator for node type '${node.type}'`);
   }
 
@@ -2672,7 +2799,12 @@ export function createEngine(doc: EngineDoc): Engine {
    * run-time half of A2's string-match rule that the write gate
    * (`validateSwitchConfig`) warns about first.
    */
-  function evalSwitchBranch(node: Node, state: RunState, item?: { value: unknown }): string {
+  function evalSwitchBranch(
+    node: Node,
+    state: RunState,
+    item?: { value: unknown },
+    trace?: ExpressionTrace,
+  ): string {
     const raw = node.config['on'];
     if (typeof raw !== 'string') {
       throw new SubstituteError(
@@ -2680,7 +2812,7 @@ export function createEngine(doc: EngineDoc): Engine {
           'string ${} expression (e.g. ${nodes.classify.output.label})',
       );
     }
-    const out = substitute(raw, buildCtx(state), 0, item);
+    const out = substitute(raw, buildCtx(state), 0, item, traceAt(trace, 'on'));
     if (typeof out !== 'string') {
       throw new SubstituteError(
         `switch 'on' must resolve to a string, got ${typeof out} — ` +
@@ -2721,7 +2853,12 @@ export function createEngine(doc: EngineDoc): Engine {
    * project's "never manufacture an absent fact" rule). A `${}` that itself throws
    * (a bad ref/mode defect) reaches the same verdict.
    */
-  function evalFailMessage(node: Node, state: RunState, item?: { value: unknown }): string {
+  function evalFailMessage(
+    node: Node,
+    state: RunState,
+    item?: { value: unknown },
+    trace?: ExpressionTrace,
+  ): string {
     const raw = node.config['message'];
     if (typeof raw !== 'string' || raw.trim() === '') {
       throw new SubstituteError(
@@ -2729,7 +2866,7 @@ export function createEngine(doc: EngineDoc): Engine {
           "message describing the failure (e.g. 'validation rejected the input')",
       );
     }
-    return String(substitute(raw, buildCtx(state), 0, item));
+    return String(substitute(raw, buildCtx(state), 0, item, traceAt(trace, 'message')));
   }
 
   /**
@@ -2752,8 +2889,15 @@ export function createEngine(doc: EngineDoc): Engine {
     node: Node,
     state: RunState,
     item?: { value: unknown },
+    trace?: ExpressionTrace,
   ): Record<string, unknown> {
-    const out = substitute(composeFilterExpr(node.config), buildCtx(state), 0, item);
+    const out = substitute(
+      composeFilterExpr(node.config),
+      buildCtx(state),
+      0,
+      item,
+      traceAt(trace, 'filter'),
+    );
     // The `filter(...)` fn returns an array or throws (`loopArr` on a non-array
     // `items`, `expectBool` on a non-boolean predicate element). This guard is
     // defensive — a composed `filter` can only yield an array — and keeps the
@@ -5290,20 +5434,29 @@ export function createEngine(doc: EngineDoc): Engine {
           // `wait` forks below do) so a `${item}`-bearing condition/`on` in a foreach
           // body re-resolves identically on recovery rather than throwing (#569).
           let branch: string;
+          const trace: ExpressionTrace = {};
           try {
-            branch = evalControlBranch(node, scopedEvalState(state, id), foreachItemOf(state, id));
+            branch = evalControlBranch(
+              node,
+              scopedEvalState(state, id),
+              foreachItemOf(state, id),
+              trace,
+            );
           } catch (err) {
             const failed = prepFailure(state, id, err, diagnostics);
             return { state: failed.state, commands: [failed.finish], diagnostics };
           }
           commands.push(
-            recorded({
-              type: 'evaluateControl',
-              nodeId: id,
-              attemptId: ns.currentAttemptId,
-              branch,
-              event: controlEvent,
-            }),
+            withEvaluation(
+              recorded({
+                type: 'evaluateControl',
+                nodeId: id,
+                attemptId: ns.currentAttemptId,
+                branch,
+                event: controlEvent,
+              }),
+              trace,
+            ),
           );
           continue;
         }
@@ -5315,7 +5468,9 @@ export function createEngine(doc: EngineDoc): Engine {
           // re-route to `writeVariable` or `failNode` accordingly. Idempotent: same
           // `currentAttemptId`, and a duplicate event folds as a stale no-op.
           try {
-            commands.push(recorded(variableWriteCommand(state, node, id, ns.currentAttemptId)));
+            const trace: ExpressionTrace = {};
+            const command = variableWriteCommand(state, node, id, ns.currentAttemptId, trace);
+            commands.push(withEvaluation(recorded(command), trace));
           } catch (err) {
             const failed = prepFailure(state, id, err, diagnostics);
             return { state: failed.state, commands: [failed.finish], diagnostics };
@@ -5336,14 +5491,23 @@ export function createEngine(doc: EngineDoc): Engine {
           // (as `tryDispatchNode` does) so a `${item}`-bearing message in a foreach
           // body re-resolves identically on recovery rather than throwing.
           let error: string;
+          const trace: ExpressionTrace = {};
           try {
-            error = evalFailMessage(node, scopedEvalState(state, id), foreachItemOf(state, id));
+            error = evalFailMessage(
+              node,
+              scopedEvalState(state, id),
+              foreachItemOf(state, id),
+              trace,
+            );
           } catch (err) {
             const failed = prepFailure(state, id, err, diagnostics);
             return { state: failed.state, commands: [failed.finish], diagnostics };
           }
           commands.push(
-            recorded({ type: 'failNode', nodeId: id, attemptId: ns.currentAttemptId, error }),
+            withEvaluation(
+              recorded({ type: 'failNode', nodeId: id, attemptId: ns.currentAttemptId, error }),
+              trace,
+            ),
           );
           continue;
         }
@@ -5361,19 +5525,23 @@ export function createEngine(doc: EngineDoc): Engine {
           // item (as `tryDispatchNode` does) so a `${item}`-bearing `items` in a
           // foreach body re-resolves identically on recovery rather than throwing.
           let outputs: Record<string, unknown>;
+          const trace: ExpressionTrace = {};
           try {
-            outputs = evalFilter(node, scopedEvalState(state, id), foreachItemOf(state, id));
+            outputs = evalFilter(node, scopedEvalState(state, id), foreachItemOf(state, id), trace);
           } catch (err) {
             const failed = prepFailure(state, id, err, diagnostics);
             return { state: failed.state, commands: [failed.finish], diagnostics };
           }
           commands.push(
-            recorded({
-              type: 'succeedControl',
-              nodeId: id,
-              attemptId: ns.currentAttemptId,
-              outputs,
-            }),
+            withEvaluation(
+              recorded({
+                type: 'succeedControl',
+                nodeId: id,
+                attemptId: ns.currentAttemptId,
+                outputs,
+              }),
+              trace,
+            ),
           );
           continue;
         }
