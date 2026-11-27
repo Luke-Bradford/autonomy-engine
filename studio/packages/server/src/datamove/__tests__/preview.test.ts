@@ -10,7 +10,12 @@ import type { ConnectorRegistry } from '../../connectors/registry.js';
 import type { ActivityEvent, ConnectorAdapter } from '../../connectors/types.js';
 import { cleanupTempRoots, seedDb, tempRoot } from '../../connectors/__tests__/sqlite-fixtures.js';
 import { PREVIEW_CONCURRENCY, PREVIEW_ROW_CAP } from '../../limits.js';
-import { TABLE_CATALOG_SQL, listConnectionTables, previewInlineSource } from '../preview.js';
+import {
+  TABLE_CATALOG_SQL,
+  listConnectionTables,
+  previewInlineSource,
+  storeDataType,
+} from '../preview.js';
 
 /**
  * #1600 C1q-c — Preview reads through the store adapter's own Lookup arm, so
@@ -52,6 +57,10 @@ describe('previewInlineSource', () => {
         { id: 3, name: 'row-3' },
       ],
       truncated: false,
+      columns: [
+        { name: 'id', type: 'integer', nullable: false },
+        { name: 'name', type: 'string', nullable: false },
+      ],
     });
   });
 
@@ -63,7 +72,12 @@ describe('previewInlineSource', () => {
       secret: null,
       inline: query('SELECT id FROM t WHERE id > :wm ORDER BY id', { wm: 3 }),
     });
-    expect(result).toEqual({ ok: true, rows: [{ id: 4 }, { id: 5 }], truncated: false });
+    expect(result).toEqual({
+      ok: true,
+      rows: [{ id: 4 }, { id: 5 }],
+      truncated: false,
+      columns: [{ name: 'id', type: 'integer', nullable: false }],
+    });
   });
 
   it(`keeps the first ${PREVIEW_ROW_CAP} rows and says the rest exist`, async () => {
@@ -293,5 +307,32 @@ describe('listConnectionTables', () => {
       secret: null,
     });
     expect(result).toMatchObject({ ok: false, error: expect.any(String) });
+  });
+});
+
+describe('storeDataType (#1401)', () => {
+  it.each([
+    ['postgres', 'integer', 'integer'],
+    ['postgres', 'bigint', 'integer'],
+    ['postgres', 'numeric(10,2)', 'number'],
+    ['postgres', 'double precision', 'number'],
+    ['postgres', 'boolean', 'boolean'],
+    ['postgres', 'date', 'date'],
+    ['postgres', 'timestamp with time zone', 'timestamp'],
+    ['postgres', 'bytea', 'binary'],
+    ['postgres', 'character varying(20)', 'string'],
+    ['postgres', 'jsonb', 'string'],
+    ['sqlite', 'INTEGER', 'integer'],
+    ['sqlite', 'BIGINT', 'integer'],
+    ['sqlite', 'VARCHAR(10)', 'string'],
+    ['sqlite', 'REAL', 'number'],
+    ['sqlite', 'DECIMAL(5,2)', 'number'],
+    ['sqlite', 'BLOB', 'binary'],
+    ['sqlite', 'BOOLEAN', 'boolean'],
+    ['sqlite', 'DATETIME', 'timestamp'],
+    ['sqlite', 'DATE', 'date'],
+    ['sqlite', '', 'string'],
+  ] as const)('%s %j is %s', (kind, typeName, expected) => {
+    expect(storeDataType(kind, typeName)).toBe(expected);
   });
 });

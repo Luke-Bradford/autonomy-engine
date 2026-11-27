@@ -169,9 +169,38 @@ export const PipelineRestoredEventSchema = z.object({
 export type PipelineRestoredEvent = z.infer<typeof PipelineRestoredEventSchema>;
 
 /**
+ * #1401 OR10 — what a store read showed the operator: a dataset's first rows,
+ * a connection's table list, a dataset's columns, or a Copy's mapped rows.
+ */
+export const STORE_PREVIEW_READS = ['rows', 'tables', 'schema', 'copy'] as const;
+export const StorePreviewReadSchema = z.enum(STORE_PREVIEW_READS);
+export type StorePreviewRead = z.infer<typeof StorePreviewReadSchema>;
+
+/**
+ * #1401 OR10 — a preview read a connection's store with its credential
+ * (`/api/datasets/preview`, `/tables`, `/:id/preview`, `/:id/schema`,
+ * `/copy-preview`). Written once the read was attempted, whatever it answered,
+ * so a refused read is on the record too; `ok` says which. It names the store
+ * and never what came back: no rows, no SQL, no path. Names are captured at
+ * write time, as `pipeline.published`'s are, so a rename does not rewrite it.
+ */
+export const StorePreviewedEventSchema = z.object({
+  type: z.literal('store.previewed'),
+  read: StorePreviewReadSchema,
+  connectionId: z.string().min(1),
+  connectionName: z.string().min(1),
+  /** The saved dataset read, or `null` for an inline source or a table list. */
+  datasetId: z.string().min(1).nullable(),
+  datasetName: z.string().min(1).nullable(),
+  ok: z.boolean(),
+  by: BySchema,
+});
+export type StorePreviewedEvent = z.infer<typeof StorePreviewedEventSchema>;
+
+/**
  * The closed workspace-audit event union, discriminated on `type`. G6c-1 adds
  * `pipeline.published`; the `active`-pointer projection folds over exactly this
- * log. #907 adds `pipeline.restored`.
+ * log. #907 adds `pipeline.restored`. #1401 adds `store.previewed`.
  */
 export const WorkspaceEventSchema = z.discriminatedUnion('type', [
   RepoConnectedEventSchema,
@@ -179,6 +208,7 @@ export const WorkspaceEventSchema = z.discriminatedUnion('type', [
   PipelineRestoredEventSchema,
   ImportAppliedEventSchema,
   PipelinePublishedEventSchema,
+  StorePreviewedEventSchema,
 ]);
 export type WorkspaceEvent = z.infer<typeof WorkspaceEventSchema>;
 

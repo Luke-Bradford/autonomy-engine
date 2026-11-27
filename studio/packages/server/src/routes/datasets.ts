@@ -1,14 +1,19 @@
 import { z } from 'zod';
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import {
+  CopyPreviewRequestSchema,
   DatasetPreviewRequestSchema,
   DatasetTablesRequestSchema,
   NewDatasetSchema,
   canonicalStringify,
+  type Dataset,
   type DatasetPreviewResult,
+  type StorePreviewRead,
 } from '@autonomy-studio/shared';
 import type { Principal } from '../auth/principal.js';
+import type { ResolvedDataset } from '../connectors/types.js';
 import {
+  appendWorkspaceEvent,
   createDataset,
   deleteDataset,
   getDataset,
@@ -21,9 +26,12 @@ import { exportDataset } from '../portability/index.js';
 import { listSheetsForConnection } from '../connectors/xlsx-sheets.js';
 import { connectionNotReadyReason } from '../repo/connections.js';
 import {
+  datasetSchema,
   listConnectionTables,
+  previewCopy,
   previewInlineSource,
-  type PreviewInlineSourceArgs,
+  previewSavedDataset,
+  type PreviewStoreArgs,
 } from '../datamove/preview.js';
 import { connectionSecretRefusal, readConnectionSecret } from '../secrets/connection-secret.js';
 import { pageArgsFromQuery, requireOwned, requireOwnedConnection } from './util.js';
@@ -86,6 +94,17 @@ const DatasetSheetsBodySchema = z.object({
    */
   path: z.string().max(4096),
 });
+
+/** #1401 OR10 — a saved dataset as the reader takes it: stored config, no overrides. */
+function asResolved(dataset: Dataset): ResolvedDataset {
+  return {
+    id: dataset.id,
+    name: dataset.name,
+    kind: dataset.kind,
+    config: dataset.config,
+    columns: dataset.columns,
+  };
+}
 
 export const datasetsRoutes: FastifyPluginAsync = async (fastify) => {
   const { db, masterKey } = fastify;
@@ -160,7 +179,7 @@ export const datasetsRoutes: FastifyPluginAsync = async (fastify) => {
     connectionId: string,
   ): Promise<
     | Extract<DatasetPreviewResult, { ok: false }>
-    | { ok: true; store: Pick<PreviewInlineSourceArgs, 'connection' | 'secret'> }
+    | { ok: true; name: string; store: Pick<PreviewStoreArgs, 'connection' | 'secret'> }
   > {
     const connection = requireOwnedConnection(db, principal, connectionId);
     const notReady = connectionNotReadyReason(connection);
@@ -177,11 +196,42 @@ export const datasetsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!read.ok) return { ok: false, error: connectionSecretRefusal(read.reason) };
     return {
       ok: true,
+      name: connection.name,
       store: {
         connection: { kind: connection.kind, config: connection.config },
         secret: read.secret,
       },
     };
+  }
+
+  /**
+   * #1401 OR10 — the audit record of a read that reached a store with its
+   * credential: which store, which dataset, what kind of read, and whether it
+   * answered. Never what it answered. Written after the read, so a read the
+   * caller cancelled is recorded too.
+   */
+  function audit(
+    principal: Principal,
+    read: StorePreviewRead,
+    connection: { id: string; name: string },
+    dataset: { id: string; name: string } | null,
+    result: { ok: boolean },
+  ): void {
+    appendWorkspaceEvent(db, principal.ownerId, {
+      type: 'store.previewed',
+      read,
+      connectionId: connection.id,
+      connectionName: connection.name,
+      datasetId: dataset?.id ?? null,
+      datasetName: dataset?.name ?? null,
+      ok: result.ok,
+      by: principal.id,
+    });
+  }
+
+  /** #1401 OR10 — a saved dataset the caller owns, or a 404 that says nothing more. */
+  function ownedDataset(principal: Principal, id: string): Dataset {
+    return requireOwned(getDataset(db, id), principal, 'dataset', id);
   }
 
   /**
@@ -206,12 +256,14 @@ export const datasetsRoutes: FastifyPluginAsync = async (fastify) => {
     const body = DatasetPreviewRequestSchema.parse(request.body);
     const store = await readableStore(request.principal, body.connectionId);
     if (!store.ok) return store;
-    return previewInlineSource({
+    const result = await previewInlineSource({
       registry: fastify.connectors,
       ...store.store,
       inline: body.source.inline,
       signal: left,
     });
+    audit(request.principal, 'rows', { id: body.connectionId, name: store.name }, null, result);
+    return result;
   });
 
   /**
@@ -226,11 +278,106 @@ export const datasetsRoutes: FastifyPluginAsync = async (fastify) => {
     const body = DatasetTablesRequestSchema.parse(request.body);
     const store = await readableStore(request.principal, body.connectionId);
     if (!store.ok) return store;
-    return listConnectionTables({
+    const result = await listConnectionTables({
       registry: fastify.connectors,
       ...store.store,
       signal: left,
     });
+    audit(request.principal, 'tables', { id: body.connectionId, name: store.name }, null, result);
+    return result;
+  });
+
+  /**
+   * #1401 OR10 — a saved dataset's first rows and the columns they show, for
+   * the dataset page's Preview and the Copy panel's source and sink. No body.
+   *
+   * SECURITY. The dataset must be the caller's (`requireOwned`: a 404 for any
+   * other, so an id is not confirmed). Then `readableStore`'s gate on the
+   * dataset's OWN connection: the caller cannot point the read at another store.
+   * The read is `/preview`'s: the store adapter's Lookup arm, read-only, inside
+   * the connection's `roots` for a file, bounded in rows, bytes, time and
+   * concurrency. The dataset is read as stored: no per-dispatch overrides.
+   */
+  fastify.post<{ Params: { id: string } }>('/api/datasets/:id/preview', async (request, reply) => {
+    const left = abortOnLeave(reply);
+    const dataset = ownedDataset(request.principal, request.params.id);
+    const store = await readableStore(request.principal, dataset.connectionId);
+    if (!store.ok) return store;
+    const result = await previewSavedDataset({
+      registry: fastify.connectors,
+      ...store.store,
+      dataset: asResolved(dataset),
+      signal: left,
+    });
+    audit(
+      request.principal,
+      'rows',
+      { id: dataset.connectionId, name: store.name },
+      dataset,
+      result,
+    );
+    return result;
+  });
+
+  /**
+   * #1401 OR10 — the columns Import schema fills the dataset form with: a
+   * table's own column list and types, or for a file or query the columns its
+   * first rows show (`datasetSchema`). WRITES NOTHING: the page saves them with
+   * the PATCH below once the operator has looked. `/:id/preview`'s gate and read.
+   */
+  fastify.post<{ Params: { id: string } }>('/api/datasets/:id/schema', async (request, reply) => {
+    const left = abortOnLeave(reply);
+    const dataset = ownedDataset(request.principal, request.params.id);
+    const store = await readableStore(request.principal, dataset.connectionId);
+    if (!store.ok) return store;
+    const result = await datasetSchema({
+      registry: fastify.connectors,
+      ...store.store,
+      dataset: asResolved(dataset),
+      signal: left,
+    });
+    audit(
+      request.principal,
+      'schema',
+      { id: dataset.connectionId, name: store.name },
+      dataset,
+      result,
+    );
+    return result;
+  });
+
+  /**
+   * #1401 OR10 — the Copy panel's preview: the source's first rows as the copy
+   * would hand them to the sink, mapped and coerced, each failing cell named
+   * (`previewCopy`). The source is a saved dataset (`/:id/preview`'s gate) or an
+   * inline Table or Query (`/preview`'s). The mapping is the panel's, with every
+   * expression already literal. Reads the source only: the sink is not touched.
+   */
+  fastify.post('/api/datasets/copy-preview', async (request, reply) => {
+    const left = abortOnLeave(reply);
+    const { source, mapping } = CopyPreviewRequestSchema.parse(request.body);
+    const saved = source.from === 'dataset';
+    const dataset = saved ? ownedDataset(request.principal, source.datasetId) : null;
+    const read =
+      dataset !== null
+        ? { connectionId: dataset.connectionId, source: { dataset: asResolved(dataset) } }
+        : source.from === 'inline'
+          ? { connectionId: source.connectionId, source: { inline: source.inline } }
+          : null;
+    // Unreachable: `source` is one of the two above. Said, not cast.
+    if (read === null) return { ok: false, error: 'the source is neither saved nor inline' };
+    const { connectionId } = read;
+    const store = await readableStore(request.principal, connectionId);
+    if (!store.ok) return store;
+    const result = await previewCopy({
+      registry: fastify.connectors,
+      ...store.store,
+      source: read.source,
+      mapping,
+      signal: left,
+    });
+    audit(request.principal, 'copy', { id: connectionId, name: store.name }, dataset, result);
+    return result;
   });
 
   fastify.get('/api/datasets', async (request) => {

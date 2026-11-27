@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CopyMappingError,
   newCopyCounters,
+  previewCopyRows,
   pumpCopyRows,
   recordCopyRowFailure,
   type CopyCounters,
@@ -579,5 +580,76 @@ describe('the sink half of a row failure (#1600 OR41 C6d-1)', () => {
     // The pump coerces a whole batch before the sink sees it, so a sink
     // rejection at row 5 is recorded after a coercion drop at row 900.
     expect(counters.firstFailure?.rowIndex).toBe(4);
+  });
+});
+
+describe('previewCopyRows (#1401 OR10)', () => {
+  it('maps every row and flags each failing cell instead of dropping the row', () => {
+    const result = previewCopyRows(
+      [
+        { id: '1', price: '2.5', name: 'a' },
+        { id: '1.5', price: 'x', name: 'b' },
+      ],
+      [
+        map({ source: 'id', sink: 'ident', type: 'integer' }),
+        map({ source: 'price', sink: 'price', type: 'number' }),
+        map({ source: 'name', sink: 'label' }),
+      ],
+    );
+    expect(result).toEqual({
+      ok: true,
+      rows: [
+        { values: { ident: 1n, price: 2.5, label: 'a' }, failures: {} },
+        {
+          values: { ident: null, price: null, label: 'b' },
+          failures: {
+            ident: { code: 'not_integral', reason: expect.any(String), nulled: false },
+            price: { code: 'not_a_number', reason: expect.any(String), nulled: false },
+          },
+        },
+      ],
+    });
+  });
+
+  it("marks a failing cell under onError 'null' as written null, not a dropped row", () => {
+    const result = previewCopyRows(
+      [{ n: 'x' }],
+      [map({ source: 'n', sink: 'n', type: 'integer', onError: 'null' })],
+    );
+    expect(result).toEqual({
+      ok: true,
+      rows: [
+        {
+          values: { n: null },
+          failures: { n: { code: 'not_a_number', reason: expect.any(String), nulled: true } },
+        },
+      ],
+    });
+  });
+
+  it('applies the source dataset coercion and a constant expression', () => {
+    const result = previewCopyRows(
+      [{ a: '\\N' }],
+      [
+        map({ source: 'a', sink: 'a', type: 'integer' }),
+        map({ expression: 7, sink: 'k', type: 'integer' }),
+      ],
+      { nullValue: '\\N' },
+    );
+    expect(result).toEqual({ ok: true, rows: [{ values: { a: null, k: 7n }, failures: {} }] });
+  });
+
+  it('matches a source column case-insensitively, as the pump does', () => {
+    const result = previewCopyRows([{ Name: 'a' }], [map({ source: 'name', sink: 'n' })]);
+    expect(result).toEqual({ ok: true, rows: [{ values: { n: 'a' }, failures: {} }] });
+  });
+
+  it("refuses a mapping the copy would refuse, in the pump's own words", () => {
+    const result = previewCopyRows([{ a: '1' }], [map({ source: 'b', sink: 'b' })]);
+    expect(result).toEqual({ ok: false, error: expect.stringContaining('`b`') });
+  });
+
+  it('answers no rows for an empty source', () => {
+    expect(previewCopyRows([], [map({ source: 'a', sink: 'a' })])).toEqual({ ok: true, rows: [] });
   });
 });

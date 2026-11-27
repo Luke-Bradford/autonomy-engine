@@ -1,16 +1,21 @@
 import { z } from 'zod';
 import {
+  CopyPreviewResultSchema,
   DatasetPreviewResultSchema,
   DatasetReferencesResponseSchema,
   DatasetSchema,
+  DatasetSchemaResultSchema,
   DatasetSheetsResultSchema,
   DatasetTablesResultSchema,
   NewDatasetSchema,
   paginatedResponseSchema,
+  type CopyPreviewRequest,
+  type CopyPreviewResult,
   type Dataset,
   type DatasetPreviewRequest,
   type DatasetPreviewResult,
   type DatasetReferencesResponse,
+  type DatasetSchemaResult,
   type DatasetSheetsResult,
   type DatasetTablesResult,
 } from '@autonomy-studio/shared';
@@ -168,6 +173,49 @@ export function listConnectionTables(
     method: 'POST',
     body: { connectionId },
     schema: DatasetTablesResultSchema,
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+/**
+ * #1401 OR10 — a saved dataset's first rows and the columns they show, for the
+ * dataset page's Preview and the Copy panel's source and sink. A refusal is a
+ * 200 `{ ok: false }`, as `previewDatasetSource`.
+ */
+export function previewDataset(id: string, signal?: AbortSignal): Promise<DatasetPreviewResult> {
+  return apiFetch(`/api/datasets/${encodeURIComponent(id)}/preview`, {
+    method: 'POST',
+    schema: DatasetPreviewResultSchema,
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+/**
+ * #1401 OR10 — the columns Import schema fills the dataset form with. Writes
+ * nothing: save them with `updateDataset` once the operator has looked. A
+ * refusal is a 200 `{ ok: false }`.
+ */
+export function readDatasetSchema(id: string, signal?: AbortSignal): Promise<DatasetSchemaResult> {
+  return apiFetch(`/api/datasets/${encodeURIComponent(id)}/schema`, {
+    method: 'POST',
+    schema: DatasetSchemaResultSchema,
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+/**
+ * #1401 OR10 — the Copy panel's preview: the source's first rows mapped and
+ * coerced as they would land, each failing cell named. A refusal is a 200
+ * `{ ok: false }`.
+ */
+export function previewCopy(
+  body: CopyPreviewRequest,
+  signal?: AbortSignal,
+): Promise<CopyPreviewResult> {
+  return apiFetch('/api/datasets/copy-preview', {
+    method: 'POST',
+    body,
+    schema: CopyPreviewResultSchema,
     ...(signal === undefined ? {} : { signal }),
   });
 }

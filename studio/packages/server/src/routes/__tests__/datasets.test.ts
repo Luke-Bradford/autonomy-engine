@@ -389,6 +389,10 @@ describe('datasets routes', () => {
           { id: 2, name: 'row-2' },
         ],
         truncated: false,
+        columns: [
+          { name: 'id', type: 'integer', nullable: false },
+          { name: 'name', type: 'string', nullable: false },
+        ],
       });
     });
 
