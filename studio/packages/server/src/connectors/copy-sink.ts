@@ -5,6 +5,7 @@ import {
   type CopyWriteMode,
 } from '@autonomy-studio/shared';
 import { DatasetIoError } from './dataset-io-error.js';
+import { writeFileDatasetRows } from './file-sink.js';
 import type { AutoCreateColumn } from './auto-create-table.js';
 import type { PreCopyScript } from './pre-copy-script.js';
 import { writePostgresDatasetRows } from './postgres-sink.js';
@@ -181,6 +182,24 @@ export async function writeRowsToSink(
         preCopyScript,
         autoCreate,
         onRowRejected,
+        verifyBeforeCommit,
+        onBatch,
+        ...(signal === undefined ? {} : { signal }),
+      },
+      batches,
+    );
+  }
+  if (connection.kind === 'fs') {
+    // #1405 OR14 — a file. Its writer parses the connection itself, for the
+    // postgres arm's reason: the `writable` gate runs before anything is opened.
+    return writeFileDatasetRows(
+      {
+        connectionConfig: connection.connectionConfig,
+        datasetKind: dataset.kind,
+        datasetConfig: dataset.config,
+        columns,
+        mode,
+        preCopyScript,
         verifyBeforeCommit,
         onBatch,
         ...(signal === undefined ? {} : { signal }),

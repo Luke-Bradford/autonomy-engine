@@ -623,18 +623,15 @@ export const fsAdapter: ConnectorAdapter = {
       yield* runCopyActivity(ctx, {
         ...source,
         // #1196 — ONE rung, shared, derived from the CATALOG's
-        // `sinkConnectionKinds` rather than a literal. There is still no
-        // `delimited` WRITER, so an `fs` copy reads a file and writes into a
-        // database — but as of slice 3a that database may be sqlite OR postgres,
-        // and the sentence has to follow the catalog rather than restate one
-        // store's name.
+        // `sinkConnectionKinds` rather than a literal, so the sentence follows
+        // the catalog rather than restating one store's name. As of #1405 the
+        // sink may be sqlite, postgres, or a file (`file-sink.ts`).
         refuseSink: refuseForeignSink,
         describeSource: ({ dataset, signal }) =>
           requireFsReader(dataset.kind).describeColumns(readOf(dataset, signal)),
         // Dispatched by SINK KIND (#1196). Parsed from `ctx.sink` inside, never
-        // from this adapter's own connection — and here that is not merely the
-        // safer answer, it is the only coherent one: an `fs` config has no
-        // database in it at all.
+        // from this adapter's own connection: the sink is a different store,
+        // even when it is another file connection.
         writeRows: ({
           dataset,
           connection,

@@ -177,6 +177,24 @@ export const DELIMITED_ENCODINGS = ['utf-8', 'utf-16le', 'utf-16be', 'windows-12
 export const DelimitedEncodingSchema = z.enum(DELIMITED_ENCODINGS);
 export type DelimitedEncoding = z.infer<typeof DelimitedEncodingSchema>;
 
+/**
+ * #1405 OR14 — how a file dataset's bytes are packed on disk. `none` reads and
+ * writes the bytes as they are; `gzip` inflates them on read and deflates them
+ * on write. Declared rather than sniffed: a reader that guessed from the first
+ * bytes would read a plain file that happens to start `1f 8b` as garbage.
+ */
+export const FILE_COMPRESSIONS = ['none', 'gzip'] as const;
+export const FileCompressionSchema = z.enum(FILE_COMPRESSIONS);
+export type FileCompression = z.infer<typeof FileCompressionSchema>;
+
+/** The Compression field, shared by every file kind that can be gzipped. */
+const compressionField = () =>
+  presented(FileCompressionSchema.default('none'), {
+    title: 'Compression',
+    description: 'Gzip reads and writes the file gzipped. Defaults to none.',
+    options: optionTitles(FileCompressionSchema, { none: 'None', gzip: 'Gzip' }),
+  });
+
 /** The three roles a single character can play in a delimited file. Sharing one
  * character between any two of them makes the grammar ambiguous with itself. */
 const DELIMITED_ROLES = ['delimiter', 'quote', 'escape'] as const;
@@ -267,8 +285,11 @@ export const delimitedDatasetConfigSchema = z
         'windows-1252': 'Windows-1252',
       }),
     }),
+    compression: compressionField(),
     /** §6.4 — the NULL sentinel. Default: none, so an empty field is the empty
-     * STRING. CSV cannot distinguish `""` from absent and studio will not guess. */
+     * STRING. CSV cannot distinguish `""` from absent and studio will not guess.
+     * #1405 — a copy WRITING the file writes a null as this text, and as an
+     * empty field when there is none. */
     nullValue: presented(singleLine(z.string()).optional(), {
       title: 'Null marker',
       description: 'Text that means NULL. Blank: an empty field is an empty string.',
@@ -678,12 +699,9 @@ export const DATASET_KINDS: readonly DatasetKind[] = DatasetKindSchema.options;
  * `readBatches`, `sourceCoercion`) and `resolveDatasetAddress`, so the binding
  * and the thing that honours it land together, exactly as slice 1 promised.
  *
- * STILL SOURCE-ONLY, and that is a property of a different list. `copy`'s
- * `sinkConnectionKinds` stays `['sqlite']` (`catalog/registry.ts`), so a
- * postgres dataset can be READ but not written. That is not an oversight: it is
- * what makes §7 row 3 and the `query` self-copy residual unreachable rather than
- * merely unbuilt, and both are deferred on that premise — see the remainder
- * ticket named at that pin. Slice 3 is the sink.
+ * Whether a store can be WRITTEN is a different list: `copy`'s
+ * `sinkConnectionKinds` (`catalog/registry.ts`). Postgres joined it at slice 3a
+ * (#1196), with its writer; `fs` joined it at #1405, with the delimited writer.
  *
  * `Record<DatasetKind, …>` makes a new DATASET kind a compile error, as
  * `DATASET_CONFIG_SCHEMAS` does. It cannot do the same for a new CONNECTION

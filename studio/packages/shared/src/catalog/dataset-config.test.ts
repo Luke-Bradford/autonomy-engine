@@ -183,6 +183,8 @@ describe('the `delimited` dataset config (#1163, M7 slice 1)', () => {
       quote: '"',
       header: true,
       encoding: 'utf-8',
+      // #1405 — a file is read and written as it is unless it says gzip.
+      compression: 'none',
     });
   });
 
