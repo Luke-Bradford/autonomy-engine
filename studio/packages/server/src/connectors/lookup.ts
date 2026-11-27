@@ -502,6 +502,7 @@ export async function* runLookupActivity(
         const { row, size } = kept;
         rows.push(row);
         bytes += size;
+        ctx.onLookupRow?.(raw);
         // Its one row is all First row only asked for; reading on would only
         // find out whether there is another, which it does not report.
         if (firstRowOnly) break outer;

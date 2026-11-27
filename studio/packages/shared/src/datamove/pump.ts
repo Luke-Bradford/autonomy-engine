@@ -378,6 +378,77 @@ function constantPlan(
   };
 }
 
+/** #1401 OR10 — one cell the Copy preview could not coerce. */
+export interface CopyPreviewCellFailure {
+  readonly code: CoercionFailureCode;
+  readonly reason: string;
+  /** `onError: 'null'`: the copy writes null here. Otherwise the copy drops the row. */
+  readonly nulled: boolean;
+}
+
+/** #1401 OR10 — one source row as the copy would hand it to the sink. */
+export interface CopyPreviewRow {
+  /** Every mapped sink column; a failing cell is `null`. */
+  readonly values: Record<string, CoercedValue>;
+  /** The failing cells by sink column; empty when the row lands whole. */
+  readonly failures: Record<string, CopyPreviewCellFailure>;
+}
+
+export type CopyPreviewRowsResult =
+  | { readonly ok: true; readonly rows: CopyPreviewRow[] }
+  | { readonly ok: false; readonly error: string };
+
+/**
+ * #1401 OR10 — the Copy node's preview: a handful of source rows as they would
+ * land, through the pump's own `planColumns` and `coerceValue`, so the preview
+ * cannot disagree with the copy about a column or a value.
+ *
+ * One deliberate difference from the pump: every cell is evaluated, rather than
+ * stopping at a row's first failure, so the panel can highlight each failing
+ * cell. A row with a failure under `onError: 'fail'` is a row the copy drops.
+ * A mapping the pump would refuse outright answers `ok: false` in its words.
+ */
+export function previewCopyRows(
+  rows: readonly Record<string, unknown>[],
+  mapping: readonly CopyPumpMappingEntry[],
+  coercion: CoercionOptions = {},
+): CopyPreviewRowsResult {
+  const first = rows[0];
+  if (first === undefined) return { ok: true, rows: [] };
+  let plans: ColumnPlan[];
+  try {
+    plans = planColumns(mapping, Object.keys(first), coercion);
+  } catch (err) {
+    if (err instanceof CopyMappingError) return { ok: false, error: err.message };
+    throw err;
+  }
+  return {
+    ok: true,
+    rows: rows.map((row) => {
+      const values: Record<string, CoercedValue> = {};
+      const failures: Record<string, CopyPreviewCellFailure> = {};
+      for (const plan of plans) {
+        if (plan.kind === 'constant') {
+          values[plan.sink] = plan.value;
+          continue;
+        }
+        const result = coerceValue(row[plan.key], plan.entry.type, coercion);
+        if (result.ok) {
+          values[plan.sink] = result.value;
+          continue;
+        }
+        values[plan.sink] = null;
+        failures[plan.sink] = {
+          code: result.code,
+          reason: result.reason,
+          nulled: plan.entry.onError === 'null',
+        };
+      }
+      return { values, failures };
+    }),
+  };
+}
+
 /**
  * Count one dropped row, for both halves of the copy. `firstFailure` is the
  * LOWEST row, not the first recorded: the pump coerces a whole batch before the

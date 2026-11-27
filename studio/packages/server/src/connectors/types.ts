@@ -166,6 +166,13 @@ export interface ActivityContext {
    */
   lookupMaxRows?: number;
   /**
+   * #1401 OR10 — Preview only, never set by the executor: each row a `lookup`
+   * keeps, as the reader yielded it, before its values are made JSON-safe. The
+   * Copy preview coerces these, because the copy coerces the reader's values
+   * (a `Date`, a `bigint`, bytes) and not their JSON renderings.
+   */
+  onLookupRow?: (row: Readonly<Record<string, unknown>>) => void;
+  /**
    * #1600 OR41 C5a — a `copy` with Load Incremental and Watermark from
    * Automatic: the watermark the executor stored when this activity last
    * committed a copy of the same source (null when it never has), and `commit`,
