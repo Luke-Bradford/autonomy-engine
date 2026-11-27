@@ -201,7 +201,10 @@ function RunDefaults() {
           <FieldCell span="short">
             <LabelledControl
               label="Run capture"
-              hint="Full also records every AI prompt and reply, unless the activity sets its own capture."
+              about={{
+                name: 'Run capture',
+                note: 'Full also records every AI prompt and reply, unless the activity sets its own capture.',
+              }}
             >
               {(id, hintId) => (
                 <select
