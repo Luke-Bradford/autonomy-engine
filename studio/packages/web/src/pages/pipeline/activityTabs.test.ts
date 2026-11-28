@@ -174,6 +174,8 @@ describe('applicableFieldNames (#1686)', () => {
     // Folder, Keep, Preserve: no file list, no move-to, no file name, and
     // (#1600 C6e-2) no Skip inconsistent files while Verify copied files is off.
     expect(hidden({})).toEqual([
+      // #1600 C2a — no Content on a files source.
+      'content',
       'fileListPath',
       'moveTo',
       'sinkFileName',
@@ -187,6 +189,7 @@ describe('applicableFieldNames (#1686)', () => {
   it('follows the draft as the controls change', () => {
     // #1600 C6d-2 — one file cannot skip one, as in ADF.
     expect(hidden({ pathType: 'file' })).toEqual([
+      'content',
       'wildcard',
       'fileListPath',
       'recursive',
@@ -198,6 +201,7 @@ describe('applicableFieldNames (#1686)', () => {
       'logMode',
     ]);
     expect(hidden({ pathType: 'list', afterCopy: 'move' })).toEqual([
+      'content',
       'wildcard',
       'recursive',
       'sinkFileName',
@@ -208,6 +212,7 @@ describe('applicableFieldNames (#1686)', () => {
     // Either condition of File name: one file, or a merge. #1600 C6e-2 — a
     // merge is not verified, as in ADF; C6f-2 — nor copied at once.
     expect(hidden({ copyBehavior: 'merge' })).toEqual([
+      'content',
       'fileListPath',
       'moveTo',
       'validateDataConsistency',
@@ -218,6 +223,7 @@ describe('applicableFieldNames (#1686)', () => {
     ]);
     const typed = { ...seedFieldInputs(fields, {}), pathType: 'list' };
     expect(hidden({}, typed)).toEqual([
+      'content',
       'wildcard',
       'recursive',
       'moveTo',
@@ -228,12 +234,40 @@ describe('applicableFieldNames (#1686)', () => {
     ]);
   });
 
+  it('draws Content and the sink for Inline content, and nothing about source files (#1600 C2a)', () => {
+    // `all`: Modified between needs Load Full AND a files source; Verify copied
+    // files needs Preserve hierarchy AND a files source.
+    expect(hidden({ pathType: 'inline' })).toEqual([
+      'sourcePath',
+      'wildcard',
+      'fileListPath',
+      'recursive',
+      'load',
+      'modifiedStart',
+      'modifiedEnd',
+      'afterCopy',
+      'moveTo',
+      'copyBehavior',
+      'skipMissingFiles',
+      'skipForbiddenFiles',
+      'validateDataConsistency',
+      'skipInconsistentFiles',
+      'logFolder',
+      'logMode',
+    ]);
+    // Typed, before any Apply.
+    const typed = { ...seedFieldInputs(fields, {}), pathType: 'inline' };
+    expect(hidden({}, typed)).toContain('modifiedStart');
+    expect(hidden({}, typed)).not.toContain('content');
+  });
+
   it('draws Skip inconsistent files once Verify copied files is on (#1600 C6e-2)', () => {
     expect(hidden({ copyBehavior: 'flatten' })).toContain('validateDataConsistency');
     expect(hidden({ validateDataConsistency: true })).not.toContain('skipInconsistentFiles');
     // Ticked, before any Apply.
     const ticked = { ...seedFieldInputs(fields, {}), validateDataConsistency: true };
     expect(hidden({}, ticked)).toEqual([
+      'content',
       'fileListPath',
       'moveTo',
       'sinkFileName',
@@ -252,6 +286,7 @@ describe('applicableFieldNames (#1686)', () => {
   it('still draws a field that holds a value where it cannot apply', () => {
     // Stored: the schema refuses it, and the author must be able to clear it.
     expect(hidden({ pathType: 'file', wildcard: '*.csv' })).toEqual([
+      'content',
       'fileListPath',
       'recursive',
       'moveTo',
@@ -268,6 +303,7 @@ describe('applicableFieldNames (#1686)', () => {
     // Typed, then its control moved away: it stays until it is cleared.
     const typed = { ...seedFieldInputs(fields, {}), afterCopy: 'keep', moveTo: 'done' };
     expect(hidden({}, typed)).toEqual([
+      'content',
       'fileListPath',
       'sinkFileName',
       'skipInconsistentFiles',

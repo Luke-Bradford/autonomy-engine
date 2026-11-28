@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import {
   appendFile,
   chmod,
@@ -20,6 +20,7 @@ import {
   COPY_FILES_ACTIVITY_TYPE,
   FILE_COPY_ACTIVITY_TYPE,
   FILE_MOVE_ACTIVITY_TYPE,
+  FILE_WRITE_ACTIVITY_TYPE,
   getActivity,
   lowerRetiredTypes,
   SESSION_LOG_OUTPUT,
@@ -1870,5 +1871,153 @@ describe('#1600 OR41 C5b — Load Incremental (Modified since last successful ru
     await put('in/a.txt', 'a');
     const { events } = await settled(INC, { copyWatermark: lease(null).copyWatermark });
     expect(Object.keys(outputs(events))).toEqual([...declaredNames(), 'watermark']);
+  });
+});
+
+/**
+ * #1600 OR41 C2a — Copy · Files as-is · Inline content (catalogue §4.1's Inline
+ * source): the Content box written as one file on the sink connection, the
+ * retired Write file. It reads nothing from the source connection.
+ */
+describe('#1600 C2a — Inline content', () => {
+  const inline = (extra: Record<string, unknown> = {}) => ({
+    pathType: 'inline',
+    content: 'héllo\nworld',
+    sinkFileName: 'out/report.txt',
+    ...extra,
+  });
+
+  it('writes the content as UTF-8 to the named file, creating its folder', async () => {
+    const events = await run(inline());
+    const out = outputs(events);
+    expect(await readFile(join(dst, 'out/report.txt'), 'utf8')).toBe('héllo\nworld');
+    expect(out).toMatchObject({
+      filesRead: 0,
+      filesWritten: 1,
+      filesSkipped: 0,
+      bytesRead: 0,
+      bytesWritten: Buffer.byteLength('héllo\nworld', 'utf8'),
+      source: '',
+      dest: join(realpathSync(dst), 'out/report.txt'),
+    });
+    expect(Object.keys(out)).toEqual(declaredNames());
+    // Nothing is read from, or written to, the source connection.
+    expect(await tree(src)).toEqual([]);
+  });
+
+  it('writes an empty file for empty content, as Write file did', async () => {
+    expect(outputs(await run(inline({ content: '' })))).toMatchObject({ bytesWritten: 0 });
+    expect(await readFile(join(dst, 'out/report.txt'), 'utf8')).toBe('');
+  });
+
+  it('honours If file exists: Overwrite replaces, Skip keeps, Fail refuses', async () => {
+    await put('out/report.txt', 'old', dst);
+    expect(outputs(await run(inline({ ifExists: 'skip' })))).toMatchObject({
+      filesWritten: 0,
+      filesSkipped: 1,
+      bytesWritten: 0,
+    });
+    expect(await readFile(join(dst, 'out/report.txt'), 'utf8')).toBe('old');
+    expect(failure(await run(inline({ ifExists: 'fail' }))).error).toContain(
+      'already exists and If file exists is Fail',
+    );
+    expect(await readFile(join(dst, 'out/report.txt'), 'utf8')).toBe('old');
+    expect(outputs(await run(inline()))).toMatchObject({ filesWritten: 1 });
+    expect(await readFile(join(dst, 'out/report.txt'), 'utf8')).toBe('héllo\nworld');
+  });
+
+  it('refuses a folder standing at the target, with nothing written', async () => {
+    await mkdir(join(dst, 'out/report.txt'), { recursive: true });
+    expect(failure(await run(inline())).error).toContain('is a folder');
+  });
+
+  it('stays inside the sink roots and needs Allow writes on the sink', async () => {
+    const outside = tempRoot('copy-files-outside-');
+    const escaped = await run(inline({ sinkFolder: outside, sinkFileName: 'x.txt' }));
+    expect(failure(escaped)).toMatchObject({ kind: 'permanent' });
+    expect(await tree(outside)).toEqual([]);
+    const up = await run(inline({ sinkFileName: '../x.txt' }));
+    expect(failure(up)).toMatchObject({ kind: 'permanent' });
+    const locked = await run(inline(), { sinkWritable: false });
+    expect(failure(locked).error).toContain('Allow writes');
+    expect(await tree(dst)).toEqual([]);
+  });
+
+  it('logs the file it wrote under Everything', async () => {
+    const events = await run(inline({ logLevel: 'info' }));
+    expect(logLines(events)).toEqual([
+      'Info FileWrite out/report.txt wrote 12 bytes from the inline content',
+    ]);
+  });
+
+  it('refuses source settings, as save does', async () => {
+    expect(failure(await run(inline({ sourcePath: 'in' }))).error).toContain(
+      'reads no source path',
+    );
+  });
+});
+
+/**
+ * #1600 OR41 C2a — a stored `file_write` opens in the editor as Copy · Files
+ * as-is · Inline content and, once saved, runs as `copy_files`. Both run here
+ * on one connection that allows writes: the lowered node writes the same bytes
+ * to the same file, and answers Write file's outputs (`path` read as `dest`).
+ */
+describe('#1600 C2a — a lowered file_write runs as Write file did', () => {
+  async function dispatch(
+    activityType: string,
+    input: Record<string, unknown>,
+    paired: boolean,
+  ): Promise<ActivityEvent[]> {
+    const connectionConfig = { roots: [src], ...(paired && { writable: true }) };
+    const c: ActivityContext = {
+      runId: 'run_1',
+      nodeId: 'n1',
+      attemptId: 'n1#0',
+      activityType,
+      input,
+      connectionConfig,
+      ...(paired && { sink: { kind: 'fs' as const, connectionConfig } }),
+      signal: new AbortController().signal,
+    };
+    const out: ActivityEvent[] = [];
+    for await (const ev of fsAdapter.runActivity(c, null)) out.push(ev);
+    return out;
+  }
+  const lowered = (config: Record<string, unknown>) => {
+    const node = lowerRetiredTypes({
+      nodes: [
+        {
+          id: 'n1',
+          type: FILE_WRITE_ACTIVITY_TYPE,
+          config,
+          connectionId: 'c',
+          position: { x: 0, y: 0 },
+        } as Node,
+      ],
+      containers: [],
+    }).nodes[0]!;
+    expect(node.type).toBe(COPY_FILES_ACTIVITY_TYPE);
+    const input = { ...node.config };
+    delete input['outputs'];
+    return input;
+  };
+
+  it.each([
+    ['a relative path, over an existing file', 'out/x.txt', 'payload ✓', true],
+    ['an absolute path', '<root>/out/x.txt', 'payload', false],
+    ['a file in the first allowed folder, empty content', 'x.txt', '', false],
+  ])('%s', async (_why, pathTemplate, content, existing) => {
+    await mkdir(join(src, 'out'));
+    const path = pathTemplate.replace('<root>', src);
+    const target = join(src, pathTemplate.replace('<root>/', ''));
+    if (existing) await writeFile(target, 'older and longer');
+    const old = outputs(await dispatch(FILE_WRITE_ACTIVITY_TYPE, { path, content }, false));
+    const before = await readFile(target, 'utf8');
+    if (existing) await writeFile(target, 'older and longer');
+    else await rm(target);
+    const now = outputs(await dispatch(COPY_FILES_ACTIVITY_TYPE, lowered({ path, content }), true));
+    expect(await readFile(target, 'utf8')).toBe(before);
+    expect({ bytesWritten: now.bytesWritten, path: now.dest }).toEqual(old);
   });
 });

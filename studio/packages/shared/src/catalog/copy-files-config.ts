@@ -28,7 +28,7 @@ import {
  * relative to the connection's first allowed folder.
  */
 
-const pathTypeSchema = z.enum(['file', 'folder', 'list']);
+const pathTypeSchema = z.enum(['file', 'folder', 'list', 'inline']);
 const afterCopySchema = z.enum(['keep', 'delete', 'move']);
 const copyBehaviorSchema = z.enum(['preserve', 'flatten', 'merge']);
 const ifExistsSchema = z.enum(['overwrite', 'skip', 'fail']);
@@ -122,25 +122,45 @@ export function copyFilesIncrementalIssues(
 
 const IN_ROOTS = "Absolute, or relative to the connection's first allowed folder.";
 
-const path = (title: string, description: string) =>
-  presented(singleLine(z.string()).min(1), { title, description });
+/**
+ * #1600 OR41 C2a — the path types that read files from the source connection.
+ * Inline content reads none: it writes its Content box as one file (catalogue
+ * §4.1's Inline source, the retired Write file), so every field about source
+ * files applies to these only.
+ */
+export const COPY_FILES_FILE_SOURCES = [
+  'file',
+  'folder',
+  'list',
+] as const satisfies readonly z.infer<typeof pathTypeSchema>[];
 
 export const copyFilesConfigSchema = z
   .object({
     pathType: presented(pathTypeSchema.default('folder'), {
       title: 'Path type',
       description:
-        'File copies one file. Folder copies the files in a folder that match the wildcard. File list copies the files named in a text file.',
+        'File copies one file. Folder copies the files in a folder that match the wildcard. File list copies the files named in a text file. Inline content writes the Content box as one file.',
       options: optionTitles(pathTypeSchema, {
         file: 'File',
         folder: 'Folder',
         list: 'File list',
+        inline: 'Inline content',
       }),
     }),
-    sourcePath: path(
-      'Source path',
-      `The file, or the folder to copy from. With a file list, the folder its paths are relative to. ${IN_ROOTS}`,
-    ),
+    // C2a — optional, because Inline content reads no source path; the
+    // superRefine still requires it for File, Folder and File list.
+    sourcePath: presented(singleLine(z.string()).min(1).optional(), {
+      title: 'Source path',
+      description: `The file, or the folder to copy from. With a file list, the folder its paths are relative to. ${IN_ROOTS}`,
+    }),
+    // #1600 OR41 C2a — catalogue §4.1's Inline source: text written as it is,
+    // as UTF-8, the retired Write file's `content`. Empty writes an empty file,
+    // as Write file did. Multi-line, and dynamic content like any text field.
+    content: presented(z.string().optional(), {
+      title: 'Content',
+      description:
+        "Inline content only. The text to write, as UTF-8, to the file named under Sink. It may hold dynamic content, such as an earlier activity's output.",
+    }),
     wildcard: presented(singleLine(z.string()).min(1).default('*'), {
       title: 'Wildcard',
       description:
@@ -268,6 +288,18 @@ export const copyFilesConfigSchema = z
     const separator = wildcardIssue(cfg.wildcard);
     if (separator !== undefined) issue('wildcard', separator);
     sessionLogIssues(cfg, issue);
+    // C2a — Inline content writes its Content as one file; the rest of this
+    // refine reads a files source, so an inline config is checked here alone.
+    if (cfg.pathType === 'inline') {
+      inlineContentIssues(cfg, issue);
+      return;
+    }
+    if (cfg.sourcePath === undefined) {
+      issue('sourcePath', 'a file, folder or file list copy needs a source path');
+    }
+    if (cfg.content !== undefined) {
+      issue('content', 'Content is only written when the path type is Inline content');
+    }
     if (cfg.pathType !== 'folder' && cfg.wildcard !== '*') {
       issue('wildcard', 'a wildcard is only read when the path type is Folder');
     }
@@ -344,3 +376,69 @@ export const copyFilesConfigSchema = z
   });
 
 export type CopyFilesConfig = z.infer<typeof copyFilesConfigSchema>;
+
+/**
+ * #1600 OR41 C2a — an Inline content copy writes one file and reads none, so
+ * every setting about source files is refused rather than ignored, and the
+ * File name is required, since there is no source name to keep. Copy
+ * behaviour and Degree of copy parallelism are left alone, as on one File:
+ * Preserve and Flatten both write the one file, and one file copies once.
+ */
+function inlineContentIssues(
+  cfg: CopyFilesConfig,
+  issue: (field: string, message: string) => void,
+): void {
+  if (cfg.content === undefined) issue('content', 'an inline copy needs its content');
+  if (cfg.sinkFileName === undefined) {
+    issue('sinkFileName', 'an inline copy needs the file name to write');
+  }
+  if (cfg.sourcePath !== undefined) {
+    issue('sourcePath', 'an inline copy reads no source path; clear it, or pick another path type');
+  }
+  if (cfg.wildcard !== '*')
+    issue('wildcard', 'a wildcard is only read when the path type is Folder');
+  if (cfg.fileListPath !== undefined) {
+    issue('fileListPath', 'a file list path is only read when the path type is File list');
+  }
+  if (cfg.load !== 'full') {
+    issue('load', 'an inline copy has no files to compare, so its Load is Full');
+  }
+  for (const field of ['modifiedStart', 'modifiedEnd'] as const) {
+    if (cfg[field] !== undefined) {
+      issue(field, 'an inline copy has no modified time to select by');
+    }
+  }
+  if (cfg.afterCopy !== 'keep') {
+    issue('afterCopy', 'an inline copy has no source file to delete or move');
+  }
+  if (cfg.afterCopy !== 'move' && cfg.moveTo !== undefined) {
+    issue('moveTo', 'a move-to folder is only used when After copy is Move source to');
+  }
+  if (cfg.copyBehavior === 'merge') {
+    issue('copyBehavior', 'merging needs a folder or a file list; inline content is one file');
+    if (cfg.parallelCopies > 1) {
+      issue(
+        'parallelCopies',
+        'a merge writes one file, so it copies one at a time; leave Degree of copy parallelism at 1',
+      );
+    }
+  }
+  if (cfg.skipForbiddenFiles) {
+    issue(
+      'skipForbiddenFiles',
+      'skipping a forbidden file needs a folder or a file list; inline content has none',
+    );
+  }
+  if (cfg.validateDataConsistency) {
+    issue(
+      'validateDataConsistency',
+      'an inline copy has no source file to verify the written file against',
+    );
+  }
+  if (cfg.skipInconsistentFiles) {
+    issue(
+      'skipInconsistentFiles',
+      'skipping an inconsistent file needs a folder or a file list; inline content has none',
+    );
+  }
+}

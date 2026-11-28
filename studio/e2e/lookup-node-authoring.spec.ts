@@ -155,7 +155,7 @@ test.describe('#1221 — lookup-node authoring', () => {
     // The bump this entry owes, stamped on the row the server minted. A LITERAL
     // on purpose: it is the tripwire that makes a catalog widening show up here
     // and not only in the shared package's own tests.
-    expect(latest.catalogVersion).toBe(76); // #1405 OR14 — json, jsonl and parquet datasets; file sinks
+    expect(latest.catalogVersion).toBe(77); // #1600 OR41 C2a — Files as-is Inline content
 
     await expectQuiet(page, problems);
   });

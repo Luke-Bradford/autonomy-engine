@@ -75,10 +75,10 @@ describe('toolboxGroups', () => {
   });
 
   it('matches on the activity TYPE too, which is what an author who knows the docs types', () => {
-    // "file_" appears in no title (`Write file`, `Delete file`, …) — only in the type.
-    const types = typesOf(toolboxGroups('file_'));
-    expect(types).toContain('file_write');
-    expect(types.every((t) => t.startsWith('file_'))).toBe(true);
+    // "set_variable" appears in no title (`Set variable`) — only in the type.
+    // #1600 C2a retired Write file, the last `file_*` type in the palette.
+    expect(typesOf(toolboxGroups('set_variable'))).toEqual(['set_variable']);
+    expect(typesOf(toolboxGroups('file_'))).toEqual([]);
   });
 
   it('#1600 OR41 C7b — offers ONE Lookup, which a search for reading a file finds', () => {

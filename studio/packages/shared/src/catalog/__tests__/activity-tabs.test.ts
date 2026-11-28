@@ -6,7 +6,11 @@ import {
   enumSetValuesOf,
   enumValuesOf,
 } from '../../schemas/field-presentation.js';
-import { ACTIVITY_TAB_KEYS, applicableBindingSlots } from '../types.js';
+import {
+  ACTIVITY_TAB_KEYS,
+  applicableBindingSlots,
+  type ActivityFieldCondition,
+} from '../types.js';
 
 /**
  * #1477 OR29 — each activity's property-dock tabs are declared in its catalog
@@ -75,9 +79,13 @@ describe('activity tabs (#1477)', () => {
     '%s conditions a field only on another enum or boolean field, and only on its values (#1686)',
     (_type, entry) => {
       const shape = shapeOf(entry.configSchema);
+      // #1600 OR41 C2a — an `all` is checked one condition at a time.
+      const flat = (cs: readonly ActivityFieldCondition[]): ActivityFieldCondition[] =>
+        cs.flatMap((c) => ('all' in c ? flat(c.all) : [c]));
       for (const [name, conditions] of Object.entries(entry.appliesWhen ?? {})) {
         expect(Object.keys(shape), `${name} is not a config key`).toContain(name);
-        for (const c of conditions) {
+        for (const c of flat(conditions)) {
+          if ('all' in c) continue;
           // #1600 OR41 C8c — or the bound connection's kind, one the entry binds.
           if ('connectionKind' in c) {
             for (const k of c.connectionKind) {

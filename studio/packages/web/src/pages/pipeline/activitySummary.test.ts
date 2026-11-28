@@ -286,6 +286,15 @@ describe('activitySummary', () => {
   });
 });
 
+describe('#1600 OR41 C2a — a Files as-is copy of Inline content', () => {
+  it('reads as the file it writes, as Write file did', () => {
+    const config = { pathType: 'inline', content: 'x', sinkFolder: 'out', sinkFileName: 'b.txt' };
+    expect(activitySummary(node(COPY_FILES_ACTIVITY_TYPE, { config }), () => undefined)).toBe(
+      'inline → out/b.txt',
+    );
+  });
+});
+
 describe('#1600 OR41 C11c-2 — a Web with no Request URL', () => {
   it('reads as the Webhook it stands for', () => {
     const waits = node('web', { config: { waitForCallback: true, callbackTimeoutSeconds: 900 } });

@@ -91,7 +91,6 @@ const HELP_LIMITS: Record<string, number> = {
   // +2 for C10b-2b's Capture messages and Block timeout, drawn while no
   // connection is bound (a postgres one keeps them, a sqlite one hides them).
   Script: 11,
-  'Write file': 7,
   'Agent task': 8,
   'LLM call': 15,
   'Execute pipeline': 6,
@@ -409,7 +408,10 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   // #1600 OR41 C10a — Script, measured: the pane's own and General's, and
   // one on each Settings field, Script blocks, its SQL and its Parameters.
   Script: 9,
-  'Write file': 7,
+  // #1600 OR41 C2a — Write file left the toolbox; its replacement is Copy
+  // data's Inline content, with Path type, Content, Sink folder, File name,
+  // Degree of copy parallelism and the Session log's two drawn.
+  'Copy data (inline content)': 21,
   'Agent task': 8,
   'LLM call': 15,
   'LLM call (structured)': 15,
@@ -445,7 +447,7 @@ const SHOWS: Record<string, string[]> = {
   'Get metadata': ['/tmp/e2e', '*.csv', '2026-10-01T00:00:00Z', '1024', '3600', '2048', 'E2E-1'],
   'Lookup (whole file as text)': ['/tmp/e2e/in.txt', '2048', 'E2E-1'],
   Script: ['DELETE FROM stage WHERE load = :load', 'SELECT count(*) AS n FROM stage', 'E2E-1'],
-  'Write file': ['/tmp/e2e/out.txt', '2048', 'E2E-1'],
+  'Copy data (inline content)': ['one\ntwo', '/tmp/e2e', 'out.txt', 'E2E-1'],
   Web: ['/v1/orders', 'X-Trace', '45', '2048', '120', 'E2E-1'],
   Lookup: ['orders_2026.csv', '4096', 'E2E-1'],
   'Agent task': ['Summarise the repo', '/tmp/e2e', 'E2E-1'],
@@ -626,7 +628,21 @@ function seeds(ids: SeedIds): Record<string, Seed> {
       giveUpAfterSeconds: 3600,
     }),
     'Lookup (whole file as text)': fsNode('file_read', { path: '/tmp/e2e/in.txt' }),
-    'Write file': fsNode('file_write', { path: '/tmp/e2e/out.txt', content: 'one\ntwo' }),
+    // #1600 OR41 C2a — Write file's replacement, Copy · Files as-is · Inline content.
+    'Copy data (inline content)': {
+      node: {
+        ...exec,
+        type: 'copy_files',
+        connectionIds: { source: ids.fs, sink: ids.fs },
+        config: {
+          pathType: 'inline',
+          content: 'one\ntwo',
+          sinkFolder: '/tmp/e2e',
+          sinkFileName: 'out.txt',
+          ifExists: 'fail',
+        },
+      },
+    },
     // #1600 OR41 C11a — every Settings field set, so Treat as success draws.
     Web: {
       node: {

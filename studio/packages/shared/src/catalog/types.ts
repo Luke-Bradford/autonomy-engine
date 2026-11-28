@@ -119,12 +119,22 @@ export interface ActivityTab {
  * bound connection's kind is one of `connectionKind`. #1600 OR41 C3b: or the
  * controlling field holds any value (`set`), for a field that only means
  * something beside another one (Copy's Pre-copy bind values beside its script).
+ * #1600 OR41 C2a: or every one of `all` holds, for a field two controls decide
+ * (Files as-is *Modified from* needs Load Full AND a files source, not Inline
+ * content). A rule's own list stays OR'd.
  * See `ActivityCatalogEntry.appliesWhen`.
  */
 export type ActivityFieldCondition =
   | { readonly field: string; readonly in: readonly [string, ...string[]] }
   | { readonly field: string; readonly set: true }
-  | { readonly connectionKind: readonly [ConnectionKind, ...ConnectionKind[]] };
+  | { readonly connectionKind: readonly [ConnectionKind, ...ConnectionKind[]] }
+  | {
+      readonly all: readonly [
+        ActivityFieldCondition,
+        ActivityFieldCondition,
+        ...ActivityFieldCondition[],
+      ];
+    };
 
 /**
  * #1477 — which binding slots an entry has. One reading of the entry for the

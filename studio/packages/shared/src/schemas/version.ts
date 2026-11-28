@@ -705,7 +705,11 @@
 // sink is a file connection at the catalog's sink-kind check, so it is refused
 // at import rather than half-loaded (bump 27's precedent), and it would read a
 // gzipped file's bytes as text.
-export const CATALOG_VERSION = 76;
+// BUMP 76→77 for #1600 OR41 C2a: a Files as-is copy's Path type Inline content
+// (`pathType: 'inline'`, `content`), and `sourcePath` optional beside it. A
+// pre-C2a build refuses the unknown Path type at the schema, so a pipeline that
+// writes inline content is refused at import rather than half-loaded.
+export const CATALOG_VERSION = 77;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

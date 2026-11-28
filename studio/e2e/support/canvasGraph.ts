@@ -94,7 +94,7 @@ export async function addActivity(page: Page, title: string): Promise<void> {
  *
  * A node dropped from the palette starts with an empty config, and the save
  * gate (#1480) refuses one whose adapter has a required field — `http_request`
- * without `url`, `file_write` without `path` and `content` — so a spec that
+ * without `url`, `delete` without `path` — so a spec that
  * authors a graph by gesture and then SAVES must give each such node its field
  * first. A spec whose subject is not the config form uses this rather than
  * seeding, because it is the path the operator actually walks.
@@ -132,7 +132,9 @@ export async function fillSelectedNodeConfig(
 /** The fields `fillNodeConfig` needs to make a palette-dropped node of each title savable. */
 export const SAVABLE_CONFIG: Readonly<Record<string, Record<string, string>>> = {
   Web: { 'Request URL': 'https://example.test/e2e' },
-  'Write file': { 'File path': 'out.txt', Content: 'e2e' },
+  // #1600 OR41 C2a retired Write file from the palette; Delete is the same
+  // kind of file system activity, with one required field.
+  Delete: { 'File or folder path': 'out.txt' },
 };
 
 /**
@@ -322,7 +324,7 @@ export async function dragNodeBy(page: Page, index: number, dx: number, dy: numb
 export async function seedSelectedEdge(page: Page, sourceTitle = 'Web'): Promise<void> {
   await addActivity(page, sourceTitle);
   await expect(canvasNodes(page)).toHaveCount(1);
-  await addActivity(page, 'Write file');
+  await addActivity(page, 'Delete');
   await fitAndSettle(page, 1);
   await expect(canvasNodes(page)).toHaveCount(2);
 

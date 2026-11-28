@@ -685,3 +685,71 @@ describe('#1600 C12a — append_variable → Set variable · Append', () => {
     expect(lowerNodes([withCall])[0]).toBe(withCall);
   });
 });
+
+describe('#1600 C2a — file_write → Copy · Files as-is · Inline content', () => {
+  const write = (
+    config: Record<string, unknown> = { path: 'out/report.txt', content: 'hello' },
+    extra: Partial<Node> = {},
+  ) => fileNode('file_write', config, { id: 'w', ...extra });
+
+  it('becomes an Inline content copy on the same connection, writing over the file', () => {
+    const node = write(
+      { path: '/data/out/report.txt', content: 'total ${vars.n}', outputs: [] },
+      { description: 'd', policy: { retry: 2 }, userProperties: [{ name: 'k', value: 'v' }] },
+    );
+    const [lowered] = lowerNodes([node]);
+    expect(lowered).toEqual({
+      id: 'w',
+      type: 'copy_files',
+      position: { x: 10, y: 20 },
+      description: 'd',
+      policy: { retry: 2 },
+      userProperties: [{ name: 'k', value: 'v' }],
+      connectionIds: { source: 'conn_fs', sink: 'conn_fs' },
+      config: {
+        pathType: 'inline',
+        content: 'total ${vars.n}',
+        sinkFolder: '/data/out',
+        sinkFileName: 'report.txt',
+        ifExists: 'overwrite',
+        outputs: getActivity('copy_files')!.outputs,
+      },
+    });
+    const config = { ...lowered!.config };
+    delete config['outputs'];
+    expect(copyFilesConfigSchema.safeParse(config).success).toBe(true);
+  });
+
+  it('keeps empty content, and a file in the first allowed folder has no Sink folder', () => {
+    const [lowered] = lowerNodes([write({ path: 'a.txt', content: '' })]);
+    expect(lowered!.type).toBe('copy_files');
+    expect(lowered!.config).toMatchObject({ content: '', sinkFileName: 'a.txt' });
+    expect(lowered!.config).not.toHaveProperty('sinkFolder');
+  });
+
+  it('rewrites a `path` read to `dest`, and leaves `bytesWritten` as it is', () => {
+    const reader = {
+      id: 'read',
+      type: 'set_variable',
+      config: { name: 'v', value: '${nodes.w.output.path} ${nodes.w.output.bytesWritten}' },
+      position: { x: 0, y: 0 },
+    } as Node;
+    const out = lowerRetiredTypes({ nodes: [write(), reader], containers: [] });
+    expect(out.nodes[0]!.type).toBe('copy_files');
+    expect(out.nodes[1]!.config['value']).toBe(
+      '${nodes.w.output.dest} ${nodes.w.output.bytesWritten}',
+    );
+  });
+
+  it.each([
+    ['content that is not text', write({ path: 'a.txt', content: 3 })],
+    ['no content', write({ path: 'a.txt' })],
+    ['no path', write({ content: 'x' })],
+    ['a whole-expression path', write({ path: '${pipeline.parameters.p}', content: 'x' })],
+    ['a path ending in a folder separator', write({ path: 'out/', content: 'x' })],
+    ['connection params', write(undefined, { connectionParams: { root: 'x' } } as Partial<Node>)],
+    ['a dataset', write(undefined, { datasetIds: { source: 'ds' } } as Partial<Node>)],
+  ])('stays Write file, by reference, with %s', (_why, node) => {
+    expect(lowerNodes([node])[0]).toBe(node);
+  });
+});

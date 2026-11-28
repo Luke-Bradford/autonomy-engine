@@ -21,6 +21,7 @@ import {
   FILE_DELETE_ACTIVITY_TYPE,
   FILE_LIST_ACTIVITY_TYPE,
   FILE_MOVE_ACTIVITY_TYPE,
+  FILE_WRITE_ACTIVITY_TYPE,
   GET_METADATA_ACTIVITY_TYPE,
   HTTP_REQUEST_ACTIVITY_TYPE,
   SET_VARIABLE_ACTIVITY_TYPE,
@@ -145,23 +146,52 @@ function lowerFileTransfer(afterCopy: 'keep' | 'delete') {
       // `file_copy` and `file_move` both replace an existing destination.
       ifExists: 'overwrite',
     };
-    if (!copyFilesConfigSchema.safeParse(config).success) return undefined;
-    const replacement = getActivity(COPY_FILES_ACTIVITY_TYPE);
-    if (replacement === undefined) return undefined;
-    // The replacement's contract, deep-copied: every retired output name is in
-    // it (`RETIRED_LOWERINGS[*].outputs`), so a `${nodes.x.output.dest}` still
-    // resolves.
-    config['outputs'] = catalogOutputs(replacement);
-    const { connectionId, ...rest } = node;
-    return {
-      ...rest,
-      type: COPY_FILES_ACTIVITY_TYPE,
-      config,
-      ...(connectionId === undefined
-        ? {}
-        : { connectionIds: { source: connectionId, sink: connectionId } }),
-    };
+    return asCopyFiles(node, config);
   };
+}
+
+/**
+ * `node` as Copy · Files as-is with `config`, its one connection bound at both
+ * ends; undefined where the config fails the schema.
+ */
+function asCopyFiles(node: Node, config: Record<string, unknown>): Node | undefined {
+  if (!copyFilesConfigSchema.safeParse(config).success) return undefined;
+  const replacement = getActivity(COPY_FILES_ACTIVITY_TYPE);
+  if (replacement === undefined) return undefined;
+  // The replacement's contract, deep-copied: every retired output name is in
+  // it (`RETIRED_LOWERINGS[*].outputs`), so a `${nodes.x.output.dest}` still
+  // resolves.
+  const { connectionId, ...rest } = node;
+  return {
+    ...rest,
+    type: COPY_FILES_ACTIVITY_TYPE,
+    config: { ...config, outputs: catalogOutputs(replacement) },
+    ...(connectionId === undefined
+      ? {}
+      : { connectionIds: { source: connectionId, sink: connectionId } }),
+  };
+}
+
+/**
+ * #1600 OR41 C2a — `file_write` → Copy · Files as-is · Inline content: the same
+ * text written to the same file on the same connection, replacing it (If file
+ * exists Overwrite), its path split as a `file_copy` destination is. `path` is
+ * answered by `dest`, the canonical file, as Write file's `path` was. The run
+ * differences (Allow writes, a missing folder made) are the catalogue's §8.
+ */
+function lowerFileWrite(node: Node): Node | undefined {
+  if (carriesUnlowerable(node)) return undefined;
+  const { path, content } = node.config;
+  if (typeof path !== 'string' || typeof content !== 'string') return undefined;
+  const split = splitDestination(path);
+  if (split === undefined) return undefined;
+  return asCopyFiles(node, {
+    pathType: 'inline',
+    content,
+    ...(split.folder === undefined ? {} : { sinkFolder: split.folder }),
+    sinkFileName: split.name,
+    ifExists: 'overwrite',
+  });
 }
 
 /**
@@ -380,6 +410,12 @@ export const RETIRED_LOWERINGS: Readonly<Record<string, RetiredLowering>> = {
     to: COPY_FILES_ACTIVITY_TYPE,
     outputs: { source: 'source', dest: 'dest' },
     lower: lowerFileTransfer('delete'),
+  },
+  // C2a — Write file's `path` is the file written, Files as-is's `dest`.
+  [FILE_WRITE_ACTIVITY_TYPE]: {
+    to: COPY_FILES_ACTIVITY_TYPE,
+    outputs: { bytesWritten: 'bytesWritten', path: 'dest' },
+    lower: lowerFileWrite,
   },
   [FILE_LIST_ACTIVITY_TYPE]: {
     to: GET_METADATA_ACTIVITY_TYPE,

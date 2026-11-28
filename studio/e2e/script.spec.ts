@@ -247,7 +247,7 @@ test.describe('#1600 C10b-1 — Script on PostgreSQL', () => {
       await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`)
     ).json()) as { version: number; catalogVersion: number; nodes: Record<string, unknown>[] }[];
     const latest = versions.sort((a, b) => b.version - a.version)[0]!;
-    expect(latest.catalogVersion).toBe(76);
+    expect(latest.catalogVersion).toBe(77);
     expect(latest.nodes.find((n) => n['id'] === 'script1')).toMatchObject({
       type: 'script',
       connectionId: pg,

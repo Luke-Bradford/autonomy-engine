@@ -34,7 +34,7 @@ import {
 } from './types.js';
 import { agentTaskConfigSchema } from './agent-config.js';
 import { copyDispatchInputSchema, copyInputSchema } from './copy-config.js';
-import { copyFilesConfigSchema } from './copy-files-config.js';
+import { COPY_FILES_FILE_SOURCES, copyFilesConfigSchema } from './copy-files-config.js';
 import { deleteConfigSchema } from './delete-config.js';
 import { SCRIPT_MESSAGES_OUTPUT } from './session-log.js';
 import {
@@ -757,6 +757,10 @@ const ENTRIES: ActivityCatalogEntry[] = [
     description: 'Write text to a file on a file system connection.',
     kind: 'execution',
     category: 'general',
+    // #1600 OR41 C2a — retired from the palette: Copy · Files as-is · Inline
+    // content covers it, and a stored node opens as that (`retired.ts`). It
+    // still runs.
+    inPalette: false,
     tabs: [
       { key: 'location', bindings: ['connection'], fields: ['path'] },
       { key: 'content', fields: ['content'] },
@@ -1336,8 +1340,10 @@ const ENTRIES: ActivityCatalogEntry[] = [
         bindings: ['sourceConnection'],
         // #1600 OR41 C5b — Load leads the optional fields, as on a rows Copy's
         // Source tab; the required Source path stays first (#1477).
+        // C2a — Content beside Source path: one of the two is the source.
         fields: [
           'sourcePath',
+          'content',
           'load',
           'pathType',
           'wildcard',
@@ -1378,12 +1384,33 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // #1686 — the same rules `copyFilesConfigSchema`'s superRefine enforces,
     // read by the dock to leave out what cannot apply.
     appliesWhen: {
+      // #1600 OR41 C2a — Inline content writes its Content and reads no
+      // files, so what is about source files is drawn for a files source.
+      sourcePath: [{ field: 'pathType', in: [...COPY_FILES_FILE_SOURCES] }],
+      content: [{ field: 'pathType', in: ['inline'] }],
+      load: [{ field: 'pathType', in: [...COPY_FILES_FILE_SOURCES] }],
+      afterCopy: [{ field: 'pathType', in: [...COPY_FILES_FILE_SOURCES] }],
+      copyBehavior: [{ field: 'pathType', in: [...COPY_FILES_FILE_SOURCES] }],
       wildcard: [{ field: 'pathType', in: ['folder'] }],
       recursive: [{ field: 'pathType', in: ['folder'] }],
       fileListPath: [{ field: 'pathType', in: ['list'] }],
       // C5b — Load Incremental sets the modified window itself.
-      modifiedStart: [{ field: 'load', in: ['full'] }],
-      modifiedEnd: [{ field: 'load', in: ['full'] }],
+      modifiedStart: [
+        {
+          all: [
+            { field: 'load', in: ['full'] },
+            { field: 'pathType', in: [...COPY_FILES_FILE_SOURCES] },
+          ],
+        },
+      ],
+      modifiedEnd: [
+        {
+          all: [
+            { field: 'load', in: ['full'] },
+            { field: 'pathType', in: [...COPY_FILES_FILE_SOURCES] },
+          ],
+        },
+      ],
       moveTo: [{ field: 'afterCopy', in: ['move'] }],
       // C6d-2 — as in ADF, only a source of several files can skip one.
       skipMissingFiles: [{ field: 'pathType', in: ['folder', 'list'] }],
@@ -1391,12 +1418,19 @@ const ENTRIES: ActivityCatalogEntry[] = [
       // C6e-2 — as in ADF, files are verified only under Preserve hierarchy.
       // Conditions are OR'd, so a verified one-file copy draws the skip too,
       // and save refuses it there.
-      validateDataConsistency: [{ field: 'copyBehavior', in: ['preserve'] }],
+      validateDataConsistency: [
+        {
+          all: [
+            { field: 'copyBehavior', in: ['preserve'] },
+            { field: 'pathType', in: [...COPY_FILES_FILE_SOURCES] },
+          ],
+        },
+      ],
       skipInconsistentFiles: [{ field: 'validateDataConsistency', in: ['true'] }],
       // C6f-2 — a merge writes one file, and save refuses more than one copy there.
       parallelCopies: [{ field: 'copyBehavior', in: ['preserve', 'flatten'] }],
       sinkFileName: [
-        { field: 'pathType', in: ['file'] },
+        { field: 'pathType', in: ['file', 'inline'] },
         { field: 'copyBehavior', in: ['merge'] },
       ],
       // C6c-1a — Delete's rules: Write to while the log is on, the folder for Folder.

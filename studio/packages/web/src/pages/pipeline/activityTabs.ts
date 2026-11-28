@@ -3,6 +3,7 @@ import {
   applicableBindingSlots,
   type ActivityBindingSlot,
   type ActivityCatalogEntry,
+  type ActivityFieldCondition,
   type ActivityTabKey,
 } from '@autonomy-studio/shared';
 import {
@@ -130,27 +131,27 @@ export function applicableFieldNames(
       !sameControlValue(input, emptyControlValue(field))
     );
   };
+  const met = (c: ActivityFieldCondition): boolean => {
+    // #1600 OR41 C2a — every one of `all`, for a field two controls decide.
+    if ('all' in c) return c.all.every(met);
+    if ('connectionKind' in c) {
+      return (
+        connectionKind === undefined ||
+        (c.connectionKind as readonly string[]).includes(connectionKind)
+      );
+    }
+    // #1600 OR41 C3b — the control holds a value, stored or typed.
+    if ('set' in c) return holds(c.field);
+    const value = valueOf(c.field);
+    // #1600 OR41 C8a — a set of choices holds its ticks one per line, and
+    // applies when any is one of `in`; a single choice is the one-line case.
+    return (
+      value === undefined || value.includes('${') || value.split('\n').some((v) => c.in.includes(v))
+    );
+  };
   return names.filter((name) => {
     const conditions = rules[name];
-    if (conditions === undefined || holds(name)) return true;
-    return conditions.some((c) => {
-      if ('connectionKind' in c) {
-        return (
-          connectionKind === undefined ||
-          (c.connectionKind as readonly string[]).includes(connectionKind)
-        );
-      }
-      // #1600 OR41 C3b — the control holds a value, stored or typed.
-      if ('set' in c) return holds(c.field);
-      const value = valueOf(c.field);
-      // #1600 OR41 C8a — a set of choices holds its ticks one per line, and
-      // applies when any is one of `in`; a single choice is the one-line case.
-      return (
-        value === undefined ||
-        value.includes('${') ||
-        value.split('\n').some((v) => c.in.includes(v))
-      );
-    });
+    return conditions === undefined || holds(name) || conditions.some(met);
   });
 }
 

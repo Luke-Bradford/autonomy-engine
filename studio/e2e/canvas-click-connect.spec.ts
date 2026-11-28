@@ -37,7 +37,7 @@ const REFUSAL = '.canvas-refusal';
 async function seedTwoNodes(page: Page): Promise<void> {
   await addActivity(page, 'Web');
   await expect(canvasNodes(page)).toHaveCount(1);
-  await addActivity(page, 'Write file');
+  await addActivity(page, 'Delete');
   await fitAndSettle(page, 1);
   await expect(canvasNodes(page)).toHaveCount(2);
   await dragNodeBy(page, 1, 300, 60);

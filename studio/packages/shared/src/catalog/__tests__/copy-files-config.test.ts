@@ -5,7 +5,7 @@ import {
   copyFilesIncrementalIssues,
 } from '../copy-files-config.js';
 import { getActivity } from '../registry.js';
-import { COPY_FILES_ACTIVITY_TYPE } from '../types.js';
+import { COPY_FILES_ACTIVITY_TYPE, type ActivityFieldCondition } from '../types.js';
 import { activityNodeErrors } from '../../engine/activity-config-check.js';
 import type { Node } from '../../schemas/pipeline.js';
 import { fieldLabelOf } from '../../schemas/field-presentation.js';
@@ -146,8 +146,14 @@ describe('copy_files appliesWhen (#1686)', () => {
     // #1600 C5b — Modified between, drawn under Load Full only.
     modifiedStart: '2026-10-01T00:00:00Z',
     modifiedEnd: '2026-10-02T00:00:00Z',
+    // #1600 C2a — the source of a files copy, or the content of an inline one.
+    sourcePath: 'in',
+    content: 'hello',
   };
-  const combos = (['file', 'folder', 'list'] as const).flatMap((pathType) =>
+  // C2a — an inline copy has content where a files copy has a source path.
+  const base = (controls: Record<string, string>) =>
+    controls['pathType'] === 'inline' ? { content: 'hello' } : { sourcePath: 'in' };
+  const combos = (['file', 'folder', 'list', 'inline'] as const).flatMap((pathType) =>
     (['keep', 'delete', 'move'] as const).flatMap((afterCopy) =>
       (['preserve', 'flatten', 'merge'] as const).flatMap((copyBehavior) =>
         (['full', 'incremental'] as const).map((load) => ({
@@ -159,10 +165,13 @@ describe('copy_files appliesWhen (#1686)', () => {
       ),
     ),
   );
+  // C2a — `all` holds when each of its conditions does.
+  const holds = (c: ActivityFieldCondition, controls: Record<string, string>): boolean =>
+    'all' in c
+      ? c.all.every((d) => holds(d, controls))
+      : 'in' in c && (c.in as readonly string[]).includes(controls[c.field]!);
   const applies = (name: string, controls: Record<string, string>) =>
-    (rules[name] ?? []).some(
-      (c) => 'in' in c && (c.in as readonly string[]).includes(controls[c.field]!),
-    );
+    (rules[name] ?? []).some((c) => holds(c, controls));
   const refusedOn = (name: string, config: Record<string, unknown>) =>
     issues(config).some((i) => i.startsWith(`${name}:`));
 
@@ -170,6 +179,9 @@ describe('copy_files appliesWhen (#1686)', () => {
     expect(Object.keys(rules).sort()).toEqual(
       [
         ...Object.keys(held),
+        'load',
+        'afterCopy',
+        'copyBehavior',
         'recursive',
         'skipMissingFiles',
         'skipInconsistentFiles',
@@ -182,11 +194,11 @@ describe('copy_files appliesWhen (#1686)', () => {
 
   it.each(Object.keys(held))('%s is drawn exactly where the schema accepts it', (name) => {
     for (const controls of combos) {
-      const config = { sourcePath: 'in', ...controls, [name]: held[name] };
+      const config = { ...base(controls), ...controls, [name]: held[name] };
       expect(refusedOn(name, config), `${name} set, ${JSON.stringify(controls)}`).toBe(
         !applies(name, controls),
       );
-      const without = { sourcePath: 'in', ...controls };
+      const without = { ...base(controls), ...controls };
       if (refusedOn(name, without)) {
         expect(applies(name, controls), `${name} needed, ${JSON.stringify(controls)}`).toBe(true);
       }
@@ -348,8 +360,14 @@ describe('copy_files data consistency (#1600 OR41 C6e-2)', () => {
 
   it('draws Verify under Preserve, and its skip once it is on', () => {
     const entry = getActivity(COPY_FILES_ACTIVITY_TYPE)!;
+    // #1600 C2a — and on a files source: inline content has none to verify.
     expect(entry.appliesWhen?.['validateDataConsistency']).toEqual([
-      { field: 'copyBehavior', in: ['preserve'] },
+      {
+        all: [
+          { field: 'copyBehavior', in: ['preserve'] },
+          { field: 'pathType', in: ['file', 'folder', 'list'] },
+        ],
+      },
     ]);
     expect(entry.appliesWhen?.['skipInconsistentFiles']).toEqual([
       { field: 'validateDataConsistency', in: ['true'] },
@@ -463,16 +481,68 @@ describe('copy_files Load Incremental (C5b)', () => {
 
   it('draws Load after Source path on the Source tab, and Modified between only under Full', () => {
     const entry = getActivity(COPY_FILES_ACTIVITY_TYPE)!;
-    expect(entry.tabs?.find((t) => t.key === 'source')?.fields?.slice(0, 2)).toEqual([
+    expect(entry.tabs?.find((t) => t.key === 'source')?.fields?.slice(0, 3)).toEqual([
       'sourcePath',
+      'content',
       'load',
     ]);
-    expect(entry.appliesWhen?.['modifiedStart']).toEqual([{ field: 'load', in: ['full'] }]);
-    expect(entry.appliesWhen?.['modifiedEnd']).toEqual([{ field: 'load', in: ['full'] }]);
+    // C2a — and only on a files source: an inline one has no modified time.
+    for (const name of ['modifiedStart', 'modifiedEnd']) {
+      expect(entry.appliesWhen?.[name]).toEqual([
+        {
+          all: [
+            { field: 'load', in: ['full'] },
+            { field: 'pathType', in: ['file', 'folder', 'list'] },
+          ],
+        },
+      ]);
+    }
     expect(entry.outputs.at(-1)).toMatchObject({ name: 'watermark', optional: true });
     // A node saved before C5b keeps the contract it was saved with.
     expect(entry.formerOutputs![0]!.map((o) => o.name)).toEqual(
       entry.outputs.map((o) => o.name).filter((n) => n !== 'watermark'),
     );
+  });
+});
+
+describe('copy_files Inline content (#1600 OR41 C2a)', () => {
+  const inline = { pathType: 'inline', content: 'hello', sinkFileName: 'out.txt' };
+
+  it('writes its Content as one file, with no source path', () => {
+    expect(issues(inline)).toEqual([]);
+    // Write file wrote an empty file; so does an inline copy.
+    expect(issues({ ...inline, content: '' })).toEqual([]);
+    // Content is text: a `${}` is resolved by the run, as on every string field.
+    expect(issues({ ...inline, content: '${vars.report}' })).toEqual([]);
+  });
+
+  it.each([
+    [{ content: undefined }, 'content: an inline copy needs its content'],
+    [{ sinkFileName: undefined }, 'sinkFileName: an inline copy needs the file name to write'],
+    [{ sourcePath: 'in' }, 'sourcePath: an inline copy reads no source path'],
+    [{ load: 'incremental' }, 'load: an inline copy has no files to compare'],
+    [{ modifiedStart: '2026-10-01T00:00:00Z' }, 'modifiedStart: an inline copy has no modified'],
+    [{ afterCopy: 'delete' }, 'afterCopy: an inline copy has no source file'],
+    [{ copyBehavior: 'merge' }, 'copyBehavior: merging needs a folder or a file list'],
+    [{ validateDataConsistency: true }, 'validateDataConsistency: an inline copy has no source'],
+    [{ skipForbiddenFiles: true }, 'skipForbiddenFiles: skipping a forbidden file needs a folder'],
+  ])('refuses %j', (extra, message) => {
+    expect(issues({ ...inline, ...extra }).join('\n')).toContain(message);
+  });
+
+  it('refuses Content on a files copy, and a files copy without a source path', () => {
+    expect(issues({ sourcePath: 'in', content: 'x' })).toEqual([
+      'content: Content is only written when the path type is Inline content',
+    ]);
+    expect(issues({ pathType: 'file', sinkFileName: 'a' })).toEqual([
+      'sourcePath: a file, folder or file list copy needs a source path',
+    ]);
+  });
+
+  it('titles the choice and the field, each with its ?', () => {
+    const shape = copyFilesConfigSchema.shape;
+    expect(fieldLabelOf(shape.content)).toMatchObject({ title: 'Content' });
+    expect(fieldLabelOf(shape.content)?.description).toMatch(/\S/);
+    expect(fieldLabelOf(shape.pathType)?.options).toMatchObject({ inline: 'Inline content' });
   });
 });

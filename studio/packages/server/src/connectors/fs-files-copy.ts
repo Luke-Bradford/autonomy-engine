@@ -311,7 +311,8 @@ async function openFolderLog(
 ): Promise<OpenedLog> {
   const checked = await checkLogConnectionFolder(ctx.logConnection, cfg.logFolder);
   if (!checked.ok) return checked;
-  if (cfg.pathType === 'folder') {
+  // The schema requires a source path on a Folder (C2a made it optional for Inline content).
+  if (cfg.pathType === 'folder' && cfg.sourcePath !== undefined) {
     const root = await resolveWithinRoots(source.roots, cfg.sourcePath, 'fs');
     // A source that does not resolve is refused by the plan, with this log kept.
     const base = root.ok ? await realpath(root.path).catch(() => undefined) : undefined;
@@ -521,9 +522,12 @@ async function selectSources(
   onSkip: OnSkip,
 ): Promise<{ root: string; files: SourceFile[] }> {
   const cap = source.maxEntries ?? DEFAULT_MAX_LIST_ENTRIES;
-  const root = await confined(source.roots, cfg.sourcePath);
+  // #1600 C2a — optional only for Inline content, which never selects.
+  const sourcePath =
+    cfg.sourcePath ?? refuse('a file, folder or file list copy needs a source path');
+  const root = await confined(source.roots, sourcePath);
   const rootStat = await lstatOrNull(root);
-  if (rootStat === null) refuse(`source path '${cfg.sourcePath}' does not exist`);
+  if (rootStat === null) refuse(`source path '${sourcePath}' does not exist`);
   const files: SourceFile[] = [];
   const take = (abs: string, rel: string, st: BigIntStats) => {
     if (contains(st)) {
@@ -532,11 +536,11 @@ async function selectSources(
   };
 
   if (cfg.pathType === 'file') {
-    if (!rootStat!.isFile()) refuse(`source path '${cfg.sourcePath}' is not a file`);
+    if (!rootStat!.isFile()) refuse(`source path '${sourcePath}' is not a file`);
     take(root, basename(root), rootStat!);
     return { root, files };
   }
-  if (!rootStat!.isDirectory()) refuse(`source path '${cfg.sourcePath}' is not a folder`);
+  if (!rootStat!.isDirectory()) refuse(`source path '${sourcePath}' is not a folder`);
 
   if (cfg.pathType === 'folder') {
     const matches = wildcardMatcher(cfg.wildcard);
@@ -975,6 +979,74 @@ async function syncDir(path: string): Promise<void> {
 }
 
 /** Carries an already-built `failed` event (from `atomicReplace`) out of the copy loop. */
+/**
+ * #1600 OR41 C2a — Inline content (catalogue §4.1's Inline source, the retired
+ * Write file): the Content box written as one file under the sink folder. The
+ * same plan-first rules as a files copy, with nothing to read: the target is
+ * confined and checked before the first byte (a folder or symlink in the way,
+ * If file exists Fail), the sink folder is created as for any copy, and the
+ * bytes land through the same atomic temp and rename, so a failed write leaves
+ * the target as it was. If file exists Skip keeps an existing file.
+ */
+async function writeInlineContent(
+  cfg: CopyFilesConfig,
+  sinkDir: PlannedDir,
+  finalPath: string,
+  dirs: readonly string[],
+  tmpSuffix: string,
+  signal: AbortSignal,
+  c: Counters,
+  log: SessionLog,
+  begin: () => void,
+): Promise<void> {
+  const content = cfg.content ?? '';
+  const rel = relative(sinkDir.path, finalPath);
+  const paths = plannedPaths();
+  paths.folders(sinkDir.base, sinkDir.missing);
+  paths.folders(sinkDir.path, dirs);
+  paths.file(finalPath);
+  await folderCheck()(sinkDir.path, dirs);
+  const existing = await lstatOrNull(finalPath);
+  if (existing?.isDirectory() === true) {
+    refuse(`'${finalPath}' is a folder, so a file cannot be written there`);
+  }
+  if (existing !== null && cfg.ifExists === 'fail') {
+    refuse(`'${finalPath}' already exists and If file exists is Fail`);
+  }
+  const skip = (why: string) => {
+    c.filesSkipped += 1;
+    log.add('Warning', 'FileSkip', rel, `skipped: '${rel}' ${why} and If file exists is Skip`);
+  };
+  if (existing !== null && cfg.ifExists === 'skip') {
+    skip('already exists');
+    return;
+  }
+  begin();
+  const base = await materialize(sinkDir.base, sinkDir.missing);
+  await materialize(base, dirs);
+  const result = await atomicReplace(
+    finalPath,
+    tmpSuffix,
+    signal,
+    async (fh) => {
+      await fh.writeFile(content, { encoding: 'utf8', signal });
+    },
+    { noClobber: cfg.ifExists !== 'overwrite' },
+  );
+  if (result === TARGET_EXISTS) {
+    if (cfg.ifExists === 'fail') {
+      refuse(`'${finalPath}' appeared during the copy and If file exists is Fail`);
+    }
+    skip('appeared during the copy');
+    return;
+  }
+  if (result !== undefined) throw new EventFailure(result);
+  const bytes = Buffer.byteLength(content, 'utf8');
+  c.filesWritten += 1;
+  c.bytesWritten += bytes;
+  log.add('Info', 'FileWrite', rel, `wrote ${counted(bytes, 'byte')} from the inline content`);
+}
+
 class EventFailure extends Error {
   constructor(readonly event: ActivityEvent) {
     super('write failed');
@@ -1126,7 +1198,61 @@ export async function* runFilesCopy(
   };
   let started = false;
   let where: CopyPaths | undefined;
+  /**
+   * The success, once every file is written: Load Incremental's time stored,
+   * then the log closed. Shared by a files source and Inline content (C2a).
+   */
+  async function* succeed(): AsyncGenerator<ActivityEvent> {
+    // C5b — stored the moment every file is written, before the log closes, as
+    // a rows Copy's is as its sink commits: a log that then fails to close does
+    // not leave the time behind, and the next run would copy these files again.
+    const storeError = finishWindow(true);
+    if (storeError !== null) throw new Refusal(storeError);
+    // Nothing that can throw sits between the lines and the success, so they
+    // are yielded once (a rows Copy needs a guard for that; this does not):
+    // `close` reports a failure rather than throwing it.
+    const logError = yield* endLog();
+    if (logError !== undefined && !(yield* logErrorWarned(logError))) {
+      // The files are copied: the counts are reported, then the failure.
+      for (const [name, value] of Object.entries(
+        outputsOf(c, where, measured(), width, null, watermark),
+      ))
+        yield { type: 'output', name, value };
+      yield failed(
+        'permanent',
+        `copied ${counted(c.filesWritten, 'file')}, but the session log '${logFile!.path}' could not be written: ${logError}`,
+      );
+      return;
+    }
+    yield {
+      type: 'succeeded',
+      outputs: outputsOf(c, where, measured(), width, logPath, watermark),
+    };
+  }
   try {
+    // #1600 OR41 C2a — Inline content: no source to select, one file to write.
+    // `source` is empty, as there is no source path; `dest` is the file.
+    if (cfg.pathType === 'inline') {
+      const sinkDir = await planDir(sink.roots, cfg.sinkFolder);
+      const segments = segmentsBelow(sinkDir.path, cfg.sinkFileName!, 'sink file');
+      const finalPath = join(sinkDir.path, ...segments);
+      where = { source: '', dest: finalPath };
+      await writeInlineContent(
+        cfg,
+        sinkDir,
+        finalPath,
+        segments.slice(0, -1),
+        makeTmpSuffix(ctx),
+        signal,
+        c,
+        log,
+        () => {
+          started = true;
+        },
+      );
+      yield* succeed();
+      return;
+    }
     // ── Plan ────────────────────────────────────────────────────────────
     const { root, files } = await selectSources(cfg, source, selects, signal, skips, onSkip);
     const sinkDir = await planDir(sink.roots, cfg.sinkFolder);
@@ -1415,31 +1541,7 @@ export async function* runFilesCopy(
       logWorking();
     });
     if (failure !== undefined) throw failure.err;
-    // C5b — stored the moment every file is written, before the log closes, as
-    // a rows Copy's is as its sink commits: a log that then fails to close does
-    // not leave the time behind, and the next run would copy these files again.
-    const storeError = finishWindow(true);
-    if (storeError !== null) throw new Refusal(storeError);
-    // Nothing that can throw sits between the lines and the success, so they
-    // are yielded once (a rows Copy needs a guard for that; this does not):
-    // `close` reports a failure rather than throwing it.
-    const logError = yield* endLog();
-    if (logError !== undefined && !(yield* logErrorWarned(logError))) {
-      // The files are copied: the counts are reported, then the failure.
-      for (const [name, value] of Object.entries(
-        outputsOf(c, where, measured(), width, null, watermark),
-      ))
-        yield { type: 'output', name, value };
-      yield failed(
-        'permanent',
-        `copied ${counted(c.filesWritten, 'file')}, but the session log '${logFile!.path}' could not be written: ${logError}`,
-      );
-      return;
-    }
-    yield {
-      type: 'succeeded',
-      outputs: outputsOf(c, where, measured(), width, logPath, watermark),
-    };
+    yield* succeed();
   } catch (err) {
     // Whatever unwound the copy once it was aborted, the outcome is the abort.
     const terminal = signal.aborted

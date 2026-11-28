@@ -167,6 +167,8 @@ export function activitySummary(
     case COPY_FILES_ACTIVITY_TYPE: {
       // An empty sink folder is the connection's first allowed folder.
       const to = joined([text(c.sinkFolder), text(c.sinkFileName)], '/') ?? 'sink root';
+      // #1600 OR41 C2a — Inline content has no source path: it writes its text.
+      if (c.pathType === 'inline') return `inline → ${to}`;
       const line = arrow(text(c.sourcePath), to);
       // Keep is the default and says nothing; delete and move change the source.
       const after =
