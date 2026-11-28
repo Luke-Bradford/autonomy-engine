@@ -1,4 +1,6 @@
 import { open, stat } from 'node:fs/promises';
+import { pipeline } from 'node:stream/promises';
+import { createGunzip } from 'node:zlib';
 import {
   DelimitedParseError,
   delimitedDatasetConfigSchema,
@@ -7,6 +9,7 @@ import {
   type CoercionOptions,
   type DatasetAddress,
   type DatasetKind,
+  type FileCompression,
 } from '@autonomy-studio/shared';
 import { CONFINED_READ_FLAGS, resolveWithinRoots, resolveWithinRootsOrMissing } from './confine.js';
 import { DatasetIoError } from './dataset-io-error.js';
@@ -225,9 +228,10 @@ async function prepareRead(
  * for the same reason, and slice 1 authorises exactly this split: "the reader
  * can abort at its chunk source and between batches".
  */
-async function* decodedChunks(
+export async function* decodedChunks(
   path: string,
   encoding: string,
+  compression: FileCompression,
   chunkBytes: number,
   signal: AbortSignal | undefined,
 ): AsyncGenerator<string, void, undefined> {
@@ -244,13 +248,10 @@ async function* decodedChunks(
     }
 
     const decoder = new TextDecoder(encoding, { fatal: true });
-    const buffer = Buffer.allocUnsafe(chunkBytes);
-    for (;;) {
-      if (signal?.aborted) throw new DatasetIoError('cancelled', 'dataset read aborted');
-      const { bytesRead } = await fh.read(buffer, 0, buffer.length, null);
-      if (bytesRead === 0) break;
-      // `decode` is synchronous, so reusing one buffer across reads is safe.
-      yield decodeOrFail(decoder, encoding, buffer.subarray(0, bytesRead));
+    const bytes = fileBytes(fh, chunkBytes, signal);
+    // #1405 — a gzipped file is inflated between the read and the decoder.
+    for await (const chunk of compression === 'gzip' ? gunzipped(bytes, path) : bytes) {
+      yield decodeOrFail(decoder, encoding, chunk);
     }
     // The flush is not a formality: under `fatal` it is what refuses a file
     // ending mid-multi-byte-sequence, which no `{ stream: true }` call reports.
@@ -262,6 +263,57 @@ async function* decodedChunks(
       // A close failure must never replace the outcome the caller is unwinding
       // with — including the abort path this generator exists to make correct.
     }
+  }
+}
+
+/**
+ * The file's bytes, one `read()` at a time, checking the abort before each.
+ * Each chunk is a fresh copy, because a consumer downstream of it (the gunzip
+ * stream) may still hold the previous one when the next read lands.
+ */
+async function* fileBytes(
+  fh: Awaited<ReturnType<typeof open>>,
+  chunkBytes: number,
+  signal: AbortSignal | undefined,
+): AsyncGenerator<Buffer, void, undefined> {
+  const buffer = Buffer.allocUnsafe(chunkBytes);
+  for (;;) {
+    if (signal?.aborted) throw new DatasetIoError('cancelled', 'dataset read aborted');
+    const { bytesRead } = await fh.read(buffer, 0, buffer.length, null);
+    if (bytesRead === 0) return;
+    yield Buffer.from(buffer.subarray(0, bytesRead));
+  }
+}
+
+/**
+ * #1405 OR14 — `bytes` inflated. A file that is not gzip at all, or one cut
+ * short, is a `permanent` refusal naming the file, never a raw zlib code.
+ */
+export async function* gunzipped(
+  bytes: AsyncIterable<Buffer>,
+  path: string,
+): AsyncGenerator<Buffer, void, undefined> {
+  // Fed by `pipeline` and read here. `stream.compose` was the first cut, and a
+  // file cut short hung it: the inflate error at the end never reached the
+  // reader. Through `pipeline` it destroys the stream this loop reads.
+  const gunzip = createGunzip();
+  const feeding = pipeline(bytes, gunzip);
+  feeding.catch(() => undefined); // its error also ends the loop below
+  try {
+    for await (const chunk of gunzip) yield chunk as Buffer;
+    await feeding;
+  } catch (err) {
+    const code = (err as { code?: unknown } | undefined)?.code;
+    if (typeof code === 'string' && code.startsWith('Z_')) {
+      throw new DatasetIoError(
+        'permanent',
+        `'${path}' is not a whole gzip file — set Compression to None if it is not gzipped`,
+        { cause: err },
+      );
+    }
+    throw err;
+  } finally {
+    gunzip.destroy();
   }
 }
 
@@ -417,7 +469,7 @@ export async function* readDelimitedDatasetBatches(
   let first = true;
   try {
     for await (const rawBatch of parseDelimitedRows(
-      decodedChunks(path, config.encoding, chunkBytes, read.signal),
+      decodedChunks(path, config.encoding, config.compression, chunkBytes, read.signal),
       parseOptionsFor(config, read.batchRows ?? COPY_BATCH_ROWS),
     )) {
       if (rawBatch.length === 0) continue;
@@ -473,7 +525,7 @@ export async function describeDelimitedDatasetColumns(
   if (read.signal?.aborted) throw new DatasetIoError('cancelled', 'dataset describe aborted');
   try {
     for await (const rawBatch of parseDelimitedRows(
-      decodedChunks(path, config.encoding, chunkBytes, read.signal),
+      decodedChunks(path, config.encoding, config.compression, chunkBytes, read.signal),
       parseOptionsFor(config, 1),
     )) {
       if (rawBatch.length === 0) continue;
@@ -512,9 +564,11 @@ export async function describeDelimitedDatasetColumns(
  * TWO RESIDUALS, stated because everything around them states theirs. (1) The
  * `object` half carries no case-alias defence of its own: two `fs` addresses
  * differing only in the spelling of one path component compare `sameStore` via
- * `dev:ino` and then MISS on `object`, so they are not refused. Unreachable
- * today — there is no `delimited` writer, so two `fs` ends cannot both exist in
- * one copy — and it is the first thing M-whatever's CSV writer must close.
+ * `dev:ino` and then MISS on `object`, so they are not refused. #1405's file
+ * writer made it reachable, and it is harmless there: the writer never writes in
+ * place. Overwrite renames a new file over the old one while the reader holds
+ * its own handle on the old one, so the reader still sees every old row; Append
+ * refuses a file that is already there.
  * (2) `sameDatasetAddress` short-circuits on `kind`, so an `fs` source and a
  * `sqlite` sink are never compared at all; a sqlite connection whose `path` IS
  * the CSV is not caught here. That one is harmless in fact rather than in

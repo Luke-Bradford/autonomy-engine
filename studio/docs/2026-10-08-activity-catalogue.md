@@ -206,7 +206,7 @@ The run reads `col > old AND col <= new`, and outputs `watermark.old` and `water
 | Sink is | Fields |
 |---|---|
 | Database | **Connection** as above. **Table** `[▾ existing]` ⓕ, or **Table option** *Auto-create from mapping*, which generates DDL with quoted identifiers and types from the mapping. **Write behaviour** Append · Overwrite (delete then insert, one transaction) · Truncate then insert · Upsert (Key columns `[▾ multi]`, default the primary key). **Pre-copy script** (SQL, runs once; literal with ⓕ bind values, see C3b below). Batch size (default 1000) |
-| Files | **Folder** ⓕ, **File name** ⓕ (or prefix plus *Max rows per file*, Rows mode). **Copy behaviour** Preserve hierarchy · Flatten · Merge into one file (Files as-is plus folder sources). **If file exists** Overwrite · Skip · Fail (default Overwrite). In Rows mode only: **Format** (Delimited, later JSON / Parquet OR14) with its write options |
+| Files | **Folder** ⓕ, **File name** ⓕ (or prefix plus *Max rows per file*, Rows mode). **Copy behaviour** Preserve hierarchy · Flatten · Merge into one file (Files as-is plus folder sources). **If file exists** Overwrite · Skip · Fail (default Overwrite). In Rows mode only: **Format** (Delimited, JSON, JSON Lines or Parquet, OR14) with its write options |
 
 **Built (C3a, #1600): Write behaviour on a database sink** ([Azure SQL Database as a sink](https://learn.microsoft.com/azure/data-factory/connector-azure-sql-database#azure-sql-database-as-the-sink): `writeBehavior`, `upsertSettings.keys`).
 - **Stored as `mode`**, which held Append and Overwrite before C3a, so no saved copy changes its content hash: `append` · `overwrite` · `truncate` · `upsert` (`COPY_WRITE_MODES`). Absent is Append. The field is titled *Write behaviour*, a literal enum.
@@ -1061,8 +1061,8 @@ The **capture level** (workspace setting, overridable per pipeline and per activ
 
 | Capability | File system (fs) | SQLite | Postgres | HTTP | S3 / Blob / SFTP | MySQL / SQL Server / Snowflake |
 |---|---|---|---|---|---|---|
-| Copy source, rows | ✓ delimited, excel; JSON/Parquet OR14 | ✓ table, query | ✓ table, query | T (JSON response as rows) | OR13 | OR15 |
-| Copy sink, rows | T delimited (OR14 writer) | ✓ append/overwrite/truncate/upsert (C3a), pre-copy script, batch size (C3b), auto-create (C3c) | ✓ same | — | OR13 | OR15 |
+| Copy source, rows | ✓ delimited, excel, JSON, JSON Lines, Parquet, gzip (OR14) | ✓ table, query | ✓ table, query | T (JSON response as rows) | OR13 | OR15 |
+| Copy sink, rows | ✓ delimited, JSON, JSON Lines, Parquet, gzip (OR14): Overwrite, or Append as a new file | ✓ append/overwrite/truncate/upsert (C3a), pre-copy script, batch size (C3b), auto-create (C3c) | ✓ same | — | OR13 | OR15 |
 | Copy, files as-is | ✓ copy/move (single file); **T** folder, wildcard, list, delete-after | — | — | T (download to file) | OR13 | — |
 | Lookup | ✓ | ✓ | ✓ | (use Web) | OR13 | OR15 |
 | Get metadata | ✓ full field list (C8a), a file dataset's structure and column count (C8c-2); **T** wait | ✓ exists, structure, columns, rows (C8c-1) | ✓ same | — | OR13 | OR15 |

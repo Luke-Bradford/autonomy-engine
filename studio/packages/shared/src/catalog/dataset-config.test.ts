@@ -64,7 +64,17 @@ describe('dataset config catalog', () => {
     // green is to add their new kind to `IMPLEMENTED_DATASET_KINDS` — the exact
     // lie a positive fact exists to prevent. A literal list reds on the next
     // kind and can only be made green by a decision.
-    expect([...IMPLEMENTED_DATASET_KINDS].sort()).toEqual(['delimited', 'excel', 'query', 'table']);
+    // #1405 — `json` and `jsonl` joined with `connectors/json-io.ts`, and
+    // `parquet` with `connectors/parquet-io.ts`.
+    expect([...IMPLEMENTED_DATASET_KINDS].sort()).toEqual([
+      'delimited',
+      'excel',
+      'json',
+      'jsonl',
+      'parquet',
+      'query',
+      'table',
+    ]);
     expect(datasetKindIsImplemented('table')).toBe(true);
     expect(datasetKindIsImplemented('delimited')).toBe(true);
     expect(datasetKindIsImplemented('excel')).toBe(true);
@@ -183,6 +193,8 @@ describe('the `delimited` dataset config (#1163, M7 slice 1)', () => {
       quote: '"',
       header: true,
       encoding: 'utf-8',
+      // #1405 — a file is read and written as it is unless it says gzip.
+      compression: 'none',
     });
   });
 

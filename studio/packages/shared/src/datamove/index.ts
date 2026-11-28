@@ -14,6 +14,8 @@ export * from './copy-measure.js';
 export * from './dataset-references.js';
 export * from './infer-columns.js';
 export * from './delimited.js';
+export * from './delimited-format.js';
+export * from './json-records.js';
 export * from './mapping-agreement.js';
 export * from './pump.js';
 export * from './schema-drift.js';

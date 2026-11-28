@@ -209,7 +209,7 @@ describe('activity catalog', () => {
     }
   });
 
-  it('`copy` declares a sink of `table` only — a query dataset has nothing to write into', () => {
+  it('`copy` declares a sink of `table` or a writable file kind — a query dataset has nothing to write into', () => {
     // Not a policy choice this entry could have made differently:
     // `connectors/sqlite.ts` reads a `query` dataset and refuses any non-`table`
     // for the WRITE. Pinned here so widening `sink` later has to confront the
@@ -240,13 +240,18 @@ describe('activity catalog', () => {
     // unchanged: M11 built a reader and no writer, so there is nothing to copy
     // INTO a workbook with. The sink halves therefore still do not move — which
     // is the half of this pin that has now survived three widenings.
+    //
+    // #1405 (OR14) moved them, with the writer in the same commit
+    // (`connectors/file-sink.ts`): `delimited`, `json`, `jsonl` and `parquet`
+    // join the sink kinds and `fs` the sink stores. `excel` and `query` stay
+    // off: neither has a writer.
     const copy = catalog.get('copy');
     expect(copy?.datasetKinds).toEqual({
-      source: ['table', 'query', 'delimited', 'excel'],
-      sink: ['table'],
+      source: ['table', 'query', 'delimited', 'excel', 'json', 'jsonl', 'parquet'],
+      sink: ['table', 'delimited', 'json', 'jsonl', 'parquet'],
     });
     expect(copy?.connectionKinds).toEqual(['sqlite', 'fs', 'postgres']);
-    expect(copy?.sinkConnectionKinds).toEqual(['sqlite', 'postgres']);
+    expect(copy?.sinkConnectionKinds).toEqual(['sqlite', 'postgres', 'fs']);
   });
 
   it('every source dataset kind `copy` accepts can live in a source connection it accepts', () => {

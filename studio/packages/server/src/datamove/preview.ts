@@ -18,6 +18,7 @@ import {
 } from '@autonomy-studio/shared';
 import { delimitedCoercionFor } from '../connectors/delimited-io.js';
 import { excelCoercionFor } from '../connectors/excel-io.js';
+import { jsonCoercionFor } from '../connectors/json-io.js';
 import { logSafeRow } from '../connectors/lookup.js';
 import { READABLE_RELKINDS_SQL } from '../connectors/postgres-session.js';
 import type { ConnectorRegistry } from '../connectors/registry.js';
@@ -272,6 +273,7 @@ function checkInline(
 function coercionOf(dataset: ResolvedDataset): CoercionOptions {
   if (dataset.kind === 'delimited') return delimitedCoercionFor(dataset.config);
   if (dataset.kind === 'excel') return excelCoercionFor(dataset.config);
+  if (dataset.kind === 'json' || dataset.kind === 'jsonl') return jsonCoercionFor(dataset.config);
   return {};
 }
 

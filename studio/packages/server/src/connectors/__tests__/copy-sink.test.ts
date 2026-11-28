@@ -48,10 +48,13 @@ describe('refuseForeignSink (#1196)', () => {
     // so opening the list would have left three sentences saying otherwise.
     expect(refuseForeignSink({ kind: 'sqlite', connectionConfig: {} })).toBeNull();
     expect(refuseForeignSink({ kind: 'postgres', connectionConfig: {} })).toBeNull();
-    const refusal = refuseForeignSink({ kind: 'fs', connectionConfig: {} });
+    // #1405 — a file connection is a sink too, for the delimited writer.
+    expect(refuseForeignSink({ kind: 'fs', connectionConfig: {} })).toBeNull();
+    const refusal = refuseForeignSink({ kind: 'http', connectionConfig: {} });
     expect(refusal).toContain("'sqlite'");
     expect(refusal).toContain("'postgres'");
-    expect(refusal).toContain("the sink connection is 'fs'");
+    expect(refusal).toContain("'fs'");
+    expect(refusal).toContain("the sink connection is 'http'");
   });
 
   it('refuses a non-store kind too', () => {
@@ -74,6 +77,7 @@ describe('writeRowsToSink dispatch (#1196)', () => {
           connection: { kind: 'sqlite', connectionConfig: { roots: [tmp], path, writable: true } },
           sinkSecret: null,
           columns: ['name', 'age'],
+          columnTypes: ['string', 'integer'],
           mode: 'append',
           keyColumns: [],
           preCopyScript: null,
@@ -112,6 +116,7 @@ describe('writeRowsToSink dispatch (#1196)', () => {
         connection,
         sinkSecret: null,
         columns: ['name', 'age'],
+        columnTypes: ['string', 'integer'],
         mode: 'append',
         keyColumns: [],
         preCopyScript: null,
@@ -185,6 +190,7 @@ describe('writeRowsToSink dispatch (#1196)', () => {
         connection,
         sinkSecret: 'pw',
         columns: ['name', 'age'],
+        columnTypes: ['string', 'integer'],
         mode: 'append',
         keyColumns: [],
         preCopyScript: null,
@@ -229,6 +235,7 @@ describe('writeRowsToSink dispatch (#1196)', () => {
           },
           sinkSecret: null,
           columns: ['name'],
+          columnTypes: ['string'],
           mode: 'append',
           keyColumns: [],
           preCopyScript: null,
@@ -258,6 +265,7 @@ describe('writeRowsToSink dispatch (#1196)', () => {
           connection: { kind: 'http', connectionConfig: {} },
           sinkSecret: null,
           columns: ['name'],
+          columnTypes: ['string'],
           mode: 'append',
           keyColumns: [],
           preCopyScript: null,
@@ -287,6 +295,7 @@ describe('writeRowsToSink dispatch (#1196)', () => {
           connection: { kind: 'sqlite', connectionConfig: { path: 42 } },
           sinkSecret: null,
           columns: ['name'],
+          columnTypes: ['string'],
           mode: 'append',
           keyColumns: [],
           preCopyScript: null,

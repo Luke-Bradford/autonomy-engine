@@ -43,11 +43,17 @@ const CONNECTION_HELP_LIMITS: Record<string, number> = {
  * Dataset, Columns, Columns (JSON) and Advanced are in every count.
  */
 const DATASET_HELP_LIMITS: Record<string, number> = {
-  delimited: 12,
+  // +1 for #1405's Compression, a new field whose `?` says it defaults to none.
+  delimited: 13,
   excel: 10,
   table: 6,
   // +1 for C1q-c's Query timeout, a new field whose `?` says blank means no limit.
   query: 8,
+  // #1405: File path, Compression and Date format, plus the five every form has.
+  json: 8,
+  jsonl: 8,
+  // #1405: File path alone, plus the five every form has.
+  parquet: 6,
 };
 
 /** The store kind each dataset kind is made on, for the form's Store picker. */
@@ -56,6 +62,9 @@ const DATASET_STORE: Record<string, 'fs' | 'sqlite'> = {
   excel: 'fs',
   table: 'sqlite',
   query: 'sqlite',
+  json: 'fs',
+  jsonl: 'fs',
+  parquet: 'fs',
 };
 
 /** The visible `?`s in `form`, by name, read once its fields have settled. */

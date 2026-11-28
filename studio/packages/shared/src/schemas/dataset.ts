@@ -81,8 +81,19 @@ export type DatasetColumn = z.infer<typeof DatasetColumnSchema>;
  * vocabulary portability must round-trip. The READERS that give each kind's
  * `config` keys meaning arrive later — M4 (`table`/`query`), M7 (`delimited`),
  * M11 (`excel`) — and each ticket brings its own config schema then (§2.6).
+ *
+ * #1405 OR14 — `json` (one array of records), `jsonl` (JSON Lines, one record
+ * per line) and `parquet` join with their readers and writers.
  */
-export const DatasetKindSchema = z.enum(['delimited', 'excel', 'table', 'query']);
+export const DatasetKindSchema = z.enum([
+  'delimited',
+  'excel',
+  'table',
+  'query',
+  'json',
+  'jsonl',
+  'parquet',
+]);
 export type DatasetKind = z.infer<typeof DatasetKindSchema>;
 
 /**
@@ -127,14 +138,20 @@ export const DATASET_KIND_LABELS: Record<DatasetKind, string> = {
   excel: 'Excel workbook',
   table: 'Database table',
   query: 'SQL query',
+  json: 'JSON',
+  jsonl: 'JSON lines',
+  parquet: 'Parquet',
 };
 
 /** #1413 OR22 — what each kind IS, as `CONNECTION_KIND_DESCRIPTIONS` says for connections. */
 export const DATASET_KIND_DESCRIPTIONS: Record<DatasetKind, string> = {
   delimited: 'Rows of a CSV or other delimited text file on a file system connection.',
   excel: 'Rows of one sheet in an Excel workbook on a file system connection.',
-  table: 'One table in a database, read in full, or on SQLite also written to by a copy.',
+  table: 'One table in a database, read in full, or written to by a copy.',
   query: 'The rows a SQL query returns from a database.',
+  json: 'Records in a JSON file holding one array of objects, on a file system connection.',
+  jsonl: 'Records in a JSON Lines file, one object per line, on a file system connection.',
+  parquet: 'Rows of a Parquet file, with typed columns, on a file system connection.',
 };
 
 export const DatasetSchema = z.object({

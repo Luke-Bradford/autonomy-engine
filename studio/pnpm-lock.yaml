@@ -89,6 +89,12 @@ importers:
       fastify:
         specifier: 5.10.0
         version: 5.10.0
+      hyparquet:
+        specifier: 1.33.2
+        version: 1.33.2
+      hyparquet-writer:
+        specifier: 0.18.1
+        version: 0.18.1
       libsodium-wrappers:
         specifier: 0.8.4
         version: 0.8.4
@@ -2293,6 +2299,12 @@ packages:
   human-signals@8.0.1:
     resolution: {integrity: sha512-eKCa6bwnJhvxj14kZk5NCPc6Hb6BdsU9DZcOnmQKSnO1VKrfV0zCvtttPZUsBvjmNDn8rpcJfpwSYnHBjc95MQ==}
     engines: {node: '>=18.18.0'}
+
+  hyparquet-writer@0.18.1:
+    resolution: {integrity: sha512-UG3KALzvWcTD18FH3+mf8BOtPis31zSyeuvMtcr+omc+wZ7+AswCaHO6ugwDo7pMR2odPcTidAwjgm+p3WF1bg==}
+
+  hyparquet@1.33.2:
+    resolution: {integrity: sha512-ShBSTCzDKG+ruyf2LpZ8DkNjYSmMA/VoBiFBQKi3lpQbste0NFGQfrAobgtnqLA+k+WU9dnXYM0wtIxmuid5Cg==}
 
   ieee754@1.2.1:
     resolution: {integrity: sha512-dcyqhDvX1C46lXZcVqCpK+FtMRQVdIMN6/Df5js2zouUsqG7I6sFxitIC+7KYK29KdXOLHdu9zL4sFnoVQnqaA==}
@@ -6247,6 +6259,12 @@ snapshots:
       toidentifier: 1.0.1
 
   human-signals@8.0.1: {}
+
+  hyparquet-writer@0.18.1:
+    dependencies:
+      hyparquet: 1.33.2
+
+  hyparquet@1.33.2: {}
 
   ieee754@1.2.1: {}
 

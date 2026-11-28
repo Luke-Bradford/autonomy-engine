@@ -1,9 +1,11 @@
 /**
  * #1484 OR35 M1 — writing CSV, for the runs grid's export.
  *
- * The FIRST CSV writer in this package: `connectors/delimited-io.ts` reads
- * delimited files and says so ("there is no `delimited` writer"). Anything else
- * that comes to need one should come here rather than grow a second copy.
+ * A CSV for a person to open in a spreadsheet. A copy writing a delimited
+ * DATASET uses `shared`'s `formatDelimitedRow` instead (#1405), and the two stay
+ * apart on purpose: a dataset takes any delimiter, quote and escape and must
+ * read back exactly, so it can never carry the formula guard below, which
+ * changes the text.
  *
  * RFC 4180 with CRLF line ends. A cell is quoted only when it has to be (a
  * comma, a double quote, CR or LF), and a quote inside it is doubled.
