@@ -21,12 +21,16 @@ const validDataset = {
 };
 
 describe('DatasetKindSchema', () => {
-  it.each(['delimited', 'excel', 'table', 'query'])('accepts %s', (kind) => {
-    expect(DatasetKindSchema.parse(kind)).toBe(kind);
-  });
+  it.each(['delimited', 'excel', 'table', 'query', 'json', 'jsonl', 'parquet'])(
+    'accepts %s',
+    (kind) => {
+      expect(DatasetKindSchema.parse(kind)).toBe(kind);
+    },
+  );
 
   it('rejects an unknown kind', () => {
-    expect(() => DatasetKindSchema.parse('parquet')).toThrow();
+    // #1405 — `parquet` was the example until it became a kind.
+    expect(() => DatasetKindSchema.parse('avro')).toThrow();
   });
 });
 

@@ -407,13 +407,23 @@ export function NodeActivityPanel({
             key: 'input',
             label: 'Input',
             content:
-              node.input !== undefined || node.params !== undefined ? (
+              node.input !== undefined ||
+              node.params !== undefined ||
+              node.evaluation !== undefined ||
+              node.callParams !== undefined ? (
                 /* Keyed like Outputs, below, and for the same reason: its
                    blocks are `CappedValue` disclosures too. */
                 <InputSection
                   key={`${node.nodeId}#${node.instanceId ?? ''}`}
                   input={node.input}
                   params={node.params}
+                  audit={{
+                    query: queryOf(node.datasetSnapshots),
+                    expressions: node.expressions,
+                    datasets: node.datasetSnapshots,
+                    evaluation: node.evaluation,
+                    callParams: node.callParams,
+                  }}
                   instanceId={node.inputInstanceId}
                   stem={stem}
                 />
@@ -575,6 +585,32 @@ function ErrorTab({ node, attempt }: { node: NodeActivity; attempt: number | nul
             </>
           )}
         </dl>
+      )}
+      {node.errorDetail !== undefined && (
+        /* #1567 OR36 — a thrown error's cause chain and server stack. */
+        <details>
+          <summary>Details</summary>
+          <h4>Causes</h4>
+          <ol>
+            {node.errorDetail.causes.map((c, i) => (
+              <li key={i}>
+                {c.message}
+                {c.code !== undefined && (
+                  <>
+                    {' '}
+                    <code>{c.code}</code>
+                  </>
+                )}
+              </li>
+            ))}
+          </ol>
+          {node.errorDetail.stack !== undefined && (
+            <>
+              <h4>Stack</h4>
+              <pre className="node-error-text">{node.errorDetail.stack.join('\n')}</pre>
+            </>
+          )}
+        </details>
       )}
     </Section>
   );
@@ -1029,10 +1065,9 @@ function CostSection({ node }: { node: NodeActivity }) {
  * marker (the secret's NAME), because that is what the node was configured
  * with; the value was resolved after this was recorded.
  *
- * The server stores at most `DISPATCH_INPUT_MAX_CHARS` (4k units,
- * `MAX_OUTPUT_CHARS`'s size). Indenting it (#1484 M2) can take it past
- * `CappedValue`'s cap, and then the same disclosure as Outputs reveals the rest
- * of the STORED text. What a cut withholds is not in the log at all, and the
+ * The server stores at most the workspace's `runCapture.inputMaxChars`
+ * (default `DISPATCH_INPUT_MAX_CHARS`, 64k units, #1567). Past `CappedValue`'s
+ * cap, the same disclosure as Outputs reveals the rest of the STORED text. What a cut withholds is not in the log at all, and the
  * hint says so; a cut text is shown as stored, unindented, since it no longer
  * parses.
  *
@@ -1041,18 +1076,66 @@ function CostSection({ node }: { node: NodeActivity }) {
  * config alone does not show them, and they are recorded, cut and withheld on
  * the same terms. A dispatch that bound none has no Parameters heading.
  */
+/**
+ * #1567 OR36 — the SQL a query dataset ran, from the dispatch's dataset
+ * snapshot, when the record is whole and readable; `undefined` otherwise (the
+ * Datasets block below still shows what was kept).
+ */
+function queryOf(snapshots: DispatchInput | undefined): string | undefined {
+  if (snapshots === undefined || snapshots.truncated === true) return undefined;
+  if (snapshots.text === SECURE_REDACTED) return undefined;
+  try {
+    const parsed = JSON.parse(snapshots.text) as { source?: { kind?: unknown; config?: unknown } };
+    const config = parsed.source?.config as { sql?: unknown } | undefined;
+    return parsed.source?.kind === 'query' && typeof config?.sql === 'string'
+      ? config.sql
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** #1567 OR36 — the audit records a dispatch or a decision kept beside its input. */
+interface AuditRecords {
+  query: string | undefined;
+  expressions: DispatchInput | undefined;
+  datasets: DispatchInput | undefined;
+  evaluation: DispatchInput | undefined;
+  callParams: DispatchInput | undefined;
+}
+
+const AUDIT_BLOCKS: readonly {
+  key: Exclude<keyof AuditRecords, 'query'>;
+  heading: string;
+  file: string;
+  what: string;
+}[] = [
+  { key: 'evaluation', heading: 'Evaluation', file: 'evaluation', what: 'evaluation' },
+  { key: 'expressions', heading: 'Expressions', file: 'expressions', what: 'expressions' },
+  { key: 'datasets', heading: 'Datasets', file: 'datasets', what: 'datasets' },
+  {
+    key: 'callParams',
+    heading: 'Pipeline parameters',
+    file: 'pipeline-parameters',
+    what: 'parameters',
+  },
+];
+
 function InputSection({
   input,
   params,
+  audit,
   instanceId,
   stem,
 }: {
   input: DispatchInput | undefined;
   params: DispatchInput | undefined;
+  audit: AuditRecords;
   instanceId: string | undefined;
   stem: string;
 }) {
   const paramsNoteId = useId();
+  const dispatched = input !== undefined || params !== undefined;
   return (
     <Section heading="Input" help={FORM_SECTION_HINTS.run.input}>
       {instanceId !== undefined && (
@@ -1065,9 +1148,32 @@ function InputSection({
         <RecordedText record={input} id={INPUT_CONFIG_ID} file={`${stem}-input`} what="input" />
       ) : (
         // Only a config JSON cannot represent gets here: everything else that
-        // withholds the config withholds the parameters too.
-        <p className="page-hint">This dispatch&rsquo;s config was not recorded.</p>
+        // withholds the config withholds the parameters too. An activity the
+        // engine evaluates was never dispatched, so it has no config to show.
+        dispatched && <p className="page-hint">This dispatch&rsquo;s config was not recorded.</p>
       )}
+      {audit.query !== undefined && (
+        <>
+          <h4>Query</h4>
+          <pre className="node-error-text">{audit.query}</pre>
+        </>
+      )}
+      {AUDIT_BLOCKS.map(({ key, heading, file, what }) => {
+        const record = audit[key];
+        return (
+          record !== undefined && (
+            <div key={key}>
+              <h4>{heading}</h4>
+              <RecordedText
+                record={record}
+                id={`node-detail-input-${file}`}
+                file={`${stem}-${file}`}
+                what={what}
+              />
+            </div>
+          )
+        );
+      })}
       {params !== undefined && (
         <>
           <div className="help-row">

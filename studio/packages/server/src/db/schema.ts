@@ -20,6 +20,7 @@ import {
   WakeupStatusSchema,
   WebhookDeliveryOutcomeSchema,
   type Concurrency,
+  type RunCapture,
   type ConnectionKind,
   type DatasetColumn,
   type DatasetKind,
@@ -535,6 +536,8 @@ export const workspaceSettings = sqliteTable('workspace_settings', {
   defaultActivityTimeoutSeconds: integer('default_activity_timeout_seconds'),
   /** #1600 OR41 C7d (migration 0048) — the ceiling every Lookup run is held to. */
   lookupMaxRows: integer('lookup_max_rows').notNull(),
+  /** #1567 OR36 A4 (migration 0051) — how much of a run the log keeps. */
+  runCapture: text('run_capture', { mode: 'json' }).$type<RunCapture>().notNull(),
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
 });

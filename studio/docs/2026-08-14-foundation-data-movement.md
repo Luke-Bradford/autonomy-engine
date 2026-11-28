@@ -636,8 +636,9 @@ the one direction a gate must never fail in.
 receives no SECRET and a cluster's identity needs a session. The seam's half of that was wrong:
 `executor.ts` resolves the source secret AND `sinkSecret` in the same pre-flight, before either
 address is asked for — the sink's ADAPTER never runs, but its credential is in hand. Slice 3b gives
-the seam a `secret`; see §7's as-built block below. `datasetKinds.sink` still excludes `delimited`:
-there is no CSV writer, so a file remains something a copy can read and not something it can write.
+the seam a `secret`; see §7's as-built block below. `datasetKinds.sink` then still excluded
+`delimited`, as there was no CSV writer. #1405 (OR14) added one; see "As built — files as a sink"
+below the kinds table.
 
 **The structural change this forced, recorded because it is not visible from the ticket.** A second
 sink means every source adapter must reach both writers, and `sqlite.ts` importing `postgres.ts`
@@ -658,6 +659,30 @@ sentences around a hardcoded `'sqlite'`.
 | `excel`     | `path`, `sheet` (name) XOR `sheetIndex` (1-based), `header` (bool), `headerRow`, `nullValue`, `dateFormat`    |
 | `table`     | `schema`, `table` — **identifiers, so save-time literal-only (§8)**                                          |
 | `query`     | `sql` (literal; `${}` values bind as parameters, never concatenated — §8), `parameters`                      |
+| `json`      | `path`, `compression`, `dateFormat` — one top-level array of objects (#1405)                                 |
+| `jsonl`     | `path`, `compression`, `dateFormat` — JSON Lines, one object per line (#1405)                                |
+| `parquet`   | `path` — the file carries its own column names, types and compression (#1405)                                |
+
+`delimited` also takes `compression` (`none` or `gzip`, default `none`) as of #1405.
+
+**As built — files as a sink (#1405, OR14).** A copy writes rows into a `delimited`, `json`,
+`jsonl` or `parquet` dataset on an `fs` connection that allows writes (`connectors/file-sink.ts`). The file is
+written to a synced temp beside the target and only then put in place, so a failed or cancelled
+copy leaves the old file whole: §4's atomic sink, for a file. Overwrite and Truncate then insert
+replace the file by a rename. Append writes a new file and refuses one already there, by a hard
+link, so a path made per run with `${}` gives a file per run and a rerun never destroys an
+earlier file. Upsert and a Pre-copy script are refused. A delimited file is written exactly as the
+reader reads it (`datamove/delimited-format.ts`), in any of the four encodings; a null is the null
+marker, or an empty field. A JSON record's keys are the mapping's sink names; a bigint is written
+as its digits and bytes as base64. Reading JSON (`connectors/json-io.ts`, over
+`datamove/json-records.ts`): a record is an object; the first record's keys are the columns; a
+later record with another key is refused, never dropped; a nested value is carried as its JSON
+text. Parquet goes through `hyparquet` and `hyparquet-writer` (pure JS, MIT).
+The writer gives each column the type its mapping declares: string as STRING, integer as
+INT64, number as DOUBLE, boolean as BOOLEAN, date as DATE, timestamp as TIMESTAMP (UTC,
+micros), binary as BYTE_ARRAY; every column OPTIONAL, Snappy-compressed, in row groups of
+65,536 rows. The reader reads one row group at a time and takes snappy, gzip, brotli and zstd
+column chunks; an INT64 arrives as a bigint and a DATE or TIMESTAMP as a `Date`.
 
 **Two corrections from M4, which built this row** (#1119):
 

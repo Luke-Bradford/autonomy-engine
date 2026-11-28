@@ -182,7 +182,8 @@ describe('datasets routes', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/datasets',
-      payload: { ...body, kind: 'parquet' },
+      // #1405 — `parquet` was the example until it became a kind.
+      payload: { ...body, kind: 'avro' },
     });
     expect(res.statusCode).toBe(400);
   });
@@ -389,6 +390,10 @@ describe('datasets routes', () => {
           { id: 2, name: 'row-2' },
         ],
         truncated: false,
+        columns: [
+          { name: 'id', type: 'integer', nullable: false },
+          { name: 'name', type: 'string', nullable: false },
+        ],
       });
     });
 

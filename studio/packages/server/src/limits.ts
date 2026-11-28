@@ -127,6 +127,22 @@ export const DELIMITED_MAX_FIELD_CHARS = 1_048_576;
 export const DELIMITED_MAX_ROW_CHARS = 8_388_608;
 
 /**
+ * #1405 OR14 — the longest text one JSON record (an array element, or a JSON
+ * Lines line) may run to: `DELIMITED_MAX_ROW_CHARS`' bound and reason. An
+ * unclosed string has no end, so without it the reader would hold the whole
+ * file as one record.
+ */
+export const JSON_MAX_RECORD_CHARS = DELIMITED_MAX_ROW_CHARS;
+
+/**
+ * #1405 OR14 — rows per row group in a Parquet file a copy writes. The writer
+ * holds one group (its values, then its encoded bytes) at a time, so this bounds
+ * its memory; 65,536 rows also keeps each group large enough for the format's
+ * column compression and statistics to pay.
+ */
+export const PARQUET_ROW_GROUP_ROWS = 65_536;
+
+/**
  * §5's bounded-streaming rule, applied to xlsx — where "stream the sheet" is
  * NOT on its own enough to bound memory.
  *

@@ -51,6 +51,18 @@ import { O_NOFOLLOW, resolveWithinRoots } from './confine.js';
 // to `fs-connection.ts` so the `delimited` store reader can re-validate and
 // classify WITHOUT importing this adapter, which slice 3 makes import IT.
 import { fsConnectionConfigSchema, notAnFsKind } from './fs-connection.js';
+import {
+  describeJsonDatasetColumns,
+  jsonCoercionFor,
+  readJsonDatasetBatches,
+  resolveJsonDatasetAddress,
+} from './json-io.js';
+import {
+  describeParquetDatasetColumns,
+  parquetCoercionFor,
+  readParquetDatasetBatches,
+  resolveParquetDatasetAddress,
+} from './parquet-io.js';
 // #1167 M7 slice 3 — `fs` becomes a STORE. The copy arm below pairs this
 // adapter's `delimited` reader with sqlite's writer, so the import direction is
 // `fs.ts` -> `delimited-io.ts` + `sqlite.ts` -> `copy.ts`. NOT a cycle: `copy.ts`
@@ -492,9 +504,31 @@ const EXCEL_IO: FsDatasetIo = {
   coercionFor: excelCoercionFor,
 };
 
+// #1405 OR14 — both JSON kinds through one reader, which tells them apart.
+const JSON_IO: FsDatasetIo = {
+  describeColumns: describeJsonDatasetColumns,
+  // A JSON value carries its own type, one record at a time, as a sheet's cell does.
+  structureType: '',
+  readBatches: readJsonDatasetBatches,
+  resolveAddress: resolveJsonDatasetAddress,
+  coercionFor: jsonCoercionFor,
+};
+
+// #1405 OR14 — Parquet, read a row group at a time.
+const PARQUET_IO: FsDatasetIo = {
+  describeColumns: describeParquetDatasetColumns,
+  // The file's own column types vary by column; Get metadata reports none here.
+  structureType: '',
+  readBatches: readParquetDatasetBatches,
+  resolveAddress: resolveParquetDatasetAddress,
+  coercionFor: parquetCoercionFor,
+};
+
 function fsReaderFor(kind: DatasetKind): FsDatasetIo | null {
   if (kind === 'delimited') return DELIMITED_IO;
   if (kind === 'excel') return EXCEL_IO;
+  if (kind === 'json' || kind === 'jsonl') return JSON_IO;
+  if (kind === 'parquet') return PARQUET_IO;
   return null;
 }
 
@@ -623,22 +657,20 @@ export const fsAdapter: ConnectorAdapter = {
       yield* runCopyActivity(ctx, {
         ...source,
         // #1196 — ONE rung, shared, derived from the CATALOG's
-        // `sinkConnectionKinds` rather than a literal. There is still no
-        // `delimited` WRITER, so an `fs` copy reads a file and writes into a
-        // database — but as of slice 3a that database may be sqlite OR postgres,
-        // and the sentence has to follow the catalog rather than restate one
-        // store's name.
+        // `sinkConnectionKinds` rather than a literal, so the sentence follows
+        // the catalog rather than restating one store's name. As of #1405 the
+        // sink may be sqlite, postgres, or a file (`file-sink.ts`).
         refuseSink: refuseForeignSink,
         describeSource: ({ dataset, signal }) =>
           requireFsReader(dataset.kind).describeColumns(readOf(dataset, signal)),
         // Dispatched by SINK KIND (#1196). Parsed from `ctx.sink` inside, never
-        // from this adapter's own connection — and here that is not merely the
-        // safer answer, it is the only coherent one: an `fs` config has no
-        // database in it at all.
+        // from this adapter's own connection: the sink is a different store,
+        // even when it is another file connection.
         writeRows: ({
           dataset,
           connection,
           columns,
+          columnTypes,
           nullOnError,
           mode,
           keyColumns,
@@ -656,6 +688,7 @@ export const fsAdapter: ConnectorAdapter = {
               connection,
               sinkSecret: sinkSecret ?? null,
               columns,
+              columnTypes,
               nullOnError,
               mode,
               keyColumns,

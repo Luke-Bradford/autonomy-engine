@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import pLimit from 'p-limit';
 import type { z } from 'zod';
@@ -5,8 +6,13 @@ import {
   AGENT_CLI_CONNECTION_KIND,
   DEFAULT_WORKSPACE_SETTINGS,
   catalog as sharedCatalog,
+  boundedJson,
+  canonicalStringify,
+  errorDetail,
   captureDispatchInput,
   captureDispatchParams,
+  captureExpressions,
+  type RunCapture,
   collectSecretSinkMarkers,
   computeCostEstimate,
   firstParamOverrideViolation,
@@ -29,6 +35,7 @@ import {
   resolvePrice,
   WARNING_CODES,
   type ActivityCatalog,
+  type Dataset,
   type ConnectionKind,
   type DatasetAddress,
   type DatasetKind,
@@ -292,7 +299,22 @@ function redactEventPlaintexts(
     return { ...ev, outputs: deepRedactRecord(ev.outputs, plaintexts) };
   }
   if (ev.type === 'node.failed') {
-    return { ...ev, error: redactSecrets(ev.error, plaintexts) };
+    return {
+      ...ev,
+      error: redactSecrets(ev.error, plaintexts),
+      // #1567 — a cause's message can quote what the adapter held, as `error` can.
+      ...(ev.detail !== undefined
+        ? {
+            detail: {
+              ...ev.detail,
+              causes: ev.detail.causes.map((c) => ({
+                ...c,
+                message: redactSecrets(c.message, plaintexts),
+              })),
+            },
+          }
+        : {}),
+    };
   }
   if (ev.type === 'node.notReady') {
     return { ...ev, reason: redactSecrets(ev.reason, plaintexts) };
@@ -477,6 +499,14 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     if (set === undefined) return;
     set.delete(controller);
     if (set.size === 0) liveByRun.delete(runId);
+  }
+
+  /** #1567 OR36 A4 — the run owner's capture settings; the defaults for an unowned run. */
+  function runCaptureFor(runId: string): RunCapture {
+    const ownerId = getRun(deps.db, runId)?.ownerId ?? null;
+    return ownerId === null
+      ? DEFAULT_WORKSPACE_SETTINGS.runCapture
+      : getWorkspaceSettings(deps.db, ownerId).settings.runCapture;
   }
 
   /**
@@ -903,7 +933,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     ownerId: string | null,
     boundConnectionId: string | undefined,
     resolvedParams: Record<string, unknown> | undefined,
-  ): { error: string; code: string } | { dataset: ResolvedDataset } {
+  ): { error: string; code: string } | { dataset: ResolvedDataset; rowHash: string } {
     if (datasetId === undefined) {
       return {
         error: `activity '${activityType}' requires a dataset but the node has none`,
@@ -1020,6 +1050,9 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         config,
         columns: dataset.columns,
       },
+      // #1567 OR36 A1 — beside the dataset, not in it: `ctx.datasets` is a
+      // projection for the adapter, and the hash is the run log's.
+      rowHash: datasetRowHash(dataset),
     };
   }
 
@@ -1583,13 +1616,17 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       // `failed` themselves. `permanent` is the safe read: it never retries, so a
       // broken adapter cannot retry-loop, and (no MVP activity being idempotent)
       // a blind retry could repeat a side effect that already happened.
-      emit(
-        nodeFailed(runId, nodeId, attemptId, {
+      // #1567 OR36 A5 — the cause chain and the server-side stack, so a thrown
+      // error can be diagnosed from the run log alone.
+      const detail = errorDetail(err);
+      emit({
+        ...nodeFailed(runId, nodeId, attemptId, {
           error: message,
           kind: 'permanent',
           code: FAILURE_CODES.ADAPTER_THREW,
         }),
-      );
+        ...(detail !== undefined ? { detail } : {}),
+      });
       return;
     } finally {
       cancelDeadline?.();
@@ -1692,6 +1729,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // catalog entry declares `datasetKinds`. `undefined` for every activity that
     // is not dataset-bound (all of them at 4a — `copy` lands at 4b).
     let datasets: { source: ResolvedDataset; sink?: ResolvedDataset } | undefined;
+    // #1567 OR36 A1 — each stored end's row hash, for `datasetSnapshots`.
+    const rowHashes: { source?: string; sink?: string } = {};
     // M6 slice B (#1149) — the PHYSICAL addresses those datasets resolved to,
     // stamped on `node.dispatched` so the run log can answer "where did this
     // data go" from itself (§2.1). `undefined` in lockstep with `datasets`.
@@ -1890,6 +1929,9 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         return;
       }
       datasets = { source: resolvedSourceDs.dataset };
+      if ('rowHash' in resolvedSourceDs && typeof resolvedSourceDs.rowHash === 'string') {
+        rowHashes.source = resolvedSourceDs.rowHash;
+      }
       // A SOURCE-ONLY activity (M12 `lookup`) declares no sink kinds, so it has
       // no sink dataset to resolve. M12 slice 1 (#1220) — `NodeSchema.datasetIds`
       // no longer requires a sink, so such a node usually carries none at all;
@@ -1938,6 +1980,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           return;
         }
         datasets = { source: resolvedSourceDs.dataset, sink: resolvedSinkDs.dataset };
+        rowHashes.sink = resolvedSinkDs.rowHash;
       }
 
       // M6 slice B (#1149, spec §2.1) — resolve the PHYSICAL address of each
@@ -2060,12 +2103,14 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // above, so it runs before `node.dispatched` too. Read at dispatch, as the
     // connection's limits are: a retry after a Settings change uses the new
     // value. A run with no owner reads the documented default.
-    const lookupMaxRows =
-      node.type !== LOOKUP_ACTIVITY_TYPE
-        ? undefined
-        : ownerId === null
-          ? DEFAULT_WORKSPACE_SETTINGS.lookupMaxRows
-          : getWorkspaceSettings(deps.db, ownerId).settings.lookupMaxRows;
+    const workspace =
+      ownerId === null
+        ? DEFAULT_WORKSPACE_SETTINGS
+        : getWorkspaceSettings(deps.db, ownerId).settings;
+    const lookupMaxRows = node.type !== LOOKUP_ACTIVITY_TYPE ? undefined : workspace.lookupMaxRows;
+    // #1567 OR36 A4 — how much of this dispatch the log keeps, read at dispatch
+    // like the ceiling above.
+    const { runCapture } = workspace;
 
     // #890 — the input this attempt is dispatched with, for the run monitor.
     // `preparedInput` holds `{$secret}` marker NAMES, not values, and no other
@@ -2087,11 +2132,26 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // source-only activity's inert sink parameters were never applied.
     const scrub = <T>(value: T): T =>
       inputPlaintexts.length > 0 ? (deepRedactSecrets(value, inputPlaintexts) as T) : value;
+    // #1567 OR36 A4 — a workspace capturing `full` records an `llm_call`'s
+    // prompt and completion unless the node chose its own `capture`.
+    const preparedInput =
+      node.type === LLM_CALL_ACTIVITY_TYPE &&
+      runCapture.level === 'full' &&
+      command.preparedInput['capture'] === undefined
+        ? { ...command.preparedInput, capture: llmCaptureModeSchema.enum.full }
+        : command.preparedInput;
     const withheldFromLlm =
       node.type === LLM_CALL_ACTIVITY_TYPE &&
-      command.preparedInput['capture'] !== llmCaptureModeSchema.enum.full;
+      preparedInput['capture'] !== llmCaptureModeSchema.enum.full;
+    const cap = runCapture.inputMaxChars;
     // `walk` rebuilds an object as an object, so each record stays one.
-    const input = withheldFromLlm ? undefined : captureDispatchInput(scrub(command.preparedInput));
+    const input = withheldFromLlm ? undefined : captureDispatchInput(scrub(preparedInput), cap);
+    // #1567 OR36 A2 — how each `${}` became its value: input too, so it goes
+    // the same way, and is scrubbed the same way.
+    const expressions =
+      withheldFromLlm || command.expressions === undefined
+        ? undefined
+        : captureExpressions(scrub(command.expressions), cap);
     const params = withheldFromLlm
       ? undefined
       : captureDispatchParams(
@@ -2110,7 +2170,24 @@ export function createExecutor(deps: ExecutorDeps): Executor {
               sink: datasets?.sink !== undefined ? command.resolvedDatasetParams?.sink : undefined,
             },
           }),
+          cap,
         );
+
+    // #1567 OR36 A1 — what each dataset end WAS at dispatch: its kind, its
+    // config after parameters (a query's SQL text included) and its row's
+    // hash. The row is mutable, so this is the only record of what ran.
+    const datasetSnapshots =
+      datasets === undefined
+        ? undefined
+        : boundedJson(
+            scrub({
+              source: datasetSnapshot(datasets.source, rowHashes.source),
+              ...(datasets.sink !== undefined
+                ? { sink: datasetSnapshot(datasets.sink, rowHashes.sink) }
+                : {}),
+            }),
+            cap,
+          );
 
     // --- the side effect (node.dispatched durable FIRST, then the adapter) ----
     // CX2 (#1320) — cancelled during the pre-flight: the attempt never started,
@@ -2132,6 +2209,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       ...(datasetAddresses !== undefined ? { datasetAddresses } : {}),
       ...(input !== undefined ? { input } : {}),
       ...(params !== undefined ? { params } : {}),
+      ...(expressions !== undefined ? { expressions } : {}),
+      ...(datasetSnapshots !== undefined ? { datasetSnapshots } : {}),
       // #1600 C0d — resolved by the reducer; scrubbed like `input` as defence in
       // depth (save already refuses a secret ref in one), and redacted on a
       // secure node at append time (`redactSecureEvent`).
@@ -2156,7 +2235,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       // A multi-activity connector (`fs`, #4 A11) selects its operation from this;
       // single-activity adapters ignore it. It is the node's own `type`.
       activityType: node.type,
-      input: command.preparedInput,
+      input: preparedInput,
       connectionConfig,
       // M1 (#1104) — omitted (not present-undefined) for a single-connection
       // activity, so `'sink' in ctx` stays an honest test of "is this paired".
@@ -2168,6 +2247,8 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       ...(datasets !== undefined ? { datasets } : {}),
       // #1600 C7d — omitted for every activity but a lookup, the same rule.
       ...(lookupMaxRows !== undefined ? { lookupMaxRows } : {}),
+      // #1567 OR36 A4 — the output cap, for an adapter that reads an open body.
+      outputMaxBytes: runCapture.outputMaxBytes,
       // #1600 C5a — omitted for every node but an Automatic incremental copy.
       ...(watermark !== null
         ? { copyWatermark: { old: watermark.lease.old, commit: watermark.lease.commit } }
@@ -2405,12 +2486,17 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           // appended before the kick below ever runs. So the log can hold a
           // spawned child with no announcement (recoverable — boot re-emits
           // `startChild`), but never an announcement with no child.
+          // #1567 OR36 A3 — what the child was started with: the resolved
+          // parameters, bounded like a dispatch's, and the version it pins.
+          const params = boundedJson(command.params, runCaptureFor(runId).inputMaxChars);
           yield {
             type: 'call.started',
             runId,
             callNodeId: command.callNodeId,
             attemptId: command.attemptId,
             childRunId: command.childRunId,
+            childPipelineVersionId: command.pipelineVersionId,
+            ...(params !== undefined && Object.keys(command.params).length > 0 ? { params } : {}),
           };
         }
         // No `call.returned` here, and no await: the call node stays `waiting`
@@ -2431,6 +2517,37 @@ export function createExecutor(deps: ExecutorDeps): Executor {
       }
       yield* performDispatch(command, runId);
     },
+  };
+}
+
+/**
+ * #1567 OR36 A1 — SHA-256 of a stored dataset row's content: what decides
+ * where and what an end reads or writes. Canonical JSON, so key order in the
+ * stored config cannot change it.
+ */
+function datasetRowHash(dataset: Dataset): string {
+  const content = canonicalStringify({
+    kind: dataset.kind,
+    connectionId: dataset.connectionId,
+    config: dataset.config,
+    columns: dataset.columns,
+    parameters: dataset.parameters,
+  });
+  return createHash('sha256').update(content).digest('hex');
+}
+
+/** #1567 OR36 A1 — one dataset end as `node.dispatched.datasetSnapshots` records it. */
+function datasetSnapshot(
+  dataset: ResolvedDataset,
+  rowHash: string | undefined,
+): Record<string, unknown> {
+  return {
+    // An inline source has no row: its id is a placeholder and it has no hash.
+    ...(rowHash !== undefined
+      ? { datasetId: dataset.id, name: dataset.name, rowHash }
+      : { inline: true }),
+    kind: dataset.kind,
+    config: dataset.config,
   };
 }
 

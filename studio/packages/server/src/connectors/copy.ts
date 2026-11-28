@@ -20,6 +20,7 @@ import {
   type CopyRowFailure,
   type CopyPumpMappingEntry,
   type CopyWriteMode,
+  type DataType,
   type SqlParameterValue,
 } from '@autonomy-studio/shared';
 import { AsyncEventQueue } from '../util/async-event-queue.js';
@@ -123,6 +124,8 @@ export interface CopyIo extends SourceIo {
     readonly dataset: ResolvedDataset;
     readonly connection: ActivitySink;
     readonly columns: readonly string[];
+    /** #1405 — the mapping's declared type for each of `columns`, in order. */
+    readonly columnTypes: readonly DataType[];
     /** Mapped sink names whose row sets `onError: 'null'` — the sink checks them
      * against the store's own NOT NULL columns (#1162). Required, so no path
      * can reach a store without the gate. */
@@ -629,6 +632,9 @@ async function* copyRows(
   // written column as a copied one. It cannot be derived from the rows the pump
   // yields: a batch whose rows all failed yields nothing at all.
   const columns = mapping.map((row) => row.sink);
+  // #1405 — each column's declared type, for a sink whose format stores types
+  // (a Parquet file); a database sink takes its own table's types.
+  const columnTypes = mapping.map((row) => row.type);
   const counters = newCopyCounters();
   // #1600 OR41 C6f-1 — Verify after copy found a mismatch (ADF's
   // InconsistentData Found). It fails the copy, so only the failure path says so.
@@ -797,6 +803,7 @@ async function* copyRows(
   const write = (async () =>
     io.writeRows({
       columns,
+      columnTypes,
       nullOnError,
       mode,
       keyColumns,

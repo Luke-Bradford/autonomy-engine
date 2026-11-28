@@ -698,7 +698,14 @@
 // `outputLogs` read expects: a silently-dropped knob that changes a run, which
 // bumps (16/18/19/20). A Script saved before keeps its five outputs
 // (`formerOutputs`).
-export const CATALOG_VERSION = 75;
+// BUMP 75→76 for #1405 OR14: a rows Copy may write into a file. `copy` gains
+// `fs` in `sinkConnectionKinds` and `delimited` in `datasetKinds.sink`, a
+// delimited dataset gains `compression`, and the `json`, `jsonl` and `parquet`
+// dataset kinds join Copy (both ends), Lookup and Get metadata. A pre-OR14 build refuses a Copy whose
+// sink is a file connection at the catalog's sink-kind check, so it is refused
+// at import rather than half-loaded (bump 27's precedent), and it would read a
+// gzipped file's bytes as text.
+export const CATALOG_VERSION = 76;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

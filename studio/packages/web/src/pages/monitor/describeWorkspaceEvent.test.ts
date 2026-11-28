@@ -97,6 +97,36 @@ describe('describeWorkspaceEvent (#1075)', () => {
     expect(detail).toBe('Restoring re-enables nothing — its triggers stay disabled either way.');
   });
 
+  it('says which store a preview read, what it read, and whether it answered', () => {
+    const base = {
+      type: 'store.previewed',
+      connectionId: 'conn_1',
+      connectionName: 'Warehouse',
+      by: 'local',
+    };
+    expect(
+      describeWorkspaceEvent(
+        event({ ...base, read: 'rows', datasetId: 'ds_1', datasetName: 'Orders', ok: true }),
+      ),
+    ).toEqual({
+      summary: 'Previewed the rows of dataset Orders',
+      detail: 'Read through the connection Warehouse.',
+    });
+    expect(
+      describeWorkspaceEvent(
+        event({ ...base, read: 'tables', datasetId: null, datasetName: null, ok: false }),
+      ),
+    ).toEqual({
+      summary: 'Listed the tables of connection Warehouse',
+      detail: 'The read was refused or failed, so nothing was shown.',
+    });
+    expect(
+      describeWorkspaceEvent(
+        event({ ...base, read: 'copy', datasetId: null, datasetName: null, ok: true }),
+      ).summary,
+    ).toBe('Previewed a copy of an inline source');
+  });
+
   it('totals both halves of an import and names what it touched', () => {
     const { summary, detail } = describeWorkspaceEvent(
       event({
@@ -355,6 +385,16 @@ describe('describeWorkspaceEvent (#1075)', () => {
         to: 'pv_1',
         commit: 'abcdef1234567890abcdef1234567890abcdef12',
         blob: 'blob_1',
+        by: 'local',
+      },
+      'store.previewed': {
+        type: 'store.previewed',
+        read: 'rows',
+        connectionId: 'conn_1',
+        connectionName: 'Warehouse',
+        datasetId: null,
+        datasetName: null,
+        ok: true,
         by: 'local',
       },
     };

@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:f
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MANAGED_DIRS } from '@autonomy-studio/shared';
 import { MASTER_KEY_ENV_VARS } from '../../secrets/secrets.js';
 import {
@@ -494,6 +494,15 @@ describe('githubTokenTransportAuth', () => {
 });
 
 describe('CliGitProvider — G10 operator-env token transport auth', () => {
+  // The provider appends after any inherited GIT_CONFIG_COUNT, so a shell that
+  // already exports entries would shift the indexes these tests pin.
+  beforeEach(() => {
+    vi.stubEnv('GIT_CONFIG_COUNT', undefined);
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   /**
    * A fake git that appends its argv + the GIT_CONFIG_* env it received to a log,
    * then exits 0. Lets a test prove the token is injected via ENV (never argv, so

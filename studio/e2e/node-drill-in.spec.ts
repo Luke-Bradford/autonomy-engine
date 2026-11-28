@@ -209,7 +209,10 @@ test('#869 — an oversized output is capped in the DOM, and the rest is one cli
   const collapsed = await page.evaluate(() => {
     const el = document.querySelector('.node-detail-panel');
     const code = el?.querySelector('#node-detail-output-values');
-    const button = [...(el?.querySelectorAll('button') ?? [])].find((b) =>
+    // #1567 — the open tab only: the hidden Input tab holds the filter's
+    // evaluation record, which has its own capped block and buttons.
+    const shown = el?.querySelector('[role="tabpanel"]:not([hidden])');
+    const button = [...(shown?.querySelectorAll('button') ?? [])].find((b) =>
       /^Show all /.test(b.textContent ?? ''),
     );
     return {
@@ -227,7 +230,7 @@ test('#869 — an oversized output is capped in the DOM, and the rest is one cli
       // Offered WHILE COLLAPSED — selecting the block by hand at this point
       // would copy the cut string, so the full-value copy must not be behind
       // the reveal.
-      copy: [...(el?.querySelectorAll('button') ?? [])].some((b) =>
+      copy: [...(shown?.querySelectorAll('button') ?? [])].some((b) =>
         /^Copy all /.test(b.textContent ?? ''),
       ),
     };
@@ -264,7 +267,8 @@ test('#869 — an oversized output is capped in the DOM, and the rest is one cli
   const opened = await page.evaluate(() => {
     const el = document.querySelector('.node-detail-panel');
     const code = el?.querySelector('#node-detail-output-values');
-    const button = [...(el?.querySelectorAll('button') ?? [])].find((b) =>
+    const shown = el?.querySelector('[role="tabpanel"]:not([hidden])');
+    const button = [...(shown?.querySelectorAll('button') ?? [])].find((b) =>
       /^Show first /.test(b.textContent ?? ''),
     );
     return {

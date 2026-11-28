@@ -177,6 +177,24 @@ export const DELIMITED_ENCODINGS = ['utf-8', 'utf-16le', 'utf-16be', 'windows-12
 export const DelimitedEncodingSchema = z.enum(DELIMITED_ENCODINGS);
 export type DelimitedEncoding = z.infer<typeof DelimitedEncodingSchema>;
 
+/**
+ * #1405 OR14 — how a file dataset's bytes are packed on disk. `none` reads and
+ * writes the bytes as they are; `gzip` inflates them on read and deflates them
+ * on write. Declared rather than sniffed: a reader that guessed from the first
+ * bytes would read a plain file that happens to start `1f 8b` as garbage.
+ */
+export const FILE_COMPRESSIONS = ['none', 'gzip'] as const;
+export const FileCompressionSchema = z.enum(FILE_COMPRESSIONS);
+export type FileCompression = z.infer<typeof FileCompressionSchema>;
+
+/** The Compression field, shared by every file kind that can be gzipped. */
+const compressionField = () =>
+  presented(FileCompressionSchema.default('none'), {
+    title: 'Compression',
+    description: 'Gzip reads and writes the file gzipped. Defaults to none.',
+    options: optionTitles(FileCompressionSchema, { none: 'None', gzip: 'Gzip' }),
+  });
+
 /** The three roles a single character can play in a delimited file. Sharing one
  * character between any two of them makes the grammar ambiguous with itself. */
 const DELIMITED_ROLES = ['delimiter', 'quote', 'escape'] as const;
@@ -267,8 +285,11 @@ export const delimitedDatasetConfigSchema = z
         'windows-1252': 'Windows-1252',
       }),
     }),
+    compression: compressionField(),
     /** §6.4 — the NULL sentinel. Default: none, so an empty field is the empty
-     * STRING. CSV cannot distinguish `""` from absent and studio will not guess. */
+     * STRING. CSV cannot distinguish `""` from absent and studio will not guess.
+     * #1405 — a copy WRITING the file writes a null as this text, and as an
+     * empty field when there is none. */
     nullValue: presented(singleLine(z.string()).optional(), {
       title: 'Null marker',
       description: 'Text that means NULL. Blank: an empty field is an empty string.',
@@ -443,6 +464,64 @@ export const excelDatasetConfigSchema = z
   });
 
 /**
+ * #1405 OR14 — `json` and `jsonl`: records in a JSON file on an `fs` store.
+ * `json` holds ONE top-level array whose elements are the records; `jsonl` holds
+ * one record per line. The same keys for both, from one builder.
+ *
+ * Each record is an OBJECT, and its keys are the columns, taken from the FIRST
+ * record (a later record naming another key is refused, never dropped). A
+ * nested object or array is carried as its JSON text.
+ *
+ * No `encoding`: JSON is UTF-8 (RFC 8259 §8.1). No `nullValue`: JSON has a real
+ * null. No `header`: the keys name the columns. `dateFormat` stays, for a date
+ * written as a string, which is the only way JSON can write one.
+ */
+const jsonFileDatasetConfigSchema = (described: string) =>
+  z.object({
+    /** Confined against the `fs` connection's `roots` at DISPATCH (§8). */
+    path: presented(singleLine(z.string()).min(1), {
+      title: 'File path',
+      description: `${described} An absolute path inside one of the connection’s allowed folders, or one relative to the first.`,
+    }),
+    compression: compressionField(),
+    dateFormat: presented(
+      singleLine(z.string())
+        .refine(isValidDateFormat, {
+          message:
+            `dateFormat must use the closed token set (${FORMAT_TOKEN_NAMES.join(', ')}), ` +
+            'each at most once',
+        })
+        .optional(),
+      {
+        title: 'Date format',
+        description:
+          'How a date written as a string is read, e.g. yyyy-MM-dd. Needed to read a date or timestamp column.',
+      },
+    ),
+  });
+
+export const jsonDatasetConfigSchema = jsonFileDatasetConfigSchema(
+  'A file holding one JSON array of objects.',
+);
+export const jsonlDatasetConfigSchema = jsonFileDatasetConfigSchema(
+  'A file holding one JSON object per line.',
+);
+
+/**
+ * #1405 OR14 — `parquet`: a Parquet file on an `fs` store. Only a path: the
+ * file carries its own column names, types, nulls and compression. A copy
+ * writes each column with the type its mapping declares (`file-sink.ts`).
+ */
+export const parquetDatasetConfigSchema = z.object({
+  /** Confined against the `fs` connection's `roots` at DISPATCH (§8). */
+  path: presented(singleLine(z.string()).min(1), {
+    title: 'File path',
+    description:
+      'An absolute path inside one of the connection’s allowed folders, or one relative to the first.',
+  }),
+});
+
+/**
  * The config shape for a kind whose READER has not been built yet.
  *
  * Explicitly permissive — `z.looseObject` KEEPS unknown keys, where a bare
@@ -481,6 +560,9 @@ export const DATASET_CONFIG_SCHEMAS: Record<DatasetKind, z.ZodObject> = {
   excel: excelDatasetConfigSchema,
   table: tableDatasetConfigSchema,
   query: queryDatasetConfigSchema,
+  json: jsonDatasetConfigSchema,
+  jsonl: jsonlDatasetConfigSchema,
+  parquet: parquetDatasetConfigSchema,
 };
 
 /**
@@ -508,6 +590,10 @@ export const DATASET_NON_OVERRIDABLE_CONFIG_KEYS: Record<DatasetKind, readonly s
   excel: [],
   table: ['schema', 'table'],
   query: ['sql'],
+  // #1405 — `delimited`'s reason: the path is confined by the connection.
+  json: [],
+  jsonl: [],
+  parquet: [],
 };
 
 /** Whether `key` is one no per-dispatch override may set on a `kind` dataset. */
@@ -551,6 +637,10 @@ export const IMPLEMENTED_DATASET_KINDS: ReadonlySet<DatasetKind> = new Set<Datas
   'query',
   'delimited',
   'excel',
+  // #1405 OR14 — `connectors/json-io.ts` and `connectors/parquet-io.ts`.
+  'json',
+  'jsonl',
+  'parquet',
 ]);
 
 /** Whether a reader exists for `kind` (`IMPLEMENTED_DATASET_KINDS`). */
@@ -678,12 +768,9 @@ export const DATASET_KINDS: readonly DatasetKind[] = DatasetKindSchema.options;
  * `readBatches`, `sourceCoercion`) and `resolveDatasetAddress`, so the binding
  * and the thing that honours it land together, exactly as slice 1 promised.
  *
- * STILL SOURCE-ONLY, and that is a property of a different list. `copy`'s
- * `sinkConnectionKinds` stays `['sqlite']` (`catalog/registry.ts`), so a
- * postgres dataset can be READ but not written. That is not an oversight: it is
- * what makes §7 row 3 and the `query` self-copy residual unreachable rather than
- * merely unbuilt, and both are deferred on that premise — see the remainder
- * ticket named at that pin. Slice 3 is the sink.
+ * Whether a store can be WRITTEN is a different list: `copy`'s
+ * `sinkConnectionKinds` (`catalog/registry.ts`). Postgres joined it at slice 3a
+ * (#1196), with its writer; `fs` joined it at #1405, with the delimited writer.
  *
  * `Record<DatasetKind, …>` makes a new DATASET kind a compile error, as
  * `DATASET_CONFIG_SCHEMAS` does. It cannot do the same for a new CONNECTION
@@ -699,6 +786,9 @@ export const DATASET_CONNECTION_KINDS: Record<DatasetKind, readonly ConnectionKi
   excel: ['fs'],
   table: ['sqlite', 'postgres'],
   query: ['sqlite', 'postgres'],
+  json: ['fs'],
+  jsonl: ['fs'],
+  parquet: ['fs'],
 };
 
 /**

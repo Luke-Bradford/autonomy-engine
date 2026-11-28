@@ -183,15 +183,17 @@ for (const density of DENSITIES) {
         selects: [...document.querySelectorAll('.content select')].map((el) =>
           Math.round(el.getBoundingClientRect().height),
         ),
-        // #1600 C0f/C7d — Run defaults' two fields are the same control.
+        // #1600 C0f/C7d, #1567 — Run defaults' fields are the same control.
         inputs: [...document.querySelectorAll('.content input[type="text"]')].map((el) =>
           Math.round(el.getBoundingClientRect().height),
         ),
       };
     });
     expect(fit.factsGap).toBe(8);
-    expect(fit.selects).toEqual([CONTROL_H[density], CONTROL_H[density]]);
-    expect(fit.inputs).toEqual([CONTROL_H[density], CONTROL_H[density]]);
+    // Appearance's two pickers and Run capture; the timeout, Lookup max rows
+    // and the three capture limits.
+    expect(fit.selects).toEqual(Array(3).fill(CONTROL_H[density]));
+    expect(fit.inputs).toEqual(Array(5).fill(CONTROL_H[density]));
 
     await expectQuiet(page, problems);
   });

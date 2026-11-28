@@ -918,7 +918,10 @@ const ENTRIES: ActivityCatalogEntry[] = [
     },
     idempotent: true,
     connectionKinds: ['fs', 'sqlite', 'postgres'],
-    datasetKinds: { source: ['table', 'delimited', 'excel'], optionalOn: ['fs'] },
+    datasetKinds: {
+      source: ['table', 'delimited', 'excel', 'json', 'jsonl', 'parquet'],
+      optionalOn: ['fs'],
+    },
     outputs: [
       out('path', 'string'),
       optionalOut('exists', 'boolean'),
@@ -1045,19 +1048,15 @@ const ENTRIES: ActivityCatalogEntry[] = [
      * without `delimited` would be a store nothing can name a dataset in. The
      * pair is the unit; `CATALOG_VERSION` 23 -> 24 is its discharge.
      *
-     * THE SINK HALVES DELIBERATELY DID NOT MOVE. `sinkConnectionKinds` is still
-     * `['sqlite']` and `datasetKinds.sink` still `['table']`, because M7 built a
-     * `delimited` READER and no writer — there is nothing to copy INTO a CSV
-     * with. Widening them in sympathy would offer an author a pairing that
-     * every dispatch then refuses, which is the shape this entry has now twice
-     * declined. `excel` arrived at M11 slice 2 (#1215) on the SOURCE side only,
-     * for that same reason applied to it: it has a reader and no writer.
+     * The sink halves did not move with them at M7, which built a `delimited`
+     * READER and no writer. #1405 (OR14) built the writer and moved them
+     * together: `fs` joined `sinkConnectionKinds` and `delimited` joined
+     * `datasetKinds.sink` (see the two lists below). `excel` is still read only.
      *
-     * `connectionKinds` is a SOURCE allowlist with two store kinds in it, and
-     * the executor dispatches on the SOURCE connection's kind — so which
-     * adapter runs a `copy` is now a real choice rather than a foregone one.
-     * `sqlite.ts` and `fs.ts` each supply the store halves of `CopyIo`; both
-     * refuse a non-`sqlite` sink at the ladder's `refuseSink` rung.
+     * `connectionKinds` is a SOURCE allowlist, and the executor dispatches on the
+     * SOURCE connection's kind, so which adapter runs a `copy` is a real choice.
+     * `sqlite.ts`, `postgres.ts` and `fs.ts` each supply the store halves of
+     * `CopyIo`; the sink is chosen by its own kind in `copy-sink.ts`.
      *
      * `outputs` mirrors `connectors/copy.ts`'s `copyOutputs` exactly, in order,
      * and every one but `throughput` and `logPath` is REQUIRED. That is
@@ -1209,7 +1208,11 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // the `storeIdentity` hole this widening made reachable. The address seam
     // now takes a credential, so two spellings of one host no longer read as two
     // stores. See §7 ④.
-    sinkConnectionKinds: ['sqlite', 'postgres'],
+    //
+    // #1405 (OR14) — `fs` joins the SINK allowlist, in the same commit as
+    // `connectors/file-sink.ts`'s writer and `delimited` joining
+    // `datasetKinds.sink` below. `CATALOG_VERSION` 75 -> 76.
+    sinkConnectionKinds: ['sqlite', 'postgres', 'fs'],
     // #1215 (M11 slice 2) — `excel` joins the SOURCE list, in the same commit as
     // `connectors/excel-io.ts`, exactly as `delimited` did at #1167 and
     // `postgres` did at #1190. `connectionKinds` needs no matching widening this
@@ -1217,11 +1220,15 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // lives on an `fs` connection, and `fs` has been on that list since #1167.
     // `CATALOG_VERSION` 27 -> 28.
     //
-    // THE SINK HALVES STILL DO NOT MOVE. `excel` is source-only for
-    // `delimited`'s reason unchanged — M11 built a READER and no writer, so
-    // there is nothing to copy INTO a workbook with, and offering the pairing
-    // would only produce a dispatch that always refuses.
-    datasetKinds: { source: ['table', 'query', 'delimited', 'excel'], sink: ['table'] },
+    // `excel` stays off the SINK list: M11 built a READER and no writer, so
+    // offering the pairing would only produce a dispatch that always refuses.
+    // #1405 (OR14) — `delimited` joins it, with its writer (`file-sink.ts`),
+    // and the two JSON kinds and `parquet` join both lists with their reader
+    // and writer.
+    datasetKinds: {
+      source: ['table', 'query', 'delimited', 'excel', 'json', 'jsonl', 'parquet'],
+      sink: ['table', 'delimited', 'json', 'jsonl', 'parquet'],
+    },
     // #1600 OR41 C6c-1b — the session log's own connection (ADF's
     // `logLocationSettings`), as Files as-is's (C6c-1a): a database-to-database
     // copy has no file connection to write its log through.
@@ -1564,7 +1571,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // exactly. It is written out rather than derived from that entry: the two
     // agreeing today is a fact about which readers exist, not a rule, and a
     // shared constant would turn the next divergence into a puzzle.
-    datasetKinds: { source: ['table', 'query', 'delimited', 'excel'] },
+    datasetKinds: {
+      source: ['table', 'query', 'delimited', 'excel', 'json', 'jsonl', 'parquet'],
+    },
     outputs: [
       out('rows', 'json'),
       out('rowCount', 'number'),

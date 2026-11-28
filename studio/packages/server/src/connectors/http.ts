@@ -1,5 +1,6 @@
 import {
   DEFAULT_HTTP_TIMEOUT_MS,
+  DEFAULT_RUN_CAPTURE,
   formatZodIssues,
   httpConnectionConfigSchema,
   httpRequestInputSchema,
@@ -13,6 +14,7 @@ import {
   exchangeDeadline,
   fetchFailure,
   fetchWithoutLeakingSecrets,
+  readBodyBounded,
   resolveUrl,
   sinkHeadersFrom,
 } from './http-shared.js';
@@ -178,14 +180,28 @@ export const httpAdapter: ConnectorAdapter = {
         { method: httpMethod, headers: requestHeaders, body, signal: deadline.signal },
         Object.keys(sinkHeaders),
       );
-      const responseBody = await res.text();
+      // #1567 OR36 A4 — the body is bounded at the workspace's output cap: an
+      // unbounded read let one large response fill memory and the run log. A
+      // cut body says so, with what was kept and the size the server declared.
+      const maxBytes = ctx.outputMaxBytes ?? DEFAULT_RUN_CAPTURE.outputMaxBytes;
+      const { data, overLimit } = await readBodyBounded(res.body, maxBytes);
+      const responseBody = new TextDecoder().decode(data);
       deadline.disarm(); // exchange complete — disarm before emitting
+      const declared = Number(res.headers.get('content-length'));
       yield {
         type: 'succeeded',
         outputs: {
           status: res.status,
           body: redactSecrets(responseBody, outputSecrets),
           headers: collectResponseHeaders(res, outputSecrets),
+          ...(overLimit
+            ? {
+                truncated: {
+                  keptBytes: data.byteLength,
+                  totalBytes: Number.isSafeInteger(declared) && declared > 0 ? declared : null,
+                },
+              }
+            : {}),
         },
       };
     } catch (err) {

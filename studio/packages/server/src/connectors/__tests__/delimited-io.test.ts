@@ -10,6 +10,7 @@ vi.mock('node:fs/promises', async (importActual) => {
   return { ...actual, open: vi.fn(actual.open) };
 });
 import { join } from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { newCopyCounters, pumpCopyRows, type CopyPumpMappingEntry } from '@autonomy-studio/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DatasetIoError } from '../dataset-io-error.js';
@@ -753,5 +754,33 @@ describe('the coercion options a delimited dataset declares', () => {
     expect(() => delimitedCoercionFor({ header: true })).toThrow(
       /invalid delimited dataset config/,
     );
+  });
+});
+
+describe('gzip (#1405)', () => {
+  it('inflates a gzipped file, a byte at a time, and describes it from its header', async () => {
+    const path = await seed('in.csv.gz', gzipSync('id,name\n1,ada\n2,grace\n'));
+    const config = { compression: 'gzip' };
+    expect(await rowsOf(read(path, config, { chunkBytes: 1 }))).toEqual([
+      { id: '1', name: 'ada' },
+      { id: '2', name: 'grace' },
+    ]);
+    expect(await describeDelimitedDatasetColumns(read(path, config))).toEqual(['id', 'name']);
+  });
+
+  it('refuses a file that says gzip but is not, naming the file', async () => {
+    const path = await seed('plain.csv', 'id,name\n1,ada\n');
+    const err = await refusalOf(() => rowsOf(read(path, { compression: 'gzip' })));
+    expect(err.kind).toBe('permanent');
+    expect(err.message).toContain('plain.csv');
+    expect(err.message).toContain('not a whole gzip file');
+  });
+
+  it('refuses a gzip file cut short', async () => {
+    const whole = gzipSync('id,name\n1,ada\n');
+    const path = await seed('cut.csv.gz', whole.subarray(0, whole.length - 6));
+    const err = await refusalOf(() => rowsOf(read(path, { compression: 'gzip' })));
+    expect(err.kind).toBe('permanent');
+    expect(err.message).toContain('not a whole gzip file');
   });
 });

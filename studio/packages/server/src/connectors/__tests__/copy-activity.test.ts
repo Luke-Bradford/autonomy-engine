@@ -313,15 +313,16 @@ describe('copy activity — the refusal ladder', () => {
           root,
           sourcePath: seedDb(root, 1, 'src.db'),
           sinkPath: seedSink(root, 'dst.db'),
-          sink: { kind: 'fs', connectionConfig: { roots: [root] } },
+          // #1405 — `fs` became a sink kind; `http` is still not one.
+          sink: { kind: 'http', connectionConfig: {} },
         }),
       ),
     );
-    // The diagnosis matters: without this rung the fs config reaches the writer
-    // and is refused as "invalid sqlite connection config" — true, and useless.
+    // The diagnosis matters: without this rung the foreign config reaches a
+    // writer and is refused as an invalid config — true, and useless.
     expect(end).toMatchObject({
       kind: 'permanent',
-      error: expect.stringContaining("sink connection is 'fs'"),
+      error: expect.stringContaining("sink connection is 'http'"),
     });
   });
 
@@ -334,7 +335,7 @@ describe('copy activity — the refusal ladder', () => {
           sourcePath: seedDb(root, 1, 'src.db'),
           sinkPath: seedSink(root, 'dst.db'),
           datasets: null,
-          sink: { kind: 'fs', connectionConfig: { roots: [root] } },
+          sink: { kind: 'http', connectionConfig: {} },
         }),
       ),
     );

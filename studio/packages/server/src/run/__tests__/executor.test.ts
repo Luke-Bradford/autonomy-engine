@@ -10,6 +10,7 @@ import {
   BUILTIN_PRICE_TABLE_VERSION,
   buildDedupeKey,
   CATALOG_VERSION,
+  DEFAULT_WORKSPACE_SETTINGS,
   SECURE_REDACTED,
   type ActivityCatalog,
   type ActivityCatalogEntry,
@@ -29,7 +30,7 @@ import { insertLegacyVersion } from '../../__tests__/legacy-version.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
 import { createRun, getRun } from '../../repo/runs.js';
 import { createConnection } from '../../repo/connections.js';
-import { createDataset, getDataset } from '../../repo/datasets.js';
+import { createDataset, getDataset, updateDataset } from '../../repo/datasets.js';
 import { putWorkspaceSettings } from '../../repo/workspace-settings.js';
 import { rowsOf } from '../../connectors/__tests__/sqlite-fixtures.js';
 import { createSecret } from '../../repo/secrets.js';
@@ -251,11 +252,12 @@ function gate(): { held: Promise<void>; open: () => void } {
 
 describe('createExecutor — happy path (real http adapter, mocked fetch)', () => {
   it('dispatches (idempotent:false) then succeeds with the adapter outputs', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-      status: 200,
-      text: () => Promise.resolve('BODY'),
-      headers: new Headers({ 'x-h': '1' }),
-    } as unknown as Response);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(new TextEncoder().encode('BODY'), {
+        status: 200,
+        headers: new Headers({ 'x-h': '1' }),
+      }),
+    );
 
     const db = freshDb().db;
     const connId = await seedConnection(db, 'http', {}, null);
@@ -2696,6 +2698,80 @@ describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () 
     });
   });
 
+  it('#1567 records each dataset end AS RESOLVED, with its row hash, and an edit later changes nothing', async () => {
+    const { db, run, sourceDs } = await seedParamCopy({ source: { path: 'in/2026-09-25.csv' } });
+    await startRun(
+      deps(db, {
+        adapters: pairedRegistry(async function* () {
+          yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+        }, pathAddress),
+        catalog: delimitedCatalog(),
+      }),
+      run,
+    );
+    const snapshots = () => {
+      const [dispatched] = dispatchesOf(db, run.id);
+      return JSON.parse(dispatched!.datasetSnapshots!.text) as Record<
+        string,
+        Record<string, unknown>
+      >;
+    };
+    const before = snapshots();
+    expect(before['source']).toEqual({
+      datasetId: sourceDs,
+      name: expect.any(String),
+      rowHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+      kind: 'delimited',
+      config: { path: 'in/2026-09-25.csv', header: true },
+    });
+    expect(before['sink']).toMatchObject({ kind: 'delimited', config: { path: 'out.csv' } });
+    // The dataset row is mutable; the run's record of it is not.
+    updateDataset(db, sourceDs, { config: { path: 'elsewhere.csv', header: false } });
+    expect(snapshots()).toEqual(before);
+  });
+
+  it('#1567 records a QUERY dataset’s SQL text as it ran', async () => {
+    const db = freshDb().db;
+    const conn = await seedConnection(db, 'http', { store: 'S' }, null);
+    const sql = 'SELECT COUNT(*) AS n FROM rejects';
+    const ds = seedDataset(db, conn, { kind: 'query', config: { sql } });
+    const pvId = seedVersion(db, [
+      {
+        id: 'n1',
+        type: 'test_lookup',
+        config: {},
+        connectionId: conn,
+        datasetIds: { source: ds },
+        position: { x: 0, y: 0 },
+      },
+    ]);
+    const run = seedRun(db, pvId);
+    await startRun(
+      deps(db, {
+        adapters: pairedRegistry(async function* () {
+          yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+        }),
+        catalog: catalogOf({
+          type: 'test_lookup',
+          kind: 'execution',
+          connectionKinds: ['http'],
+          datasetKinds: { source: ['query'] },
+        }),
+      }),
+      run,
+    );
+    const [dispatched] = dispatchesOf(db, run.id);
+    expect(
+      dispatched?.datasetSnapshots,
+      JSON.stringify(loadEngineEvents(db, run.id)),
+    ).toBeDefined();
+    const snap = JSON.parse(dispatched!.datasetSnapshots!.text) as {
+      source: { kind: string; config: { sql: string } };
+    };
+    expect(snap.source.kind).toBe('query');
+    expect(snap.source.config.sql).toBe(sql);
+  });
+
   it('#890 records no SINK parameters for a source-only activity whose stray sink carries some', async () => {
     // The catalog declares no sink, so the executor never resolves the node's
     // (inert) sink dataset and applies nothing there. The record says what was applied.
@@ -4126,11 +4202,12 @@ describe('createExecutor — item 7 / S4: http_request config-sink secret header
     ]);
     const run = seedRun(db, pvId);
 
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-      status: 200,
-      text: () => Promise.resolve('OK'),
-      headers: new Headers({ 'x-h': '1' }),
-    } as unknown as Response);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(new TextEncoder().encode('OK'), {
+        status: 200,
+        headers: new Headers({ 'x-h': '1' }),
+      }),
+    );
 
     const state = await startRun(deps(db), run);
     expect(state.status).toBe('success');
@@ -6237,8 +6314,16 @@ describe('createExecutor — a Lookup’s workspace Lookup max rows (#1600 OR41 
       yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
     });
     const db = freshDb().db;
-    putWorkspaceSettings(db, 'local', { defaultActivityTimeoutSeconds: null, lookupMaxRows: 250 });
-    putWorkspaceSettings(db, 'other', { defaultActivityTimeoutSeconds: null, lookupMaxRows: 4000 });
+    putWorkspaceSettings(db, 'local', {
+      ...DEFAULT_WORKSPACE_SETTINGS,
+      defaultActivityTimeoutSeconds: null,
+      lookupMaxRows: 250,
+    });
+    putWorkspaceSettings(db, 'other', {
+      ...DEFAULT_WORKSPACE_SETTINGS,
+      defaultActivityTimeoutSeconds: null,
+      lookupMaxRows: 4000,
+    });
     // Owned like the run, so the connection resolves for a run with no owner too.
     const connId = createConnection(db, {
       ownerId,
@@ -6276,6 +6361,81 @@ describe('createExecutor — a Lookup’s workspace Lookup max rows (#1600 OR41 
       present: false,
       value: undefined,
     });
+  });
+});
+
+describe('createExecutor — what a dispatch records for audit (#1567 OR36)', () => {
+  async function runOne(
+    config: Record<string, unknown>,
+    run: ConnectorAdapter['runActivity'] = async function* () {
+      yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+    },
+    settings?: Partial<typeof DEFAULT_WORKSPACE_SETTINGS.runCapture>,
+  ) {
+    const db = freshDb().db;
+    if (settings !== undefined) {
+      putWorkspaceSettings(db, 'local', {
+        ...DEFAULT_WORKSPACE_SETTINGS,
+        runCapture: { ...DEFAULT_WORKSPACE_SETTINGS.runCapture, ...settings },
+      });
+    }
+    const connId = await seedConnection(db, 'http', {}, null);
+    const pvId = seedVersion(
+      db,
+      [httpNode('n1', connId, config)],
+      [{ name: 'file', type: 'string', required: false, default: 'orders_2026-10.csv' }],
+    );
+    const r = seedRun(db, pvId);
+    await startRun(deps(db, { adapters: fakeHttpAdapter(run) }), r);
+    const events = loadEngineEvents(db, r.id);
+    return {
+      dispatched: events.find((e) => e.type === 'node.dispatched'),
+      failed: events.find((e) => e.type === 'node.failed'),
+    };
+  }
+
+  it('records how each ${} field became its value', async () => {
+    const { dispatched } = await runOne({ url: 'https://x.test/${params.file}' });
+    expect(dispatched?.type === 'node.dispatched' && dispatched.expressions).toBeTruthy();
+    const text = dispatched?.type === 'node.dispatched' ? dispatched.expressions?.text : '';
+    expect(JSON.parse(text ?? '')).toEqual({
+      url: {
+        template: 'https://x.test/${params.file}',
+        value: 'https://x.test/orders_2026-10.csv',
+        operands: { 'params.file': 'orders_2026-10.csv' },
+      },
+    });
+  });
+
+  it('keeps a 20,000-character input whole by default, and cuts it at the workspace cap', async () => {
+    const body = 'x'.repeat(20_000);
+    const whole = await runOne({ body });
+    const wholeInput =
+      whole.dispatched?.type === 'node.dispatched' ? whole.dispatched.input : undefined;
+    expect(wholeInput?.truncated).toBeUndefined();
+    expect(JSON.parse(wholeInput?.text ?? '{}')).toMatchObject({ body });
+
+    const cut = await runOne({ body }, undefined, { inputMaxChars: 4000 });
+    const cutInput = cut.dispatched?.type === 'node.dispatched' ? cut.dispatched.input : undefined;
+    expect(cutInput).toMatchObject({ truncated: true, chars: wholeInput?.chars });
+    expect(cutInput?.text).toHaveLength(4000);
+  });
+
+  it('records a thrown error’s cause chain and trimmed stack', async () => {
+    const { failed } = await runOne({}, async function* () {
+      yield* [];
+      throw new Error('write failed', {
+        cause: Object.assign(new Error('disk full'), { code: 'ENOSPC' }),
+      });
+    });
+    expect(failed?.type === 'node.failed' && failed.code).toBe(FAILURE_CODES.ADAPTER_THREW);
+    const detail = failed?.type === 'node.failed' ? failed.detail : undefined;
+    expect(detail?.causes).toEqual([
+      { message: 'write failed' },
+      { message: 'disk full', code: 'ENOSPC' },
+    ]);
+    expect(detail?.stack?.length).toBeGreaterThan(0);
+    for (const frame of detail?.stack ?? []) expect(frame).not.toMatch(/\/Users\/|\/home\//);
   });
 });
 

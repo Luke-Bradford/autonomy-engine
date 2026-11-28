@@ -92,10 +92,17 @@ test('#890 — a node shows the input it ran with; a secure node withholds it', 
     // #1484 M2 — the input is the drawer's Input tab, indented.
     await shown.getByRole('tab', { name: 'Input' }).click();
     const shownInput = shown.getByRole('group', { name: 'Input', exact: true });
-    await expect(shownInput.locator('code.node-detail-outputs')).toHaveText([
+    await expect(shownInput.locator('#node-detail-input-config')).toHaveText(
       JSON.stringify({ path: visible }, null, 2),
+    );
+    await expect(shownInput.locator('#node-detail-input-params')).toHaveText(
       JSON.stringify({ connectionParams: { maxEntries: 50 } }, null, 2),
-    ]);
+    );
+    // #1567 — the `${}` it resolved, beside the config it produced.
+    await expect(shownInput.getByRole('heading', { name: 'Expressions' })).toBeVisible();
+    await expect(shownInput.locator('#node-detail-input-expressions')).toContainText(
+      '${params.dir}',
+    );
     await expect(shownInput.getByRole('heading', { name: 'Parameters' })).toBeVisible();
 
     const secure = await openActivity(page, 'List directory 2');

@@ -139,6 +139,26 @@ export function describeWorkspaceEvent(event: WorkspaceEvent): WorkspaceEventDes
             : `Version ${event.to}, from commit ${shortSha(event.commit)}, replacing ${event.from}.`,
       };
 
+    // #1401 — a preview read a store with its connection's credential.
+    case 'store.previewed': {
+      const subject =
+        event.datasetName !== null ? `dataset ${event.datasetName}` : 'an inline source';
+      const summary = {
+        rows: `Previewed the rows of ${subject}`,
+        tables: `Listed the tables of connection ${event.connectionName}`,
+        schema: `Read the columns of ${subject}`,
+        copy: `Previewed a copy of ${subject}`,
+      }[event.read];
+      return {
+        summary,
+        detail: event.ok
+          ? event.read === 'tables'
+            ? null
+            : `Read through the connection ${event.connectionName}.`
+          : 'The read was refused or failed, so nothing was shown.',
+      };
+    }
+
     default: {
       const unreachable: never = event;
       return unreachable;

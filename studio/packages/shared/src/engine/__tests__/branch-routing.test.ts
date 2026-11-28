@@ -247,6 +247,8 @@ describe('if crash recovery re-emits evaluateControl (#4 A1)', () => {
       attemptId: 'c#0',
       branch: 'true',
       event: 'condition.evaluated',
+      // #1567 — the re-emit records the same evaluation the first emission did.
+      evaluation: { field: 'condition', expression: '${true}', operands: {}, result: 'true' },
     });
   });
 });

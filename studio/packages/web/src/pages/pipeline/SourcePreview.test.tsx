@@ -34,6 +34,7 @@ describe('SourcePreview (#1600 C1q-c)', () => {
         { id: 2, note: 'b' },
       ],
       truncated: false,
+      columns: [],
     });
     render(<SourcePreview inline={query('SELECT 1')} connectionId="c1" connectionParams={false} />);
     await act(async () => fireEvent.click(button()));
@@ -44,14 +45,20 @@ describe('SourcePreview (#1600 C1q-c)', () => {
   });
 
   it('says a prefix is a prefix, and shows the server’s note instead when there is one', async () => {
-    preview.mockResolvedValueOnce({ ok: true, rows: [{ id: 1 }], truncated: true });
+    preview.mockResolvedValueOnce({ ok: true, rows: [{ id: 1 }], truncated: true, columns: [] });
     const { rerender } = render(
       <SourcePreview inline={query('SELECT 1')} connectionId="c1" connectionParams={false} />,
     );
     await act(async () => fireEvent.click(button()));
     expect(screen.getByText('First 1 rows')).toBeTruthy();
 
-    preview.mockResolvedValueOnce({ ok: true, rows: [], truncated: true, note: 'Too wide.' });
+    preview.mockResolvedValueOnce({
+      ok: true,
+      rows: [],
+      truncated: true,
+      note: 'Too wide.',
+      columns: [],
+    });
     rerender(
       <SourcePreview inline={query('SELECT 2')} connectionId="c1" connectionParams={false} />,
     );
@@ -61,7 +68,7 @@ describe('SourcePreview (#1600 C1q-c)', () => {
   });
 
   it('asks for a value in place of a ${} and binds it as the run would', async () => {
-    preview.mockResolvedValue({ ok: true, rows: [], truncated: false });
+    preview.mockResolvedValue({ ok: true, rows: [], truncated: false, columns: [] });
     render(
       <SourcePreview
         inline={query('SELECT * FROM t WHERE a > :wm', { wm: '${nodes.l.output.rows[0].wm}' })}
@@ -100,7 +107,9 @@ describe('SourcePreview (#1600 C1q-c)', () => {
     expect((button() as HTMLButtonElement).disabled).toBe(false);
 
     // The aborted read's late answer is ignored.
-    await act(async () => first.resolve({ ok: true, rows: [{ id: 1 }], truncated: false }));
+    await act(async () =>
+      first.resolve({ ok: true, rows: [{ id: 1 }], truncated: false, columns: [] }),
+    );
     expect(screen.queryByRole('table')).toBeNull();
   });
 

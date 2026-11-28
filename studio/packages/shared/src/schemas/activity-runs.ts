@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   ContainerRunStatusSchema,
+  DispatchInputSchema,
   FailureKindSchema,
   NodeRunStatusSchema,
   ResolvedUserPropertySchema,
@@ -35,6 +36,13 @@ export const ActivityRunIterationSchema = z.object({
   /** The item, when it reads as a short label (a scalar, or an object's
    * `name`); `null` otherwise. */
   item: z.string().nullable(),
+  /**
+   * #1567 OR36 A4 — the WHOLE item as JSON text, cut at the workspace's
+   * `runCapture.iterationItemMaxChars` (`truncated` and the whole length say
+   * so); `null` for a loop round, which has no item. Optional so a reader of an
+   * older response still parses it.
+   */
+  value: DispatchInputSchema.nullable().optional(),
 });
 export type ActivityRunIteration = z.infer<typeof ActivityRunIterationSchema>;
 
