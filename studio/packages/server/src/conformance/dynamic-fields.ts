@@ -36,7 +36,8 @@ function unwrap(schema: unknown): { core: unknown; literal: boolean } {
   for (let depth = 0; depth < 16; depth += 1) {
     const def = defOf(current);
     if (def === undefined) break;
-    const next = def.type === 'pipe' ? def.in : WRAPPERS.has(def.type ?? '') ? def.innerType : undefined;
+    const next =
+      def.type === 'pipe' ? def.in : WRAPPERS.has(def.type ?? '') ? def.innerType : undefined;
     if (next === undefined) break;
     current = next;
     literal ||= isLiteralText(current);

@@ -39,7 +39,8 @@ export interface Bench {
 const FIXTURE_KEY = 'fixture-key';
 
 /** What the fake agent CLI prints: its task, so a cell can see it arrived. */
-export const AGENT_SCRIPT = "process.stdout.write('agent:' + process.argv[process.argv.length - 1])";
+export const AGENT_SCRIPT =
+  "process.stdout.write('agent:' + process.argv[process.argv.length - 1])";
 
 export async function openBench(): Promise<Bench> {
   const h = await createHarness();

@@ -11,7 +11,11 @@ import {
 } from '@autonomy-studio/shared';
 import { buildTestAppWithContext } from '../__tests__/build-test-app.js';
 import { until } from '../__tests__/poll-until.js';
+import { and, eq } from 'drizzle-orm';
+import { scheduledWakeups } from '../db/schema.js';
 import { getRun } from '../repo/index.js';
+import { listPendingExternalWaitsByRun } from '../repo/external-waits.js';
+import { RETRY_WAKEUP_KIND } from '../run/driver.js';
 
 /**
  * #1574 OR39 — the conformance matrix's one way of running a cell.
@@ -50,9 +54,14 @@ export interface Harness {
   run(
     ids: { pipelineId: string; versionId: string },
     params?: Record<string, unknown>,
+    opts?: RunOptions,
   ): Promise<RunResult>;
   /** `createPipeline` then `run`. */
-  runDoc(doc: PipelineDocInput, params?: Record<string, unknown>): Promise<RunResult>;
+  runDoc(
+    doc: PipelineDocInput,
+    params?: Record<string, unknown>,
+    opts?: RunOptions,
+  ): Promise<RunResult>;
   probeDraft(input: {
     kind: ConnectionKind;
     config: Record<string, unknown>;
@@ -69,6 +78,21 @@ export interface PipelineDocInput {
   params?: Record<string, unknown>[];
   variables?: Record<string, unknown>[];
   name?: string;
+}
+
+export interface RunOptions {
+  /**
+   * Bring each pending retry alarm due NOW while the run settles. A retry's
+   * interval has a 30 s floor, which a matrix cell cannot spend; moving the
+   * stored due time is the clock reaching it sooner, and the retry is still
+   * armed, fired and re-dispatched by the real scheduler.
+   */
+  readonly retriesDueNow?: boolean;
+  /**
+   * Call back every external wait the run opens, with this JSON payload,
+   * through the same capability URL an outside system is given.
+   */
+  readonly callBackWith?: Record<string, unknown>;
 }
 
 export interface RunResult {
@@ -103,7 +127,8 @@ async function json<T>(
   if (expectStatus !== undefined && res.statusCode !== expectStatus) {
     throw new Error(`${method} ${url} answered ${res.statusCode}: ${res.body}`);
   }
-  return res.json() as T;
+  // A 202/204 answers with no body.
+  return (res.body === '' ? undefined : res.json()) as T;
 }
 
 function pushTo<V>(map: Map<string, V[]>, key: string, value: V): void {
@@ -176,7 +201,7 @@ export async function createHarness(): Promise<Harness> {
       );
       return { pipelineId: pipeline.id, versionId: version.id };
     },
-    async run({ pipelineId, versionId }, params) {
+    async run({ pipelineId, versionId }, params, opts) {
       const started = await json<{ outcome: string; runId: string }>(
         app,
         'POST',
@@ -188,14 +213,48 @@ export async function createHarness(): Promise<Harness> {
         throw new Error(`run did not start: ${JSON.stringify(started)}`);
       }
       const runId = started.runId;
+      const calledBack = new Set<string>();
+      const callbacks: Promise<unknown>[] = [];
       await until(
         () => {
+          if (opts?.callBackWith !== undefined) {
+            for (const wait of listPendingExternalWaitsByRun(app.db, runId)) {
+              if (calledBack.has(wait.attemptId)) continue;
+              calledBack.add(wait.attemptId);
+              callbacks.push(
+                json<{ callbackPath: string; attemptId: string }[]>(
+                  app,
+                  'GET',
+                  `/api/runs/${runId}/external-waits`,
+                ).then((waits) =>
+                  Promise.all(
+                    waits
+                      .filter((w) => w.attemptId === wait.attemptId)
+                      .map((w) => json(app, 'POST', w.callbackPath, opts.callBackWith)),
+                  ),
+                ),
+              );
+            }
+          }
+          if (opts?.retriesDueNow === true) {
+            app.db
+              .update(scheduledWakeups)
+              .set({ dueAt: Date.now() })
+              .where(
+                and(
+                  eq(scheduledWakeups.kind, RETRY_WAKEUP_KIND),
+                  eq(scheduledWakeups.status, 'pending'),
+                ),
+              )
+              .run();
+          }
           const status = getRun(app.db, runId)?.status;
           return status !== undefined && TERMINAL_RUN_ROW_STATUS.has(status);
         },
         `matrix run ${runId} to finish`,
         { iterations: 3000 },
       );
+      await Promise.all(callbacks);
       await app.runLauncher.whenIdle();
       const run = await json<Record<string, unknown>>(app, 'GET', `/api/runs/${runId}`);
       const activity = ActivityRunsResponseSchema.parse(
@@ -231,8 +290,8 @@ export async function createHarness(): Promise<Harness> {
         failures,
       };
     },
-    async runDoc(doc, params) {
-      return harness.run(await harness.createPipeline(doc), params);
+    async runDoc(doc, params, opts) {
+      return harness.run(await harness.createPipeline(doc), params, opts);
     },
     probeDraft({ kind, config, secret }) {
       return json(

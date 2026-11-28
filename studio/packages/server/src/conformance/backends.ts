@@ -255,7 +255,9 @@ async function readSinkFile(kind: FileKind, path: string): Promise<CanonicalRow[
       );
     }
     case 'json':
-      return byId((JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>[]).map(canonical));
+      return byId(
+        (JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>[]).map(canonical),
+      );
     case 'jsonl':
       return byId(
         readFileSync(path, 'utf8')
@@ -481,7 +483,8 @@ function asQuery(store: SinkStore, qualify: (config: Record<string, unknown>) =>
   };
 }
 
-export type EndpointStore = Store & Partial<Pick<SinkStore, 'sinkAddress' | 'readBack' | 'perItemParam'>>;
+export type EndpointStore = Store &
+  Partial<Pick<SinkStore, 'sinkAddress' | 'readBack' | 'perItemParam'>>;
 
 /**
  * How the matrix opens each copy endpoint (`copy-endpoints.ts`). The copy

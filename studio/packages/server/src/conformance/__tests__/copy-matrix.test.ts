@@ -260,7 +260,10 @@ describe.each(sinks)('parallel copies into one %s store', (sink) => {
     if (perFile) {
       for (const item of ['a', 'b', 'c']) {
         expect(
-          await dst.readBack!({ kind: base.kind, config: { ...base.config, path: itemPath(item) } }),
+          await dst.readBack!({
+            kind: base.kind,
+            config: { ...base.config, path: itemPath(item) },
+          }),
         ).toEqual(CANONICAL_ROWS);
       }
     } else {

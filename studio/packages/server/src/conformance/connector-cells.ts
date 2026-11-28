@@ -44,7 +44,8 @@ export function requiredConnectorCells(
 ): string[] {
   const kinds = args.kinds ?? ConnectionKindSchema.options;
   const catalog = args.catalog ?? activityCatalog;
-  const storeKinds = args.storeKinds ?? STORE_DATASET_KINDS;
+  const storeKinds: Partial<Record<string, readonly DatasetKind[]>> =
+    args.storeKinds ?? STORE_DATASET_KINDS;
   const cells: string[] = [];
   for (const kind of kinds) {
     cells.push(`${kind}/probe:draft`, `${kind}/probe:saved`);

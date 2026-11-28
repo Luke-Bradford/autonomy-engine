@@ -256,10 +256,17 @@ async function runSinkCell(kind: ConnectionKind, activity: 'copy' | 'copy_files'
   const { h } = bench;
   if (activity === 'copy_files') {
     const node = await BASE_NODES['copy_files']!(bench, 'fs');
-    const result = await h.runDoc({ nodes: [{ ...node, connectionIds: {
-      source: connectionOf(bench, 'fs'),
-      sink: connectionOf(bench, kind),
-    } }] });
+    const result = await h.runDoc({
+      nodes: [
+        {
+          ...node,
+          connectionIds: {
+            source: connectionOf(bench, 'fs'),
+            sink: connectionOf(bench, kind),
+          },
+        },
+      ],
+    });
     expect(result.status).toBe('success');
     const folder = String((node['config'] as Record<string, unknown>)['sinkFolder']);
     expect(readdirSync(folder)).toHaveLength(1);
@@ -331,7 +338,10 @@ describe.each(Object.keys(CONNECTOR_MATRIX) as ConnectionKind[])('%s', (kind) =>
   const caps = Object.entries(CONNECTOR_MATRIX[kind]) as [Capability, Cell][];
   // A postgres row skips only off CI: under CI `postgresAvailable` has thrown.
   const run = PG || !needsPostgres(`${kind}:`) ? it : it.skip;
-  run.each(caps.map(([cap, cell]) => [`${kind}/${cap}`, cell] as const))('%s', async (_id, cell) => {
-    await runCell(kind, cell);
-  });
+  run.each(caps.map(([cap, cell]) => [`${kind}/${cap}`, cell] as const))(
+    '%s',
+    async (_id, cell) => {
+      await runCell(kind, cell);
+    },
+  );
 });

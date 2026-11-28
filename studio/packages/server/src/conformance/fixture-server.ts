@@ -26,7 +26,22 @@ export interface FixtureServer {
 /** The completion text every LLM route answers with. */
 export const FIXTURE_COMPLETION = 'fixture answer';
 
+/** `/flaky/<key>`: the keys already answered once, with a 503. */
+const flakySeen = new Set<string>();
+
+/** How long `/slow` takes to answer, longer than any cell's timeout policy. */
+export const SLOW_MS = 5_000;
+
 function answer(method: string, path: string, body: string): { status: number; json: unknown } {
+  // A transient failure the first time each key is asked, then a success: the
+  // shape a retry policy exists for.
+  if (path.startsWith('/flaky/')) {
+    if (!flakySeen.has(path)) {
+      flakySeen.add(path);
+      return { status: 503, json: { error: 'try again' } };
+    }
+    return { status: 200, json: { ok: true } };
+  }
   // Probes: each provider's model list.
   if (method === 'GET' && (path === '/v1/models' || path === '/models')) {
     return { status: 200, json: { data: [{ id: 'fixture-model' }] } };
@@ -85,8 +100,13 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       const method = req.method ?? 'GET';
       requests.push({ method, path, headers: req.headers, body });
       const { status, json } = answer(method, path, body);
-      res.writeHead(status, { 'content-type': 'application/json' });
-      res.end(JSON.stringify(json));
+      const send = (): void => {
+        if (res.destroyed) return;
+        res.writeHead(status, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(json));
+      };
+      if (path === '/slow') setTimeout(send, SLOW_MS).unref();
+      else send();
     });
   });
   await new Promise<void>((resolve, reject) => {
