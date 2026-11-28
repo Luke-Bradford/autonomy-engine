@@ -1061,8 +1061,8 @@ The **capture level** (workspace setting, overridable per pipeline and per activ
 
 | Capability | File system (fs) | SQLite | Postgres | HTTP | S3 / Blob / SFTP | MySQL / SQL Server / Snowflake |
 |---|---|---|---|---|---|---|
-| Copy source, rows | ✓ delimited, excel; JSON/Parquet OR14 | ✓ table, query | ✓ table, query | T (JSON response as rows) | OR13 | OR15 |
-| Copy sink, rows | T delimited (OR14 writer) | ✓ append/overwrite/truncate/upsert (C3a), pre-copy script, batch size (C3b), auto-create (C3c) | ✓ same | — | OR13 | OR15 |
+| Copy source, rows | ✓ delimited, excel, JSON, JSON Lines, gzip (OR14); Parquet OR14 | ✓ table, query | ✓ table, query | T (JSON response as rows) | OR13 | OR15 |
+| Copy sink, rows | ✓ delimited, JSON, JSON Lines, gzip (OR14): Overwrite, or Append as a new file; Parquet OR14 | ✓ append/overwrite/truncate/upsert (C3a), pre-copy script, batch size (C3b), auto-create (C3c) | ✓ same | — | OR13 | OR15 |
 | Copy, files as-is | ✓ copy/move (single file); **T** folder, wildcard, list, delete-after | — | — | T (download to file) | OR13 | — |
 | Lookup | ✓ | ✓ | ✓ | (use Web) | OR13 | OR15 |
 | Get metadata | ✓ full field list (C8a), a file dataset's structure and column count (C8c-2); **T** wait | ✓ exists, structure, columns, rows (C8c-1) | ✓ same | — | OR13 | OR15 |

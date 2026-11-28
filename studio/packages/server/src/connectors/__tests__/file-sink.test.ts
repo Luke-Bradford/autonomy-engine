@@ -7,6 +7,7 @@ import { DatasetIoError } from '../dataset-io-error.js';
 import { writeRowsToSink, type SinkWriteRequest } from '../copy-sink.js';
 import { readDelimitedDatasetBatches } from '../delimited-io.js';
 import { fsAdapter } from '../fs.js';
+import { readJsonDatasetBatches } from '../json-io.js';
 import type { SinkValue } from '../sqlite-sink.js';
 import type { ActivityContext, ActivityEvent } from '../types.js';
 import { cleanupTempRoots, tempRoot } from './temp-roots.js';
@@ -146,10 +147,7 @@ describe('a delimited file as a copy sink (#1405)', () => {
     const root = tempRoot('file-sink-');
     for (const encoding of ['utf-16le', 'utf-16be', 'windows-1252'] as const) {
       const config = { path: `out-${encoding}.csv`, header: true, encoding };
-      await writeRowsToSink(
-        request({ root, config }),
-        batchesOf([{ id: 1, name: 'café €5' }]),
-      );
+      await writeRowsToSink(request({ root, config }), batchesOf([{ id: 1, name: 'café €5' }]));
       expect(await readBack(root, config)).toEqual([{ id: '1', name: 'café €5' }]);
     }
     // The windows-1252 bytes are the code page's own, not UTF-8's.
@@ -284,7 +282,9 @@ describe('a delimited file as a copy sink (#1405)', () => {
     const root = tempRoot('file-sink-');
     const config = { path: 'out.csv', header: true };
     const rows = () => batchesOf([{ id: 1, name: 'ada' }]);
-    expect((await refusal(writeRowsToSink(request({ root, config, mode: 'upsert' }), rows()))).message).toContain('Upsert');
+    expect(
+      (await refusal(writeRowsToSink(request({ root, config, mode: 'upsert' }), rows()))).message,
+    ).toContain('Upsert');
     expect(
       (
         await refusal(
@@ -317,6 +317,51 @@ describe('a delimited file as a copy sink (#1405)', () => {
 });
 
 describe('a Copy activity writing a file (#1405)', () => {
+  it('copies a CSV into JSON Lines, typed by the mapping', async () => {
+    const root = tempRoot('file-sink-');
+    writeFileSync(join(root, 'in.csv'), 'id,name\n1,ada\n2,\n');
+    const ctx = {
+      runId: 'run-1',
+      nodeId: 'n1',
+      attemptId: 'a1',
+      activityType: COPY_ACTIVITY_TYPE,
+      input: {
+        mode: 'overwrite',
+        mapping: [
+          { source: 'id', sink: 'id', type: 'integer' },
+          { source: 'name', sink: 'name', type: 'string' },
+        ],
+      },
+      connectionConfig: { roots: [root] },
+      sink: { kind: 'fs', connectionConfig: { roots: [root], writable: true } },
+      datasets: {
+        source: {
+          id: 'ds-in',
+          name: 'in',
+          kind: 'delimited',
+          config: { path: 'in.csv', header: true, nullValue: '' },
+          columns: [],
+        },
+        sink: {
+          id: 'ds-out',
+          name: 'out',
+          kind: 'jsonl',
+          config: { path: 'out.jsonl' },
+          columns: [],
+        },
+      },
+      signal: new AbortController().signal,
+    } as unknown as ActivityContext;
+
+    const events: ActivityEvent[] = [];
+    for await (const event of fsAdapter.runActivity(ctx, null)) events.push(event);
+
+    expect(events.at(-1)).toMatchObject({ type: 'succeeded', outputs: { rowsWritten: 2 } });
+    expect(readFileSync(join(root, 'out.jsonl'), 'utf8')).toBe(
+      '{"id":1,"name":"ada"}\n{"id":2,"name":null}\n',
+    );
+  });
+
   it('copies a CSV into a gzipped CSV with other options, typed by the mapping', async () => {
     const root = tempRoot('file-sink-');
     writeFileSync(join(root, 'in.csv'), 'id,name\n1,ada\n2,grace\n');
@@ -358,5 +403,81 @@ describe('a Copy activity writing a file (#1405)', () => {
     expect(gunzipSync(readFileSync(join(root, 'out.csv.gz'))).toString('utf8')).toBe(
       'who|n\r\nada|1\r\ngrace|2\r\n',
     );
+  });
+});
+
+async function readJsonBack(
+  root: string,
+  kind: DatasetKind,
+  config: Record<string, unknown>,
+): Promise<Record<string, unknown>[]> {
+  const rows: Record<string, unknown>[] = [];
+  for await (const batch of readJsonDatasetBatches({
+    connectionConfig: { roots: [root] },
+    datasetKind: kind,
+    datasetConfig: config,
+  })) {
+    rows.push(...batch);
+  }
+  return rows;
+}
+
+describe('a JSON or JSON Lines file as a copy sink (#1405)', () => {
+  const rows = (): AsyncIterable<Rows> =>
+    batchesOf(
+      [
+        { id: 1, name: 'ada', big: 12345678901234567890n, ok: true },
+        { id: 2.5, name: null, big: null, ok: false },
+      ],
+      [{ id: 3, name: 'say "hi"\n', big: 1n, ok: true }],
+    );
+  const columns = ['id', 'name', 'big', 'ok'];
+
+  it('writes one array of objects, keyed by the mapping, and reads it back', async () => {
+    const root = tempRoot('file-sink-');
+    const config = { path: 'out.json' };
+    const result = await writeRowsToSink(request({ root, config, kind: 'json', columns }), rows());
+    expect(result).toEqual({ rowsWritten: 3 });
+    expect(readFileSync(join(root, 'out.json'), 'utf8')).toBe(
+      '[\n{"id":1,"name":"ada","big":12345678901234567890,"ok":true},\n' +
+        '{"id":2.5,"name":null,"big":null,"ok":false},\n' +
+        '{"id":3,"name":"say \\"hi\\"\\n","big":1,"ok":true}\n]\n',
+    );
+    expect((await readJsonBack(root, 'json', config))[2]).toEqual({
+      id: 3,
+      name: 'say "hi"\n',
+      big: 1,
+      ok: true,
+    });
+  });
+
+  it('writes an empty array when there are no rows', async () => {
+    const root = tempRoot('file-sink-');
+    await writeRowsToSink(
+      request({ root, config: { path: 'out.json' }, kind: 'json', columns }),
+      batchesOf(),
+    );
+    expect(readFileSync(join(root, 'out.json'), 'utf8')).toBe('[]\n');
+  });
+
+  it('writes one object per line, gzipped, and reads it back', async () => {
+    const root = tempRoot('file-sink-');
+    const config = { path: 'out.jsonl.gz', compression: 'gzip' };
+    await writeRowsToSink(request({ root, config, kind: 'jsonl', columns }), rows());
+    expect(gunzipSync(readFileSync(join(root, 'out.jsonl.gz'))).toString('utf8')).toBe(
+      '{"id":1,"name":"ada","big":12345678901234567890,"ok":true}\n' +
+        '{"id":2.5,"name":null,"big":null,"ok":false}\n' +
+        '{"id":3,"name":"say \\"hi\\"\\n","big":1,"ok":true}\n',
+    );
+    expect(await readJsonBack(root, 'jsonl', config)).toHaveLength(3);
+  });
+
+  it('writes bytes as a base64 string', async () => {
+    const root = tempRoot('file-sink-');
+    await writeRowsToSink(
+      request({ root, config: { path: 'out.jsonl' }, kind: 'jsonl', columns: ['b'] }),
+      batchesOf([{ b: new Uint8Array([104, 105]) }]),
+    );
+    expect(readFileSync(join(root, 'out.jsonl'), 'utf8')).toBe('{"b":"aGk="}\n');
   });
 });

@@ -50,7 +50,11 @@ export function formatDelimitedRow(
   opts: DelimitedFormatOptions,
 ): string {
   const text = fields.map((field) =>
-    field === null ? (fields.length === 1 ? opts.quote + opts.quote : '') : formatDelimitedField(field, opts),
+    field === null
+      ? fields.length === 1
+        ? opts.quote + opts.quote
+        : ''
+      : formatDelimitedField(field, opts),
   );
   return text.join(opts.delimiter) + '\r\n';
 }

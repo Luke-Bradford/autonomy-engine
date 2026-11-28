@@ -64,7 +64,15 @@ describe('dataset config catalog', () => {
     // green is to add their new kind to `IMPLEMENTED_DATASET_KINDS` — the exact
     // lie a positive fact exists to prevent. A literal list reds on the next
     // kind and can only be made green by a decision.
-    expect([...IMPLEMENTED_DATASET_KINDS].sort()).toEqual(['delimited', 'excel', 'query', 'table']);
+    // #1405 — `json` and `jsonl` joined with `connectors/json-io.ts`.
+    expect([...IMPLEMENTED_DATASET_KINDS].sort()).toEqual([
+      'delimited',
+      'excel',
+      'json',
+      'jsonl',
+      'query',
+      'table',
+    ]);
     expect(datasetKindIsImplemented('table')).toBe(true);
     expect(datasetKindIsImplemented('delimited')).toBe(true);
     expect(datasetKindIsImplemented('excel')).toBe(true);

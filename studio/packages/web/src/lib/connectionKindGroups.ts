@@ -5,8 +5,8 @@ import {
 } from '@autonomy-studio/shared';
 
 /**
- * #1477 — why a kind cannot be picked HERE (a Copy sink that cannot be a
- * file, say), or `undefined` when it can. The gallery shows such a kind,
+ * #1477 — why a kind cannot be picked HERE (a Copy sink that cannot be an
+ * HTTP API, say), or `undefined` when it can. The gallery shows such a kind,
  * disabled, with this reason: hiding it would make the list look like
  * everything studio supports when it is not.
  */

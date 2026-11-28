@@ -7,6 +7,8 @@ import {
   delimitedDatasetConfigSchema,
   formatDelimitedRow,
   formatZodIssues,
+  jsonDatasetConfigSchema,
+  jsonlDatasetConfigSchema,
   type CopyWriteMode,
   type DatasetKind,
   type DelimitedEncoding,
@@ -22,7 +24,8 @@ import type { SinkValue } from './sqlite-sink.js';
 
 /**
  * #1405 OR14 — a FILE as a copy sink: the rows a copy moves, written into a
- * dataset's file on an `fs` connection.
+ * dataset's file on an `fs` connection, as delimited text, a JSON array or
+ * JSON Lines, each gzipped if the dataset says so.
  *
  * ATOMIC, as the database sinks' one transaction is (§4). The rows go into a
  * fresh temp file beside the target, which is synced and closed and only then
@@ -72,8 +75,10 @@ interface FileFormat {
   readonly compression: FileCompression;
   /** Text before the first row ('' for none). */
   readonly begin: string;
-  /** One row's text. */
-  readonly row: (row: Readonly<Record<string, SinkValue>>) => string;
+  /** One row's text; `index` counts from 0. */
+  readonly row: (row: Readonly<Record<string, SinkValue>>, index: number) => string;
+  /** Text after the last row, given how many there were ('' for none). */
+  readonly end: (rows: number) => string;
 }
 
 /** A value as the text a delimited field holds; `null` stays null. */
@@ -83,7 +88,10 @@ function fieldText(value: SinkValue | undefined): string | null {
   return String(value);
 }
 
-function delimitedFormat(datasetConfig: Record<string, unknown>, columns: readonly string[]): FileFormat {
+function delimitedFormat(
+  datasetConfig: Record<string, unknown>,
+  columns: readonly string[],
+): FileFormat {
   const parsed = delimitedDatasetConfigSchema.safeParse(datasetConfig);
   if (!parsed.success) {
     throw new DatasetIoError(
@@ -102,6 +110,7 @@ function delimitedFormat(datasetConfig: Record<string, unknown>, columns: readon
     encoding: config.encoding,
     compression: config.compression,
     begin: config.header ? formatDelimitedRow(columns, opts) : '',
+    end: () => '',
     row: (row) =>
       formatDelimitedRow(
         columns.map((column) => fieldText(row[column]) ?? nullText ?? null),
@@ -110,12 +119,56 @@ function delimitedFormat(datasetConfig: Record<string, unknown>, columns: readon
   };
 }
 
+/**
+ * A value as JSON text. A bigint is written as its digits, which JSON numbers
+ * allow at any size (`JSON.stringify` refuses a bigint); bytes as a base64
+ * string, as in a delimited file. A missing value is `null`.
+ */
+function jsonValue(value: SinkValue | undefined): string {
+  if (value === null || value === undefined) return 'null';
+  if (typeof value === 'bigint') return value.toString();
+  if (value instanceof Uint8Array) return JSON.stringify(Buffer.from(value).toString('base64'));
+  return JSON.stringify(value);
+}
+
+/**
+ * #1405 — `json` (one array, one object per line inside it) and `jsonl` (one
+ * object per line). Each object's keys are the mapping's sink names, in order.
+ */
+function jsonFormat(write: FileSinkWrite, lines: boolean): FileFormat {
+  const schema = lines ? jsonlDatasetConfigSchema : jsonDatasetConfigSchema;
+  const parsed = schema.safeParse(write.datasetConfig);
+  if (!parsed.success) {
+    throw new DatasetIoError(
+      'permanent',
+      `invalid ${write.datasetKind} dataset config: ${formatZodIssues(parsed.error.issues)}`,
+    );
+  }
+  const keys = write.columns.map((column) => JSON.stringify(column) + ':');
+  const object = (row: Readonly<Record<string, SinkValue>>): string =>
+    '{' + write.columns.map((column, i) => keys[i] + jsonValue(row[column])).join(',') + '}';
+  return {
+    encoding: 'utf-8',
+    compression: parsed.data.compression,
+    begin: lines ? '' : '[',
+    row: lines
+      ? (row) => object(row) + '\n'
+      : (row, index) => (index === 0 ? '\n' : ',\n') + object(row),
+    end: (rows) => (lines ? '' : rows === 0 ? ']\n' : '\n]\n'),
+  };
+}
+
+/** The file kinds a copy can write into. */
+const WRITABLE_FILE_KINDS: readonly DatasetKind[] = ['delimited', 'json', 'jsonl'];
+
 /** The writer for each file kind a copy can write into. */
 function formatFor(write: FileSinkWrite): FileFormat {
   if (write.datasetKind === 'delimited') return delimitedFormat(write.datasetConfig, write.columns);
+  if (write.datasetKind === 'json') return jsonFormat(write, false);
+  if (write.datasetKind === 'jsonl') return jsonFormat(write, true);
   throw new DatasetIoError(
     'permanent',
-    `a copy writes rows into a 'delimited' file on a file connection; this sink dataset is '${write.datasetKind}'`,
+    `a copy writes rows into ${WRITABLE_FILE_KINDS.map((k) => `'${k}'`).join(', ')} files on a file connection; this sink dataset is '${write.datasetKind}'`,
   );
 }
 
@@ -212,11 +265,15 @@ export async function writeFileDatasetRows(
     for await (const batch of batches) {
       if (signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
       let text = '';
-      for (const row of batch) text += format.row(row);
+      for (const row of batch) {
+        text += format.row(row, rowsWritten);
+        rowsWritten += 1;
+      }
       if (text !== '') yield encode(text, format.encoding);
-      rowsWritten += batch.length;
       write.onBatch(rowsWritten);
     }
+    const tail = format.end(rowsWritten);
+    if (tail !== '') yield encode(tail, format.encoding);
   }
 
   let fh: Awaited<ReturnType<typeof open>> | undefined;

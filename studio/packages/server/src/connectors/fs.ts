@@ -51,6 +51,12 @@ import { O_NOFOLLOW, resolveWithinRoots } from './confine.js';
 // to `fs-connection.ts` so the `delimited` store reader can re-validate and
 // classify WITHOUT importing this adapter, which slice 3 makes import IT.
 import { fsConnectionConfigSchema, notAnFsKind } from './fs-connection.js';
+import {
+  describeJsonDatasetColumns,
+  jsonCoercionFor,
+  readJsonDatasetBatches,
+  resolveJsonDatasetAddress,
+} from './json-io.js';
 // #1167 M7 slice 3 — `fs` becomes a STORE. The copy arm below pairs this
 // adapter's `delimited` reader with sqlite's writer, so the import direction is
 // `fs.ts` -> `delimited-io.ts` + `sqlite.ts` -> `copy.ts`. NOT a cycle: `copy.ts`
@@ -492,9 +498,20 @@ const EXCEL_IO: FsDatasetIo = {
   coercionFor: excelCoercionFor,
 };
 
+// #1405 OR14 — both JSON kinds through one reader, which tells them apart.
+const JSON_IO: FsDatasetIo = {
+  describeColumns: describeJsonDatasetColumns,
+  // A JSON value carries its own type, one record at a time, as a sheet's cell does.
+  structureType: '',
+  readBatches: readJsonDatasetBatches,
+  resolveAddress: resolveJsonDatasetAddress,
+  coercionFor: jsonCoercionFor,
+};
+
 function fsReaderFor(kind: DatasetKind): FsDatasetIo | null {
   if (kind === 'delimited') return DELIMITED_IO;
   if (kind === 'excel') return EXCEL_IO;
+  if (kind === 'json' || kind === 'jsonl') return JSON_IO;
   return null;
 }
 

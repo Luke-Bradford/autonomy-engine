@@ -42,11 +42,11 @@ test.describe('#1477 activity connection pickers', () => {
     await expect(editing(page)).toHaveText(/^Draft/);
 
     const sink = properties(page).getByRole('combobox', { name: 'Sink connection' });
-    // An existing File system connection is LISTED, disabled, with the reason.
+    // #1405 — an existing File system connection is a Copy sink, so it is offered.
     await sink.click();
     const filesOption = page.getByRole('listbox').getByRole('option').filter({ hasText: files });
-    await expect(filesOption).toHaveAttribute('aria-disabled', 'true');
-    await expect(filesOption).toContainText("Can't be a Copy data sink yet");
+    await expect(filesOption).not.toHaveAttribute('aria-disabled', 'true');
+    await expect(filesOption).not.toContainText("Can't be a Copy data sink yet");
     await sink.press('Escape');
     await expect(page.getByRole('listbox')).toHaveCount(0);
 
@@ -87,10 +87,10 @@ test.describe('#1477 activity connection pickers', () => {
     await properties(page).getByRole('button', { name: 'New sink connection' }).click();
     await expect(column(page)).toBeVisible();
     await expect(page).toHaveURL(/pipelines/);
-    // The gallery disables what a Copy sink cannot be, with the same reason.
-    const fsTile = column(page).getByRole('button', { name: 'File system', exact: true });
-    await expect(fsTile).toHaveAttribute('aria-disabled', 'true');
-    await expect(fsTile).toHaveAccessibleDescription(/Can't be a Copy data sink yet/);
+    // The gallery disables what a Copy sink cannot be, with the reason.
+    const httpTile = column(page).getByRole('button', { name: 'HTTP', exact: true });
+    await expect(httpTile).toHaveAttribute('aria-disabled', 'true');
+    await expect(httpTile).toHaveAccessibleDescription(/Can't be a Copy data sink yet/);
 
     await column(page).getByRole('button', { name: 'SQLite', exact: true }).click();
     const form = column(page).getByRole('form', { name: 'Connection form' });
@@ -207,9 +207,9 @@ test.describe('#1477 activity connection pickers', () => {
     await properties(page).getByRole('button', { name: 'New sink connection' }).click();
     const paste = column(page).getByRole('textbox', { name: 'Paste a path or URL' });
 
-    await paste.fill('/srv/landing/orders.csv');
+    await paste.fill('https://api.example.com/v1');
     await paste.press('Enter');
-    await expect(paste).toHaveAccessibleDescription("File system: Can't be a Copy data sink yet");
+    await expect(paste).toHaveAccessibleDescription("HTTP: Can't be a Copy data sink yet");
 
     await paste.fill('/srv/stores/warehouse.sqlite');
     await paste.press('Enter');

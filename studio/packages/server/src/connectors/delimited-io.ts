@@ -228,7 +228,7 @@ async function prepareRead(
  * for the same reason, and slice 1 authorises exactly this split: "the reader
  * can abort at its chunk source and between batches".
  */
-async function* decodedChunks(
+export async function* decodedChunks(
   path: string,
   encoding: string,
   compression: FileCompression,
@@ -564,9 +564,11 @@ export async function describeDelimitedDatasetColumns(
  * TWO RESIDUALS, stated because everything around them states theirs. (1) The
  * `object` half carries no case-alias defence of its own: two `fs` addresses
  * differing only in the spelling of one path component compare `sameStore` via
- * `dev:ino` and then MISS on `object`, so they are not refused. Unreachable
- * today — there is no `delimited` writer, so two `fs` ends cannot both exist in
- * one copy — and it is the first thing M-whatever's CSV writer must close.
+ * `dev:ino` and then MISS on `object`, so they are not refused. #1405's file
+ * writer made it reachable, and it is harmless there: the writer never writes in
+ * place. Overwrite renames a new file over the old one while the reader holds
+ * its own handle on the old one, so the reader still sees every old row; Append
+ * refuses a file that is already there.
  * (2) `sameDatasetAddress` short-circuits on `kind`, so an `fs` source and a
  * `sqlite` sink are never compared at all; a sqlite connection whose `path` IS
  * the CSV is not caught here. That one is harmless in fact rather than in

@@ -127,6 +127,14 @@ export const DELIMITED_MAX_FIELD_CHARS = 1_048_576;
 export const DELIMITED_MAX_ROW_CHARS = 8_388_608;
 
 /**
+ * #1405 OR14 — the longest text one JSON record (an array element, or a JSON
+ * Lines line) may run to: `DELIMITED_MAX_ROW_CHARS`' bound and reason. An
+ * unclosed string has no end, so without it the reader would hold the whole
+ * file as one record.
+ */
+export const JSON_MAX_RECORD_CHARS = DELIMITED_MAX_ROW_CHARS;
+
+/**
  * §5's bounded-streaming rule, applied to xlsx — where "stream the sheet" is
  * NOT on its own enough to bound memory.
  *

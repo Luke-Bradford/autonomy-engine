@@ -178,7 +178,7 @@ describe('Excel -> SQLite, end to end', () => {
     const end = terminal(events);
     expect(end.type).toBe('failed');
     expect(end.type === 'failed' ? end.error : '').toContain(
-      "the fs store reads 'delimited' and 'excel' datasets; this one is 'table'",
+      "the fs store reads 'delimited', 'excel', 'json' and 'jsonl' datasets; this one is 'table'",
     );
   });
 

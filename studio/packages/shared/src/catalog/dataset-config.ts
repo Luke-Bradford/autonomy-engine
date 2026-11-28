@@ -464,6 +464,50 @@ export const excelDatasetConfigSchema = z
   });
 
 /**
+ * #1405 OR14 — `json` and `jsonl`: records in a JSON file on an `fs` store.
+ * `json` holds ONE top-level array whose elements are the records; `jsonl` holds
+ * one record per line. The same keys for both, from one builder.
+ *
+ * Each record is an OBJECT, and its keys are the columns, taken from the FIRST
+ * record (a later record naming another key is refused, never dropped). A
+ * nested object or array is carried as its JSON text.
+ *
+ * No `encoding`: JSON is UTF-8 (RFC 8259 §8.1). No `nullValue`: JSON has a real
+ * null. No `header`: the keys name the columns. `dateFormat` stays, for a date
+ * written as a string, which is the only way JSON can write one.
+ */
+const jsonFileDatasetConfigSchema = (described: string) =>
+  z.object({
+    /** Confined against the `fs` connection's `roots` at DISPATCH (§8). */
+    path: presented(singleLine(z.string()).min(1), {
+      title: 'File path',
+      description: `${described} An absolute path inside one of the connection’s allowed folders, or one relative to the first.`,
+    }),
+    compression: compressionField(),
+    dateFormat: presented(
+      singleLine(z.string())
+        .refine(isValidDateFormat, {
+          message:
+            `dateFormat must use the closed token set (${FORMAT_TOKEN_NAMES.join(', ')}), ` +
+            'each at most once',
+        })
+        .optional(),
+      {
+        title: 'Date format',
+        description:
+          'How a date written as a string is read, e.g. yyyy-MM-dd. Needed to read a date or timestamp column.',
+      },
+    ),
+  });
+
+export const jsonDatasetConfigSchema = jsonFileDatasetConfigSchema(
+  'A file holding one JSON array of objects.',
+);
+export const jsonlDatasetConfigSchema = jsonFileDatasetConfigSchema(
+  'A file holding one JSON object per line.',
+);
+
+/**
  * The config shape for a kind whose READER has not been built yet.
  *
  * Explicitly permissive — `z.looseObject` KEEPS unknown keys, where a bare
@@ -502,6 +546,8 @@ export const DATASET_CONFIG_SCHEMAS: Record<DatasetKind, z.ZodObject> = {
   excel: excelDatasetConfigSchema,
   table: tableDatasetConfigSchema,
   query: queryDatasetConfigSchema,
+  json: jsonDatasetConfigSchema,
+  jsonl: jsonlDatasetConfigSchema,
 };
 
 /**
@@ -529,6 +575,9 @@ export const DATASET_NON_OVERRIDABLE_CONFIG_KEYS: Record<DatasetKind, readonly s
   excel: [],
   table: ['schema', 'table'],
   query: ['sql'],
+  // #1405 — `delimited`'s reason: the path is confined by the connection.
+  json: [],
+  jsonl: [],
 };
 
 /** Whether `key` is one no per-dispatch override may set on a `kind` dataset. */
@@ -572,6 +621,9 @@ export const IMPLEMENTED_DATASET_KINDS: ReadonlySet<DatasetKind> = new Set<Datas
   'query',
   'delimited',
   'excel',
+  // #1405 OR14 — `connectors/json-io.ts`.
+  'json',
+  'jsonl',
 ]);
 
 /** Whether a reader exists for `kind` (`IMPLEMENTED_DATASET_KINDS`). */
@@ -717,6 +769,8 @@ export const DATASET_CONNECTION_KINDS: Record<DatasetKind, readonly ConnectionKi
   excel: ['fs'],
   table: ['sqlite', 'postgres'],
   query: ['sqlite', 'postgres'],
+  json: ['fs'],
+  jsonl: ['fs'],
 };
 
 /**

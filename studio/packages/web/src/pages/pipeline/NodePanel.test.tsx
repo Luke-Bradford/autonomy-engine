@@ -928,16 +928,17 @@ describe('paired binding pickers (#1139)', () => {
       disabled: o.getAttribute('aria-disabled') === 'true',
       text: o.textContent,
     }));
-    // No None: nothing is bound, and None is the unbind.
+    // No None: nothing is bound, and None is the unbind. #1405 — a file
+    // system is a Copy sink now; the Log connection test above still covers a
+    // kind listed disabled, with why.
     expect(options).toEqual([
       { disabled: false, text: 'Source store' },
-      // Listed, so the picker says what exists, but not pickable as a sink.
-      { disabled: true, text: "FilesCan't be a Copy data sink yet" },
+      { disabled: false, text: 'Files' },
     ]);
     // Grouped by kind, in the gallery's order.
     expect(list.getAllByRole('group').map((g) => g.textContent)).toEqual([
       'SQLiteSource store',
-      "File systemFilesCan't be a Copy data sink yet",
+      'File systemFiles',
     ]);
   });
 
@@ -949,7 +950,9 @@ describe('paired binding pickers (#1139)', () => {
     expect(asked).toHaveLength(1);
     const request = asked[0]!;
     if (request.mode !== 'new') throw new Error(`asked for ${request.mode}`);
-    expect(request.disabledReason('fs')).toBe("Can't be a Copy data sink yet");
+    // #1405 — `fs` is a sink kind now; `http` is still not one.
+    expect(request.disabledReason('http')).toBe("Can't be a Copy data sink yet");
+    expect(request.disabledReason('fs')).toBeUndefined();
     expect(request.disabledReason('postgres')).toBeUndefined();
     // Binding goes to the SINK end of THIS node — the end the author asked from.
     expect(request.bind('c_new')).toBe(true);
@@ -983,7 +986,7 @@ describe('paired binding pickers (#1139)', () => {
     const request = asked[0]!;
     if (request.mode !== 'edit') throw new Error(`asked for ${request.mode}`);
     expect(request.connectionId).toBe('c_src');
-    expect(request.disabledReason('fs')).toBe("Can't be a Copy data sink yet");
+    expect(request.disabledReason('http')).toBe("Can't be a Copy data sink yet");
   });
 
   it('offers no ＋ New and no Edit when no editor hosts the column', () => {

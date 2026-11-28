@@ -63,7 +63,7 @@ describe('formatDelimitedRow', () => {
 
   it('reads back exactly with a declared escape and another delimiter and quote', async () => {
     const opts = { delimiter: '|', quote: "'", escape: '\\' } as const;
-    const values = ['it\'s', 'a|b', 'c:\\dir\\', "''"];
+    const values = ["it's", 'a|b', 'c:\\dir\\', "''"];
     expect(await parse(formatDelimitedRow(values, opts), opts)).toEqual([values]);
   });
 });

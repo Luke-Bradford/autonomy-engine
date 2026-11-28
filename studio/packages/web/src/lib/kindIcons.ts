@@ -2,11 +2,13 @@ import {
   ArrowClockwiseRegular,
   ArrowRepeatAllRegular,
   BotRegular,
+  BracesRegular,
   BugRegular,
   CalendarClockRegular,
   CursorClickRegular,
   DatabaseRegular,
   DatabaseSearchRegular,
+  DocumentBulletListRegular,
   DocumentCsvRegular,
   DocumentTableRegular,
   EditRegular,
@@ -61,6 +63,8 @@ export const DATASET_KIND_ICONS: Record<DatasetKind, FluentIcon> = {
   excel: DocumentTableRegular,
   table: TableRegular,
   query: DatabaseSearchRegular,
+  json: BracesRegular,
+  jsonl: DocumentBulletListRegular,
 };
 
 export const TRIGGER_MODE_ICONS: Record<TriggerMode, FluentIcon> = {
