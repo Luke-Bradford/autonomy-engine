@@ -5550,7 +5550,8 @@ textarea[data-grow='edit'],
    `<dialog>` in the top layer, portalled to the app's Fluent root
    (`ExpressionEditor`), so it is themed here and not by the UA sheet, which
    would paint it `Canvas` white in dark mode. */
-.expression-editor {
+.expression-editor,
+.code-view {
   width: min(960px, calc(100vw - var(--space-6) * 2));
   max-height: calc(100vh - var(--space-6) * 2);
   padding: var(--space-4);
@@ -5566,16 +5567,19 @@ textarea[data-grow='edit'],
 
 /* `display: flex` above would show a CLOSED dialog; it is mounted only while
    open, and this keeps the UA's rule if that ever changes. */
-.expression-editor:not([open]) {
+.expression-editor:not([open]),
+.code-view:not([open]) {
   display: none;
 }
 
-.expression-editor::backdrop {
+.expression-editor::backdrop,
+.code-view::backdrop {
   /* Fluent's own dialog scrim; `::backdrop` inherits it from the dialog. */
   background: var(--colorBackgroundOverlay);
 }
 
-.expression-editor h2 {
+.expression-editor h2,
+.code-view h2 {
   margin: 0;
   font: var(--type-section);
   overflow-wrap: anywhere;
@@ -5598,10 +5602,61 @@ textarea[data-grow='edit'],
   flex-basis: 100%;
 }
 
-.expression-editor-actions {
+.expression-editor-actions,
+.code-view-actions {
   display: flex;
   justify-content: flex-end;
   gap: var(--space-2);
+}
+
+/* #1573 OR38 — the Code view. The text box takes the height the dialog has
+   left; the problems list scrolls on its own, so a long list never pushes the
+   actions off screen. */
+.code-view {
+  height: calc(100vh - var(--space-6) * 2);
+  overflow-y: hidden;
+}
+
+.code-view .json-editor {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.code-view .json-editor > .json-editor-input {
+  flex: 1 1 auto;
+  min-height: 0;
+  resize: none;
+}
+
+.code-view-problems {
+  flex: 0 0 auto;
+  max-height: 25vh;
+  overflow-y: auto;
+}
+
+.code-view-problems ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: max-content max-content 1fr;
+  gap: var(--space-1) var(--space-2);
+}
+
+.code-view-problems li {
+  display: contents;
+}
+
+.code-view-problems p {
+  margin: 0;
+}
+
+.code-view-problems li[data-blocking='true'] .code-view-severity {
+  color: var(--error);
+}
+
+.code-view-message {
+  overflow-wrap: anywhere;
 }
 
 /* An open list is wider than its cell; the table grows into its scroll. */
