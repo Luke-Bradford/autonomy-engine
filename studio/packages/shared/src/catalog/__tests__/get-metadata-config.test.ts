@@ -87,8 +87,8 @@ describe('get_metadata config (#1600 OR41 C8a)', () => {
     // C8c — a table only through a dataset, which a path does not need; C8c-2 —
     // a delimited or Excel file through one too.
     expect(entry?.datasetKinds).toEqual({
-      // #1405 — and a JSON or JSON Lines file.
-      source: ['table', 'delimited', 'excel', 'json', 'jsonl'],
+      // #1405 — and a JSON, JSON Lines or Parquet file.
+      source: ['table', 'delimited', 'excel', 'json', 'jsonl', 'parquet'],
       optionalOn: ['fs'],
     });
     expect(entry?.inPalette).not.toBe(false);

@@ -700,8 +700,8 @@
 // (`formerOutputs`).
 // BUMP 75→76 for #1405 OR14: a rows Copy may write into a file. `copy` gains
 // `fs` in `sinkConnectionKinds` and `delimited` in `datasetKinds.sink`, a
-// delimited dataset gains `compression`, and the `json` and `jsonl` dataset
-// kinds join Copy (both ends), Lookup and Get metadata. A pre-OR14 build refuses a Copy whose
+// delimited dataset gains `compression`, and the `json`, `jsonl` and `parquet`
+// dataset kinds join Copy (both ends), Lookup and Get metadata. A pre-OR14 build refuses a Copy whose
 // sink is a file connection at the catalog's sink-kind check, so it is refused
 // at import rather than half-loaded (bump 27's precedent), and it would read a
 // gzipped file's bytes as text.

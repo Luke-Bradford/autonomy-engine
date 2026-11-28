@@ -2,12 +2,19 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
-import { COPY_ACTIVITY_TYPE, type CopyWriteMode, type DatasetKind } from '@autonomy-studio/shared';
+import {
+  COPY_ACTIVITY_TYPE,
+  type CopyWriteMode,
+  type DataType,
+  type DatasetKind,
+} from '@autonomy-studio/shared';
 import { DatasetIoError } from '../dataset-io-error.js';
 import { writeRowsToSink, type SinkWriteRequest } from '../copy-sink.js';
 import { readDelimitedDatasetBatches } from '../delimited-io.js';
 import { fsAdapter } from '../fs.js';
 import { readJsonDatasetBatches } from '../json-io.js';
+import { readParquetDatasetBatches } from '../parquet-io.js';
+import { parquetMetadata } from 'hyparquet';
 import type { SinkValue } from '../sqlite-sink.js';
 import type { ActivityContext, ActivityEvent } from '../types.js';
 import { cleanupTempRoots, tempRoot } from './temp-roots.js';
@@ -32,6 +39,7 @@ function request(over: {
   config: Record<string, unknown>;
   kind?: DatasetKind;
   columns?: readonly string[];
+  columnTypes?: readonly DataType[];
   mode?: CopyWriteMode;
   writable?: boolean;
   preCopyScript?: SinkWriteRequest['preCopyScript'];
@@ -54,6 +62,8 @@ function request(over: {
     },
     sinkSecret: null,
     columns: over.columns ?? ['id', 'name'],
+    // The declared types matter only to Parquet; text formats write the values.
+    columnTypes: over.columnTypes ?? (over.columns ?? ['id', 'name']).map(() => 'string'),
     nullOnError: [],
     mode: over.mode ?? 'overwrite',
     keyColumns: over.keyColumns ?? [],
@@ -317,6 +327,60 @@ describe('a delimited file as a copy sink (#1405)', () => {
 });
 
 describe('a Copy activity writing a file (#1405)', () => {
+  it('copies a CSV into Parquet, typed by the mapping', async () => {
+    const root = tempRoot('file-sink-');
+    writeFileSync(join(root, 'in.csv'), 'id,day\n1,2026-03-04\n2,\n');
+    const ctx = {
+      runId: 'run-1',
+      nodeId: 'n1',
+      attemptId: 'a1',
+      activityType: COPY_ACTIVITY_TYPE,
+      input: {
+        mode: 'overwrite',
+        mapping: [
+          { source: 'id', sink: 'id', type: 'integer' },
+          { source: 'day', sink: 'day', type: 'date' },
+        ],
+      },
+      connectionConfig: { roots: [root] },
+      sink: { kind: 'fs', connectionConfig: { roots: [root], writable: true } },
+      datasets: {
+        source: {
+          id: 'ds-in',
+          name: 'in',
+          kind: 'delimited',
+          config: { path: 'in.csv', header: true, nullValue: '', dateFormat: 'yyyy-MM-dd' },
+          columns: [],
+        },
+        sink: {
+          id: 'ds-out',
+          name: 'out',
+          kind: 'parquet',
+          config: { path: 'out.parquet' },
+          columns: [],
+        },
+      },
+      signal: new AbortController().signal,
+    } as unknown as ActivityContext;
+
+    const events: ActivityEvent[] = [];
+    for await (const event of fsAdapter.runActivity(ctx, null)) events.push(event);
+    expect(events.at(-1)).toMatchObject({ type: 'succeeded', outputs: { rowsWritten: 2 } });
+
+    const rows: Record<string, unknown>[] = [];
+    for await (const batch of readParquetDatasetBatches({
+      connectionConfig: { roots: [root] },
+      datasetKind: 'parquet',
+      datasetConfig: { path: 'out.parquet' },
+    })) {
+      rows.push(...batch);
+    }
+    expect(rows).toEqual([
+      { id: 1n, day: new Date('2026-03-04T00:00:00.000Z') },
+      { id: 2n, day: null },
+    ]);
+  });
+
   it('copies a CSV into JSON Lines, typed by the mapping', async () => {
     const root = tempRoot('file-sink-');
     writeFileSync(join(root, 'in.csv'), 'id,name\n1,ada\n2,\n');
@@ -479,5 +543,140 @@ describe('a JSON or JSON Lines file as a copy sink (#1405)', () => {
       batchesOf([{ b: new Uint8Array([104, 105]) }]),
     );
     expect(readFileSync(join(root, 'out.jsonl'), 'utf8')).toBe('{"b":"aGk="}\n');
+  });
+});
+
+describe('a Parquet file as a copy sink (#1405)', () => {
+  const columns = ['id', 'name', 'score', 'ok', 'day', 'at', 'raw'];
+  const columnTypes: DataType[] = [
+    'integer',
+    'string',
+    'number',
+    'boolean',
+    'date',
+    'timestamp',
+    'binary',
+  ];
+
+  it('writes each mapped type as its Parquet type, and reads the values back typed', async () => {
+    const root = tempRoot('file-sink-');
+    const result = await writeRowsToSink(
+      request({ root, config: { path: 'out.parquet' }, kind: 'parquet', columns, columnTypes }),
+      batchesOf(
+        [
+          {
+            id: 1,
+            name: 'ada',
+            score: 1.5,
+            ok: true,
+            day: '2026-01-02',
+            at: '2026-01-02T03:04:05.678Z',
+            raw: new Uint8Array([1, 2]),
+          },
+        ],
+        [
+          {
+            id: 9007199254740993n,
+            name: null,
+            score: null,
+            ok: null,
+            day: null,
+            at: null,
+            raw: null,
+          },
+        ],
+      ),
+    );
+    expect(result).toEqual({ rowsWritten: 2 });
+
+    const bytes = readFileSync(join(root, 'out.parquet'));
+    const schema = parquetMetadata(
+      bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+    ).schema.slice(1);
+    expect(schema.map((e) => [e.name, e.type, e.logical_type?.type, e.repetition_type])).toEqual([
+      ['id', 'INT64', 'INTEGER', 'OPTIONAL'],
+      ['name', 'BYTE_ARRAY', 'STRING', 'OPTIONAL'],
+      ['score', 'DOUBLE', undefined, 'OPTIONAL'],
+      ['ok', 'BOOLEAN', undefined, 'OPTIONAL'],
+      ['day', 'INT32', 'DATE', 'OPTIONAL'],
+      ['at', 'INT64', 'TIMESTAMP', 'OPTIONAL'],
+      ['raw', 'BYTE_ARRAY', undefined, 'OPTIONAL'],
+    ]);
+
+    const rows: Record<string, unknown>[] = [];
+    for await (const batch of readParquetDatasetBatches({
+      connectionConfig: { roots: [root] },
+      datasetKind: 'parquet',
+      datasetConfig: { path: 'out.parquet' },
+    })) {
+      rows.push(...batch);
+    }
+    expect(rows).toEqual([
+      {
+        id: 1n,
+        name: 'ada',
+        score: 1.5,
+        ok: true,
+        day: new Date('2026-01-02T00:00:00.000Z'),
+        at: new Date('2026-01-02T03:04:05.678Z'),
+        raw: new Uint8Array([1, 2]),
+      },
+      { id: 9007199254740993n, name: null, score: null, ok: null, day: null, at: null, raw: null },
+    ]);
+  });
+
+  it('refuses an integer past 64 bits, naming the column, and leaves no file', async () => {
+    const root = tempRoot('file-sink-');
+    const err = await refusal(
+      writeRowsToSink(
+        request({
+          root,
+          config: { path: 'out.parquet' },
+          kind: 'parquet',
+          columns: ['id'],
+          columnTypes: ['integer'],
+        }),
+        batchesOf([{ id: 2n ** 63n }]),
+      ),
+    );
+    expect(err.kind).toBe('permanent');
+    expect(err.message).toContain("column 'id'");
+    expect(readdirSync(root)).toEqual([]);
+  });
+
+  it('writes a file with no rows that still names its columns', async () => {
+    const root = tempRoot('file-sink-');
+    await writeRowsToSink(
+      request({ root, config: { path: 'out.parquet' }, kind: 'parquet', columns, columnTypes }),
+      batchesOf(),
+    );
+    const bytes = readFileSync(join(root, 'out.parquet'));
+    const meta = parquetMetadata(
+      bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+    );
+    expect(meta.num_rows).toBe(0n);
+    expect(meta.schema.slice(1).map((e) => e.name)).toEqual(columns);
+  });
+
+  it('leaves no file behind when the rows fail part-way', async () => {
+    const root = tempRoot('file-sink-');
+    async function* failing(): AsyncIterable<Rows> {
+      yield [{ id: 1, name: 'ada' }];
+      throw new DatasetIoError('permanent', 'row 2 failed coercion');
+    }
+    const err = await refusal(
+      writeRowsToSink(
+        request({
+          root,
+          config: { path: 'out.parquet' },
+          kind: 'parquet',
+          columns: ['id', 'name'],
+          columnTypes: ['integer', 'string'],
+        }),
+        failing(),
+      ),
+    );
+    expect(err.message).toBe('row 2 failed coercion');
+    expect(readdirSync(root)).toEqual([]);
   });
 });

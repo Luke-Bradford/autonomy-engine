@@ -919,7 +919,7 @@ const ENTRIES: ActivityCatalogEntry[] = [
     idempotent: true,
     connectionKinds: ['fs', 'sqlite', 'postgres'],
     datasetKinds: {
-      source: ['table', 'delimited', 'excel', 'json', 'jsonl'],
+      source: ['table', 'delimited', 'excel', 'json', 'jsonl', 'parquet'],
       optionalOn: ['fs'],
     },
     outputs: [
@@ -1223,10 +1223,11 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // `excel` stays off the SINK list: M11 built a READER and no writer, so
     // offering the pairing would only produce a dispatch that always refuses.
     // #1405 (OR14) — `delimited` joins it, with its writer (`file-sink.ts`),
-    // and the two JSON kinds join both lists with their reader and writer.
+    // and the two JSON kinds and `parquet` join both lists with their reader
+    // and writer.
     datasetKinds: {
-      source: ['table', 'query', 'delimited', 'excel', 'json', 'jsonl'],
-      sink: ['table', 'delimited', 'json', 'jsonl'],
+      source: ['table', 'query', 'delimited', 'excel', 'json', 'jsonl', 'parquet'],
+      sink: ['table', 'delimited', 'json', 'jsonl', 'parquet'],
     },
     // #1600 OR41 C6c-1b — the session log's own connection (ADF's
     // `logLocationSettings`), as Files as-is's (C6c-1a): a database-to-database
@@ -1570,7 +1571,9 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // exactly. It is written out rather than derived from that entry: the two
     // agreeing today is a fact about which readers exist, not a rule, and a
     // shared constant would turn the next divergence into a puzzle.
-    datasetKinds: { source: ['table', 'query', 'delimited', 'excel', 'json', 'jsonl'] },
+    datasetKinds: {
+      source: ['table', 'query', 'delimited', 'excel', 'json', 'jsonl', 'parquet'],
+    },
     outputs: [
       out('rows', 'json'),
       out('rowCount', 'number'),

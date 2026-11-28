@@ -10,6 +10,7 @@ import {
   DatabaseSearchRegular,
   DocumentBulletListRegular,
   DocumentCsvRegular,
+  DocumentDatabaseRegular,
   DocumentTableRegular,
   EditRegular,
   FlashRegular,
@@ -65,6 +66,7 @@ export const DATASET_KIND_ICONS: Record<DatasetKind, FluentIcon> = {
   query: DatabaseSearchRegular,
   json: BracesRegular,
   jsonl: DocumentBulletListRegular,
+  parquet: DocumentDatabaseRegular,
 };
 
 export const TRIGGER_MODE_ICONS: Record<TriggerMode, FluentIcon> = {

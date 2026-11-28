@@ -118,7 +118,13 @@ export function classifyFsError(err: unknown, signal: AbortSignal | undefined): 
  * this slice it spans all four kinds -- so a store consulting it would accept a
  * `table` dataset it cannot read.
  */
-export const FS_DATASET_KINDS: readonly DatasetKind[] = ['delimited', 'excel', 'json', 'jsonl'];
+export const FS_DATASET_KINDS: readonly DatasetKind[] = [
+  'delimited',
+  'excel',
+  'json',
+  'jsonl',
+  'parquet',
+];
 
 /** The refusal for a dataset kind that does not live in an `fs` store. */
 export function notAnFsKind(kind: DatasetKind): string {

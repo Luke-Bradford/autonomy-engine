@@ -82,10 +82,18 @@ export type DatasetColumn = z.infer<typeof DatasetColumnSchema>;
  * `config` keys meaning arrive later — M4 (`table`/`query`), M7 (`delimited`),
  * M11 (`excel`) — and each ticket brings its own config schema then (§2.6).
  *
- * #1405 OR14 — `json` (one array of records) and `jsonl` (JSON Lines, one
- * record per line) join with their reader and writer.
+ * #1405 OR14 — `json` (one array of records), `jsonl` (JSON Lines, one record
+ * per line) and `parquet` join with their readers and writers.
  */
-export const DatasetKindSchema = z.enum(['delimited', 'excel', 'table', 'query', 'json', 'jsonl']);
+export const DatasetKindSchema = z.enum([
+  'delimited',
+  'excel',
+  'table',
+  'query',
+  'json',
+  'jsonl',
+  'parquet',
+]);
 export type DatasetKind = z.infer<typeof DatasetKindSchema>;
 
 /**
@@ -132,6 +140,7 @@ export const DATASET_KIND_LABELS: Record<DatasetKind, string> = {
   query: 'SQL query',
   json: 'JSON',
   jsonl: 'JSON lines',
+  parquet: 'Parquet',
 };
 
 /** #1413 OR22 — what each kind IS, as `CONNECTION_KIND_DESCRIPTIONS` says for connections. */
@@ -142,6 +151,7 @@ export const DATASET_KIND_DESCRIPTIONS: Record<DatasetKind, string> = {
   query: 'The rows a SQL query returns from a database.',
   json: 'Records in a JSON file holding one array of objects, on a file system connection.',
   jsonl: 'Records in a JSON Lines file, one object per line, on a file system connection.',
+  parquet: 'Rows of a Parquet file, with typed columns, on a file system connection.',
 };
 
 export const DatasetSchema = z.object({

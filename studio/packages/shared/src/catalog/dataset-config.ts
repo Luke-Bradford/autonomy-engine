@@ -508,6 +508,20 @@ export const jsonlDatasetConfigSchema = jsonFileDatasetConfigSchema(
 );
 
 /**
+ * #1405 OR14 — `parquet`: a Parquet file on an `fs` store. Only a path: the
+ * file carries its own column names, types, nulls and compression. A copy
+ * writes each column with the type its mapping declares (`file-sink.ts`).
+ */
+export const parquetDatasetConfigSchema = z.object({
+  /** Confined against the `fs` connection's `roots` at DISPATCH (§8). */
+  path: presented(singleLine(z.string()).min(1), {
+    title: 'File path',
+    description:
+      'An absolute path inside one of the connection’s allowed folders, or one relative to the first.',
+  }),
+});
+
+/**
  * The config shape for a kind whose READER has not been built yet.
  *
  * Explicitly permissive — `z.looseObject` KEEPS unknown keys, where a bare
@@ -548,6 +562,7 @@ export const DATASET_CONFIG_SCHEMAS: Record<DatasetKind, z.ZodObject> = {
   query: queryDatasetConfigSchema,
   json: jsonDatasetConfigSchema,
   jsonl: jsonlDatasetConfigSchema,
+  parquet: parquetDatasetConfigSchema,
 };
 
 /**
@@ -578,6 +593,7 @@ export const DATASET_NON_OVERRIDABLE_CONFIG_KEYS: Record<DatasetKind, readonly s
   // #1405 — `delimited`'s reason: the path is confined by the connection.
   json: [],
   jsonl: [],
+  parquet: [],
 };
 
 /** Whether `key` is one no per-dispatch override may set on a `kind` dataset. */
@@ -621,9 +637,10 @@ export const IMPLEMENTED_DATASET_KINDS: ReadonlySet<DatasetKind> = new Set<Datas
   'query',
   'delimited',
   'excel',
-  // #1405 OR14 — `connectors/json-io.ts`.
+  // #1405 OR14 — `connectors/json-io.ts` and `connectors/parquet-io.ts`.
   'json',
   'jsonl',
+  'parquet',
 ]);
 
 /** Whether a reader exists for `kind` (`IMPLEMENTED_DATASET_KINDS`). */
@@ -771,6 +788,7 @@ export const DATASET_CONNECTION_KINDS: Record<DatasetKind, readonly ConnectionKi
   query: ['sqlite', 'postgres'],
   json: ['fs'],
   jsonl: ['fs'],
+  parquet: ['fs'],
 };
 
 /**

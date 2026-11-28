@@ -135,6 +135,14 @@ export const DELIMITED_MAX_ROW_CHARS = 8_388_608;
 export const JSON_MAX_RECORD_CHARS = DELIMITED_MAX_ROW_CHARS;
 
 /**
+ * #1405 OR14 — rows per row group in a Parquet file a copy writes. The writer
+ * holds one group (its values, then its encoded bytes) at a time, so this bounds
+ * its memory; 65,536 rows also keeps each group large enough for the format's
+ * column compression and statistics to pay.
+ */
+export const PARQUET_ROW_GROUP_ROWS = 65_536;
+
+/**
  * §5's bounded-streaming rule, applied to xlsx — where "stream the sheet" is
  * NOT on its own enough to bound memory.
  *

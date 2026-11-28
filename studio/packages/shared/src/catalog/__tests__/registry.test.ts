@@ -242,13 +242,13 @@ describe('activity catalog', () => {
     // is the half of this pin that has now survived three widenings.
     //
     // #1405 (OR14) moved them, with the writer in the same commit
-    // (`connectors/file-sink.ts`): `delimited`, `json` and `jsonl` join the sink
-    // kinds and `fs` the sink stores. `excel` and `query` stay off: neither has
-    // a writer.
+    // (`connectors/file-sink.ts`): `delimited`, `json`, `jsonl` and `parquet`
+    // join the sink kinds and `fs` the sink stores. `excel` and `query` stay
+    // off: neither has a writer.
     const copy = catalog.get('copy');
     expect(copy?.datasetKinds).toEqual({
-      source: ['table', 'query', 'delimited', 'excel', 'json', 'jsonl'],
-      sink: ['table', 'delimited', 'json', 'jsonl'],
+      source: ['table', 'query', 'delimited', 'excel', 'json', 'jsonl', 'parquet'],
+      sink: ['table', 'delimited', 'json', 'jsonl', 'parquet'],
     });
     expect(copy?.connectionKinds).toEqual(['sqlite', 'fs', 'postgres']);
     expect(copy?.sinkConnectionKinds).toEqual(['sqlite', 'postgres', 'fs']);

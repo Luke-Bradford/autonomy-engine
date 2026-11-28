@@ -661,11 +661,12 @@ sentences around a hardcoded `'sqlite'`.
 | `query`     | `sql` (literal; `${}` values bind as parameters, never concatenated — §8), `parameters`                      |
 | `json`      | `path`, `compression`, `dateFormat` — one top-level array of objects (#1405)                                 |
 | `jsonl`     | `path`, `compression`, `dateFormat` — JSON Lines, one object per line (#1405)                                |
+| `parquet`   | `path` — the file carries its own column names, types and compression (#1405)                                |
 
 `delimited` also takes `compression` (`none` or `gzip`, default `none`) as of #1405.
 
-**As built — files as a sink (#1405, OR14).** A copy writes rows into a `delimited`, `json` or
-`jsonl` dataset on an `fs` connection that allows writes (`connectors/file-sink.ts`). The file is
+**As built — files as a sink (#1405, OR14).** A copy writes rows into a `delimited`, `json`,
+`jsonl` or `parquet` dataset on an `fs` connection that allows writes (`connectors/file-sink.ts`). The file is
 written to a synced temp beside the target and only then put in place, so a failed or cancelled
 copy leaves the old file whole: §4's atomic sink, for a file. Overwrite and Truncate then insert
 replace the file by a rename. Append writes a new file and refuses one already there, by a hard
@@ -676,7 +677,12 @@ marker, or an empty field. A JSON record's keys are the mapping's sink names; a 
 as its digits and bytes as base64. Reading JSON (`connectors/json-io.ts`, over
 `datamove/json-records.ts`): a record is an object; the first record's keys are the columns; a
 later record with another key is refused, never dropped; a nested value is carried as its JSON
-text. Parquet is still to come.
+text. Parquet goes through `hyparquet` and `hyparquet-writer` (pure JS, MIT).
+The writer gives each column the type its mapping declares: string as STRING, integer as
+INT64, number as DOUBLE, boolean as BOOLEAN, date as DATE, timestamp as TIMESTAMP (UTC,
+micros), binary as BYTE_ARRAY; every column OPTIONAL, Snappy-compressed, in row groups of
+65,536 rows. The reader reads one row group at a time and takes snappy, gzip, brotli and zstd
+column chunks; an INT64 arrives as a bigint and a DATE or TIMESTAMP as a `Date`.
 
 **Two corrections from M4, which built this row** (#1119):
 

@@ -10,6 +10,7 @@ import {
   jsonDatasetConfigSchema,
   jsonlDatasetConfigSchema,
   type CopyWriteMode,
+  type DataType,
   type DatasetKind,
   type DelimitedEncoding,
   type FileCompression,
@@ -20,6 +21,7 @@ import { classifyFsError } from './fs-connection.js';
 import { closeQuietly, LINK_UNSUPPORTED, tmpPathFor } from './fs-write.js';
 import type { PreCopyScript } from './pre-copy-script.js';
 import { writableFs } from './session-log-file.js';
+import { parquetEncoder } from './parquet-sink.js';
 import type { SinkValue } from './sqlite-sink.js';
 
 /**
@@ -62,6 +64,8 @@ export interface FileSinkWrite {
   readonly datasetConfig: Record<string, unknown>;
   /** The mapping's sink names, in order: the file's columns. */
   readonly columns: readonly string[];
+  /** The mapping's declared type for each column: a Parquet file's column types. */
+  readonly columnTypes: readonly DataType[];
   readonly mode: CopyWriteMode;
   readonly preCopyScript: PreCopyScript | null;
   readonly verifyBeforeCommit: ((rowsWritten: number) => string | null) | null;
@@ -159,10 +163,52 @@ function jsonFormat(write: FileSinkWrite, lines: boolean): FileFormat {
 }
 
 /** The file kinds a copy can write into. */
-const WRITABLE_FILE_KINDS: readonly DatasetKind[] = ['delimited', 'json', 'jsonl'];
+const WRITABLE_FILE_KINDS: readonly DatasetKind[] = ['delimited', 'json', 'jsonl', 'parquet'];
 
-/** The writer for each file kind a copy can write into. */
-function formatFor(write: FileSinkWrite): FileFormat {
+/** Rows in, the file's bytes out. `onRows` hears the running row count after each batch. */
+type FileEncoder = (
+  batches: AsyncIterable<readonly Record<string, SinkValue>[]>,
+  onRows: (rowsWritten: number) => void,
+  signal: AbortSignal | undefined,
+) => AsyncGenerator<Buffer, void, undefined>;
+
+/** A text format's bytes, in its encoding, gzipped by the caller when it says so. */
+function textEncoder(format: FileFormat): FileEncoder {
+  return async function* (batches, onRows, signal) {
+    const utf16 = format.encoding === 'utf-16le' || format.encoding === 'utf-16be';
+    const head = (utf16 ? BYTE_ORDER_MARK : '') + format.begin;
+    if (head !== '') yield encode(head, format.encoding);
+    let rows = 0;
+    for await (const batch of batches) {
+      if (signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
+      let text = '';
+      for (const row of batch) {
+        text += format.row(row, rows);
+        rows += 1;
+      }
+      if (text !== '') yield encode(text, format.encoding);
+      onRows(rows);
+    }
+    const tail = format.end(rows);
+    if (tail !== '') yield encode(tail, format.encoding);
+  };
+}
+
+/** The encoder for each file kind a copy can write into, and whether to gzip it. */
+function encoderFor(write: FileSinkWrite): {
+  readonly encoder: FileEncoder;
+  readonly compression: FileCompression;
+} {
+  if (write.datasetKind === 'parquet') {
+    // Parquet compresses inside the file, per column chunk.
+    return { encoder: parquetEncoder(write), compression: 'none' };
+  }
+  const format = textFormatFor(write);
+  return { encoder: textEncoder(format), compression: format.compression };
+}
+
+/** The text format for each text file kind. */
+function textFormatFor(write: FileSinkWrite): FileFormat {
   if (write.datasetKind === 'delimited') return delimitedFormat(write.datasetConfig, write.columns);
   if (write.datasetKind === 'json') return jsonFormat(write, false);
   if (write.datasetKind === 'jsonl') return jsonFormat(write, true);
@@ -225,7 +271,7 @@ export async function writeFileDatasetRows(
   write: FileSinkWrite,
   batches: AsyncIterable<readonly Record<string, SinkValue>[]>,
 ): Promise<{ readonly rowsWritten: number }> {
-  const format = formatFor(write);
+  const { encoder, compression } = encoderFor(write);
   const sink = writableFs(write.connectionConfig, 'sink');
   if (!sink.ok) throw new DatasetIoError('permanent', sink.error);
   if (write.mode === 'upsert') {
@@ -258,23 +304,15 @@ export async function writeFileDatasetRows(
   const tmpPath = tmpPathFor(finalPath, randomUUID());
 
   let rowsWritten = 0;
-  async function* bytes(): AsyncGenerator<Buffer, void, undefined> {
-    const utf16 = format.encoding === 'utf-16le' || format.encoding === 'utf-16be';
-    const head = (utf16 ? BYTE_ORDER_MARK : '') + format.begin;
-    if (head !== '') yield encode(head, format.encoding);
-    for await (const batch of batches) {
-      if (signal?.aborted) throw new DatasetIoError('cancelled', 'dataset write aborted');
-      let text = '';
-      for (const row of batch) {
-        text += format.row(row, rowsWritten);
-        rowsWritten += 1;
-      }
-      if (text !== '') yield encode(text, format.encoding);
-      write.onBatch(rowsWritten);
-    }
-    const tail = format.end(rowsWritten);
-    if (tail !== '') yield encode(tail, format.encoding);
-  }
+  const bytes = (): AsyncGenerator<Buffer, void, undefined> =>
+    encoder(
+      batches,
+      (rows) => {
+        rowsWritten = rows;
+        write.onBatch(rows);
+      },
+      signal,
+    );
 
   let fh: Awaited<ReturnType<typeof open>> | undefined;
   let placed = false;
@@ -288,7 +326,7 @@ export async function writeFileDatasetRows(
     // the rename makes them the file (`atomicReplace`'s order).
     const out = fh.createWriteStream({ flush: true });
     fh = undefined; // the stream closes it now, on success or failure
-    if (format.compression === 'gzip') await pipeline(bytes(), createGzip(), out);
+    if (compression === 'gzip') await pipeline(bytes(), createGzip(), out);
     else await pipeline(bytes(), out);
 
     const unverified = write.verifyBeforeCommit?.(rowsWritten) ?? null;

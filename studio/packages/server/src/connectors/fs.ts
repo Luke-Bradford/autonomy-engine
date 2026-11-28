@@ -57,6 +57,12 @@ import {
   readJsonDatasetBatches,
   resolveJsonDatasetAddress,
 } from './json-io.js';
+import {
+  describeParquetDatasetColumns,
+  parquetCoercionFor,
+  readParquetDatasetBatches,
+  resolveParquetDatasetAddress,
+} from './parquet-io.js';
 // #1167 M7 slice 3 — `fs` becomes a STORE. The copy arm below pairs this
 // adapter's `delimited` reader with sqlite's writer, so the import direction is
 // `fs.ts` -> `delimited-io.ts` + `sqlite.ts` -> `copy.ts`. NOT a cycle: `copy.ts`
@@ -508,10 +514,21 @@ const JSON_IO: FsDatasetIo = {
   coercionFor: jsonCoercionFor,
 };
 
+// #1405 OR14 — Parquet, read a row group at a time.
+const PARQUET_IO: FsDatasetIo = {
+  describeColumns: describeParquetDatasetColumns,
+  // The file's own column types vary by column; Get metadata reports none here.
+  structureType: '',
+  readBatches: readParquetDatasetBatches,
+  resolveAddress: resolveParquetDatasetAddress,
+  coercionFor: parquetCoercionFor,
+};
+
 function fsReaderFor(kind: DatasetKind): FsDatasetIo | null {
   if (kind === 'delimited') return DELIMITED_IO;
   if (kind === 'excel') return EXCEL_IO;
   if (kind === 'json' || kind === 'jsonl') return JSON_IO;
+  if (kind === 'parquet') return PARQUET_IO;
   return null;
 }
 
@@ -653,6 +670,7 @@ export const fsAdapter: ConnectorAdapter = {
           dataset,
           connection,
           columns,
+          columnTypes,
           nullOnError,
           mode,
           keyColumns,
@@ -670,6 +688,7 @@ export const fsAdapter: ConnectorAdapter = {
               connection,
               sinkSecret: sinkSecret ?? null,
               columns,
+              columnTypes,
               nullOnError,
               mode,
               keyColumns,

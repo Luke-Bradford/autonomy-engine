@@ -64,12 +64,14 @@ describe('dataset config catalog', () => {
     // green is to add their new kind to `IMPLEMENTED_DATASET_KINDS` — the exact
     // lie a positive fact exists to prevent. A literal list reds on the next
     // kind and can only be made green by a decision.
-    // #1405 — `json` and `jsonl` joined with `connectors/json-io.ts`.
+    // #1405 — `json` and `jsonl` joined with `connectors/json-io.ts`, and
+    // `parquet` with `connectors/parquet-io.ts`.
     expect([...IMPLEMENTED_DATASET_KINDS].sort()).toEqual([
       'delimited',
       'excel',
       'json',
       'jsonl',
+      'parquet',
       'query',
       'table',
     ]);

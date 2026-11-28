@@ -3,6 +3,7 @@ import {
   formatZodIssues,
   getActivity,
   type CopyWriteMode,
+  type DataType,
 } from '@autonomy-studio/shared';
 import { DatasetIoError } from './dataset-io-error.js';
 import { writeFileDatasetRows } from './file-sink.js';
@@ -70,6 +71,10 @@ export interface SinkWriteRequest {
    * rather than this seam guessing which stores are credentialled. */
   readonly sinkSecret: string | null;
   readonly columns: readonly string[];
+  /** #1405 — the mapping's declared type for each of `columns`, in order. A
+   * file format that stores types (Parquet) writes them; a database sink
+   * takes its table's own. */
+  readonly columnTypes: readonly DataType[];
   /** Mapped sink names whose row sets `onError: 'null'` — the sink checks them
    * against the store's own NOT NULL columns (#1162). Required, so no path
    * can reach a store without the gate. */
@@ -115,6 +120,7 @@ export async function writeRowsToSink(
     dataset,
     connection,
     columns,
+    columnTypes,
     nullOnError,
     mode,
     keyColumns,
@@ -198,6 +204,7 @@ export async function writeRowsToSink(
         datasetKind: dataset.kind,
         datasetConfig: dataset.config,
         columns,
+        columnTypes,
         mode,
         preCopyScript,
         verifyBeforeCommit,
