@@ -409,9 +409,9 @@ const SEEDED_HELP_LIMITS: Record<string, number> = {
   // one on each Settings field, Script blocks, its SQL and its Parameters.
   Script: 9,
   // #1600 OR41 C2a — Write file left the toolbox; its replacement is Copy
-  // data's Inline content, with Path type, Content, Sink folder, File name,
-  // Degree of copy parallelism and the Session log's two drawn.
-  'Copy data (inline content)': 21,
+  // data's Inline content, measured: none of the source-file fields' `?`s are
+  // drawn for it.
+  'Copy data (inline content)': 14,
   'Agent task': 8,
   'LLM call': 15,
   'LLM call (structured)': 15,
